@@ -10,6 +10,9 @@
 #include <linux/sched/xacct.h>
 #include <linux/fcntl.h>
 #include <linux/file.h>
+#ifdef CONFIG_LINX
+#include <linux/fdtable.h>
+#endif
 #include <linux/uio.h>
 #include <linux/fsnotify.h>
 #include <linux/security.h>
@@ -483,13 +486,30 @@ static ssize_t new_sync_read(struct file *filp, char __user *buf, size_t len, lo
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	ssize_t ret;
+#ifdef CONFIG_LINX
+	static bool once;
+#endif
 
 	init_sync_kiocb(&kiocb, filp);
 	kiocb.ki_pos = (ppos ? *ppos : 0);
 	iov_iter_ubuf(&iter, ITER_DEST, buf, len);
 
+#ifdef CONFIG_LINX
+	if (!once) {
+		once = true;
+		pr_alert("LinxISA: new_sync_read file=%pd2 len=%zu iter_type=%u data_source=%d count=%zu ubuf=%px iov_len=%zu off=%zu\n",
+			 filp->f_path.dentry, len, iter.iter_type, iter.data_source,
+			 iter.count, iter.ubuf, iter.__ubuf_iovec.iov_len,
+			 iter.iov_offset);
+	}
+#endif
 	ret = filp->f_op->read_iter(&kiocb, &iter);
 	BUG_ON(ret == -EIOCBQUEUED);
+#ifdef CONFIG_LINX
+	if (ret == -EFAULT)
+		pr_alert("LinxISA: new_sync_read ret=-EFAULT after count=%zu off=%zu ubuf=%px\n",
+			 iter.count, iter.iov_offset, iter.ubuf);
+#endif
 	if (ppos)
 		*ppos = kiocb.ki_pos;
 	return ret;
@@ -557,8 +577,16 @@ ssize_t vfs_read(struct file *file, char __user *buf, size_t count, loff_t *pos)
 		return -EBADF;
 	if (!(file->f_mode & FMODE_CAN_READ))
 		return -EINVAL;
+#ifdef CONFIG_LINX
+	if (unlikely(!access_ok(buf, count))) {
+		pr_alert("LinxISA: vfs_read access_ok failed buf=%px count=%zu\n",
+			 buf, count);
+		return -EFAULT;
+	}
+#else
 	if (unlikely(!access_ok(buf, count)))
 		return -EFAULT;
+#endif
 
 	ret = rw_verify_area(READ, file, pos, count);
 	if (ret)
@@ -635,8 +663,34 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 		.iov_len	= min_t(size_t, count, MAX_RW_COUNT),
 	};
 	struct iov_iter iter;
+	ssize_t ret;
+
+#ifdef CONFIG_LINX
+	if (file && file->f_path.dentry &&
+	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+		pr_err("LinxISA __kernel_write: file=%pd2 count=%zu iov_len=%zu pos=%lld\n",
+		       file->f_path.dentry, count, iov.iov_len, pos ? *pos : 0);
+	}
+#endif
 	iov_iter_kvec(&iter, ITER_SOURCE, &iov, 1, iov.iov_len);
-	return __kernel_write_iter(file, &iter, pos);
+#ifdef CONFIG_LINX
+	if (file && file->f_path.dentry &&
+	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+		pr_err("LinxISA __kernel_write: iter.count=%zu data_source=%d type=%u write_iter=%px write=%px\n",
+		       iter.count, iter.data_source, iter.iter_type,
+		       file->f_op ? file->f_op->write_iter : NULL,
+		       file->f_op ? file->f_op->write : NULL);
+	}
+#endif
+	ret = __kernel_write_iter(file, &iter, pos);
+#ifdef CONFIG_LINX
+	if (file && file->f_path.dentry &&
+	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+		pr_err("LinxISA __kernel_write: ret=%zd new_pos=%lld\n",
+		       ret, pos ? *pos : 0);
+	}
+#endif
+	return ret;
 }
 /*
  * This "EXPORT_SYMBOL_GPL()" is more of a "EXPORT_SYMBOL_DONTUSE()",
@@ -703,8 +757,46 @@ static inline loff_t *file_ppos(struct file *file)
 
 ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 {
-	CLASS(fd_pos, f)(fd);
 	ssize_t ret = -EBADF;
+
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up: avoid struct fd returns (fdget_pos) until the Linx
+	 * Clang ABI for small-struct returns is proven correct.
+	 */
+	struct file *file = current->files ? files_lookup_fd_raw(current->files, fd) : NULL;
+
+	if (file) {
+		loff_t pos, *ppos = file_ppos(file);
+#ifdef CONFIG_LINX
+		static int dbg_reads;
+
+		if (dbg_reads < 4) {
+			pr_alert("LinxISA: ksys_read fd=%u file=%pd2 f_mode=0x%lx f_pos=%lld ppos=%px buf=%px count=%zu read=%px read_iter=%px\n",
+				 fd, file->f_path.dentry, file->f_mode, file->f_pos,
+				 ppos, buf, count,
+				 file->f_op ? file->f_op->read : NULL,
+				 file->f_op ? file->f_op->read_iter : NULL);
+		}
+#endif
+		if (ppos) {
+			pos = *ppos;
+			ppos = &pos;
+		}
+		ret = vfs_read(file, buf, count, ppos);
+		if (ret >= 0 && ppos)
+			file->f_pos = pos;
+#ifdef CONFIG_LINX
+		if (dbg_reads < 4) {
+			pr_alert("LinxISA: ksys_read ret=%zd pos_after=%lld file_f_pos_after=%lld\n",
+				 ret, ppos ? pos : -1LL, file->f_pos);
+		}
+		dbg_reads++;
+#endif
+	}
+	return ret;
+#else
+	CLASS(fd_pos, f)(fd);
 
 	if (!fd_empty(f)) {
 		loff_t pos, *ppos = file_ppos(fd_file(f));
@@ -717,6 +809,7 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 			fd_file(f)->f_pos = pos;
 	}
 	return ret;
+#endif
 }
 
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
@@ -726,8 +819,53 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 
 ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 {
-	CLASS(fd_pos, f)(fd);
 	ssize_t ret = -EBADF;
+
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up: avoid struct fd returns (fdget_pos) until the Linx
+	 * Clang ABI for small-struct returns is proven correct.
+	 */
+	struct file *file = current->files ? files_lookup_fd_raw(current->files, fd) : NULL;
+
+	if (fd == 0) {
+		static bool once;
+
+			if (!once) {
+				struct iov_iter iter;
+				char tmp[2] = { 0, 0 };
+				size_t before_count, before_iovlen;
+				size_t copied;
+
+				once = true;
+				iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)buf, 2);
+				before_count = iter.count;
+				before_iovlen = iter.__ubuf_iovec.iov_len;
+				copied = copy_from_iter(tmp, 2, &iter);
+				pr_err("Linx dbg: iov_iter_ubuf type=%u src=%d count=%zu iovlen=%zu ubuf=%px copied=%zu before_count=%zu before_iovlen=%zu after_count=%zu after_iovlen=%zu tmp0=0x%x tmp1=0x%x\n",
+				       iter.iter_type, iter.data_source, iter.count,
+				       iter.__ubuf_iovec.iov_len, iter.ubuf, copied,
+				       before_count, before_iovlen, iter.count,
+				       iter.__ubuf_iovec.iov_len,
+				       (unsigned int)(unsigned char)tmp[0],
+				       (unsigned int)(unsigned char)tmp[1]);
+			}
+		}
+
+	if (file) {
+		loff_t pos, *ppos = file_ppos(file);
+		if (ppos) {
+			pos = *ppos;
+			ppos = &pos;
+		}
+		ret = vfs_write(file, buf, count, ppos);
+		if (ret >= 0 && ppos)
+			file->f_pos = pos;
+	}
+
+	return ret;
+#else
+	CLASS(fd_pos, f)(fd);
 
 	if (!fd_empty(f)) {
 		loff_t pos, *ppos = file_ppos(fd_file(f));
@@ -739,8 +877,8 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 		if (ret >= 0 && ppos)
 			fd_file(f)->f_pos = pos;
 	}
-
 	return ret;
+#endif
 }
 
 SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,

@@ -4,6 +4,17 @@ This document captures the **current** LinxISA scalar ABI as implemented by the
 bring-up toolchain, and the **Linux boot ABI** used by the QEMU LinxISA `virt`
 machine.
 
+## Toolchain ABI profiles (linx32 vs linx64)
+
+The LinxISA toolchain supports two profiles (see the LinxISA ISA manual):
+
+- **linx32**: ILP32 (32-bit `int`, `long`, and pointers)
+- **linx64**: LP64 (32-bit `int`, 64-bit `long` and pointers)
+
+For the current Linux bring-up on `qemu-system-linx64`, use **linx64**.
+The `arch/linx/` port in this tree is configured as a 64-bit kernel
+(`CONFIG_64BIT=y`).
+
 ## Scalar register ABI (R0..R23)
 
 The scalar GPR file has 24 architectural registers.
@@ -51,3 +62,22 @@ Kernel images accepted by QEMU `virt`:
 Machine model reference and UART/exit MMIO are documented in
 `/Users/zhoubot/qemu/docs/linxisa/README.md`.
 
+This boot ABI is validated by the bring-up bootstub in `tools/linxisa/bootstub/`.
+
+## Linux syscall ABI (bring-up)
+
+Current bring-up convention (LP64, QEMU `virt`):
+
+- Trap instruction: `acrc 1` (SERVICE_REQUEST)
+- Syscall number: `a7` (R9)
+- Args 0..5: `a0..a5` (R2..R7)
+- Return value / errno: `a0` (R2), negative errno on error
+- Syscall numbers: currently `asm-generic` (`include/asm-generic/unistd.h`)
+
+Known issue (bring-up):
+
+- Syscall return values currently arrive in userspace with a 31-bit signed
+  encoding where the sign bit lives in bit 30. The initramfs bring-up shim in
+  `tools/linxisa/initramfs/busybox.c` corrects this by sign-extending bit 30
+  into bit 31 before interpreting negative errno values. This must be fixed at
+  the arch/QEMU boundary before running a real libc/BusyBox userspace.

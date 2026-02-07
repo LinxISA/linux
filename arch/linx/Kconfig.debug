@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# LinxISA arch-specific debug options.
+#
+
+if LINX
+
+config LINX_VIRT_UART_MARKERS
+	bool "Verbose virt UART marker output"
+	default n
+	help
+	  Enable extremely low-level bring-up instrumentation which writes
+	  single-character markers directly to the QEMU LinxISA `virt` UART at
+	  0x10000000.
+
+	  This is intended for early boot debugging before the normal console is
+	  available. It can be extremely verbose and should be disabled for
+	  normal use.
+
+endif # LINX

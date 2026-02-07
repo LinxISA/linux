@@ -5760,7 +5760,9 @@ void __init shmem_init(void)
 	BUG_ON(register_filesystem(&shmem_fs_type) != 0);
 
 	shm_mnt = kern_mount(&shmem_fs_type);
-	BUG_ON(IS_ERR(shm_mnt));
+	if (IS_ERR(shm_mnt))
+		panic("shmem_init: kern_mount(%s) failed: %ld\n",
+		      shmem_fs_type.name, PTR_ERR(shm_mnt));
 }
 
 int shmem_unuse(unsigned int type)

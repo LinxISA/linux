@@ -49,6 +49,10 @@
 #include <linux/debugfs.h>
 #include <trace/events/kmem.h>
 
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
+
 #include "internal.h"
 
 /*
@@ -221,6 +225,52 @@ do {					\
 	migrate_enable();		\
 } while (0)
 #define USE_LOCKLESS_FAST_PATH()	(false)
+#endif
+
+#ifdef CONFIG_LINX
+/*
+ * LinxISA bring-up: disable the lockless CPU-slab fastpath.
+ *
+ * The lockless path relies on (freelist, tid) cmpxchg sequences that currently
+ * cause unbounded retry loops under the LinxISA bring-up toolchain/runtime.
+ * Force the allocator onto the slow path (local_lock_cpu_slab()) until the
+ * underlying per-cpu cmpxchg/128-bit lowering is fully validated.
+ */
+#undef USE_LOCKLESS_FAST_PATH
+#define USE_LOCKLESS_FAST_PATH()	(false)
+#endif
+
+#ifdef CONFIG_LINX
+	void *linx_slub_alloc_watch_ptr;
+	const char *linx_slub_alloc_watch_tag;
+	unsigned long linx_kfree_caller_ra_entry;
+	const void *linx_kfree_object;
+
+	void linx_slub_alloc_watch_set(void *ptr, const char *tag);
+	void linx_slub_alloc_watch_clear(void);
+	void linx_slub_debug_dump_obj(void *object, const char *tag);
+	static __always_inline unsigned long linx_get_ra_entry(void)
+	{
+		unsigned long ra_entry = 0;
+
+		asm volatile("sdi ra, [%0, 0]"
+			     :
+			     : "r"(&ra_entry)
+			     : "memory");
+		return ra_entry;
+	}
+
+	void linx_slub_alloc_watch_set(void *ptr, const char *tag)
+	{
+		WRITE_ONCE(linx_slub_alloc_watch_ptr, ptr);
+		WRITE_ONCE(linx_slub_alloc_watch_tag, tag);
+}
+
+void linx_slub_alloc_watch_clear(void)
+{
+	WRITE_ONCE(linx_slub_alloc_watch_ptr, NULL);
+	WRITE_ONCE(linx_slub_alloc_watch_tag, NULL);
+}
 #endif
 
 #ifndef CONFIG_SLUB_TINY
@@ -434,6 +484,40 @@ struct kmem_cache_cpu {
 };
 #endif /* CONFIG_SLUB_TINY */
 
+#ifdef CONFIG_LINX
+void linx_slub_debug_dump_obj(void *object, const char *tag)
+{
+	struct slab *slab;
+	struct kmem_cache *s;
+	struct kmem_cache_cpu *c = NULL;
+
+	if (!object) {
+		pr_emerg("LinxISA: slub dump tag=%s object=NULL\n",
+			 tag ? tag : "?");
+		return;
+	}
+
+	slab = virt_to_slab(object);
+	s = slab ? slab->slab_cache : NULL;
+
+#ifndef CONFIG_SLUB_TINY
+	c = s ? raw_cpu_ptr(s->cpu_slab) : NULL;
+#endif
+
+	pr_emerg("LinxISA: slub dump tag=%s object=%px slab=%px cache=%s object_size=%u off=%u inuse=%u size=%u c=%px c->slab=%px c->freelist=%px slab->freelist=%px\n",
+		 tag ? tag : "?", object, slab,
+		 s ? s->name : "?",
+		 s ? s->object_size : 0,
+		 s ? s->offset : 0,
+		 s ? s->inuse : 0,
+		 s ? s->size : 0,
+		 c,
+		 c ? c->slab : NULL,
+		 c ? c->freelist : NULL,
+		 slab ? slab->freelist : NULL);
+}
+#endif /* CONFIG_LINX */
+
 static inline void stat(const struct kmem_cache *s, enum stat_item si)
 {
 #ifdef CONFIG_SLUB_STATS
@@ -629,6 +713,29 @@ static inline void *get_freepointer_safe(struct kmem_cache *s, void *object)
 static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
 {
 	unsigned long freeptr_addr = (unsigned long)object + s->offset;
+
+#ifdef CONFIG_LINX
+	if (unlikely(object == fp)) {
+		unsigned long caller_ra_entry = 0;
+
+		asm volatile("sdi ra, [%0, 0]"
+			     :
+			     : "r"(&caller_ra_entry)
+			     : "memory");
+
+		pr_emerg("LinxISA: set_freepointer self-loop cache=%s size=%u off=%u slab=%px obj=%px pid=%d comm=%s\n",
+			 s->name, s->size, s->offset, virt_to_slab(object), object,
+			 current->pid, current->comm);
+		{
+			unsigned long *w = (unsigned long *)&caller_ra_entry;
+
+			pr_emerg("LinxISA: set_freepointer ra_entry=%lx stack@%px w[-1]=%lx w[0]=%lx w[1]=%lx w[2]=%lx w[3]=%lx w[4]=%lx\n",
+				 caller_ra_entry, w,
+				 w[-1], w[0], w[1], w[2], w[3], w[4]);
+		}
+		panic("LinxISA: set_freepointer self-loop");
+	}
+#endif
 
 #ifdef CONFIG_SLAB_FREELIST_HARDENED
 	BUG_ON(object == fp); /* naive detection of double free or corruption */
@@ -3231,6 +3338,16 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	 */
 	slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
 	if (unlikely(!slab)) {
+#ifdef CONFIG_LINX
+		if (is_kmalloc_cache(s)) {
+			static int printed;
+
+			if (printed++ < 8)
+				pr_emerg("SLUB: alloc_slab_page failed for %s size=%u order=%u flags=%#x alloc_gfp=%#x free=%lu\n",
+					 s->name, s->size, oo_order(oo), flags,
+					 alloc_gfp, nr_free_pages());
+		}
+#endif
 		oo = s->min;
 		alloc_gfp = flags;
 		/*
@@ -3238,8 +3355,19 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 		 * Try a lower order alloc if possible
 		 */
 		slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
-		if (unlikely(!slab))
+		if (unlikely(!slab)) {
+#ifdef CONFIG_LINX
+			if (is_kmalloc_cache(s)) {
+				static int printed2;
+
+				if (printed2++ < 8)
+					pr_emerg("SLUB: alloc_slab_page fallback failed for %s size=%u order=%u flags=%#x alloc_gfp=%#x free=%lu\n",
+						 s->name, s->size, oo_order(oo), flags,
+						 alloc_gfp, nr_free_pages());
+			}
+#endif
 			return NULL;
+		}
 		stat(s, ORDER_FALLBACK);
 	}
 
@@ -3272,6 +3400,17 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 		}
 		set_freepointer(s, p, NULL);
 	}
+
+#ifdef CONFIG_LINX
+	if (is_kmalloc_cache(s) && s->size == 192) {
+		void *head = slab->freelist;
+		void *next = head ? get_freepointer(s, head) : NULL;
+
+		if (head && next == head)
+			pr_emerg("LinxISA: allocate_slab built self-loop cache=%s slab=%px head=%px off=%u objects=%u size=%u\n",
+				 s->name, slab, head, s->offset, slab->objects, s->size);
+	}
+#endif
 
 	return slab;
 }
@@ -4554,7 +4693,20 @@ load_freelist:
 	 * That slab must be frozen for per cpu allocations to work.
 	 */
 	VM_BUG_ON(!c->slab->frozen);
-	c->freelist = get_freepointer(s, freelist);
+	{
+		void *next_object = get_freepointer(s, freelist);
+
+#ifdef CONFIG_LINX
+		if (unlikely(next_object == freelist)) {
+			pr_emerg("LinxISA: SLUB freelist self-loop cache=%s size=%u off=%u slab=%px obj=%px pid=%d comm=%s\n",
+				 s->name, s->size, s->offset, slab, freelist,
+				 current->pid, current->comm);
+			panic("LinxISA: SLUB freelist self-loop");
+		}
+#endif
+
+		c->freelist = next_object;
+	}
 	c->tid = next_tid(c->tid);
 	local_unlock_cpu_slab(s, flags);
 	return freelist;
@@ -4797,6 +4949,14 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
 	void *object;
 
 redo:
+#ifdef CONFIG_LINX
+		if (orig_size == 56 && current->pid == 1) {
+			barrier();
+			linx_debug_uart_putc('1');
+			barrier();
+		}
+#endif
+
 	/*
 	 * Must read kmem_cache cpu data via this cpu ptr. Preemption is
 	 * enabled. We may switch back and forth between cpus while
@@ -4832,6 +4992,14 @@ redo:
 	object = c->freelist;
 	slab = c->slab;
 
+#ifdef CONFIG_LINX
+		if (orig_size == 56 && current->pid == 1) {
+			barrier();
+			linx_debug_uart_putc('2');
+			barrier();
+		}
+#endif
+
 #ifdef CONFIG_NUMA
 	if (static_branch_unlikely(&strict_numa) &&
 			node == NUMA_NO_NODE) {
@@ -4854,13 +5022,16 @@ redo:
 	}
 #endif
 
-	if (!USE_LOCKLESS_FAST_PATH() ||
-	    unlikely(!object || !slab || !node_match(slab, node))) {
-		object = __slab_alloc(s, gfpflags, node, addr, c, orig_size);
-	} else {
+	if (!USE_LOCKLESS_FAST_PATH())
+		goto slow_path;
+
+	if (unlikely(!object || !slab || !node_match(slab, node)))
+		goto slow_path;
+
+	{
 		void *next_object = get_freepointer_safe(s, object);
 
-		/*
+			/*
 		 * The cmpxchg will only match if there was no additional
 		 * operation and if we are on the right processor.
 		 *
@@ -4874,13 +5045,83 @@ redo:
 		 * against code executing on this cpu *not* from access by
 		 * other cpus.
 		 */
-		if (unlikely(!__update_cpu_freelist_fast(s, object, next_object, tid))) {
-			note_cmpxchg_failure("slab_alloc", s, tid);
-			goto redo;
-		}
-		prefetch_freepointer(s, next_object);
-		stat(s, ALLOC_FASTPATH);
+#ifdef CONFIG_LINX
+			if (orig_size == 56 && current->pid == 1) {
+				barrier();
+				linx_debug_uart_putc('F');
+				barrier();
+			}
+#endif
+			if (unlikely(!__update_cpu_freelist_fast(s, object, next_object, tid))) {
+#ifdef CONFIG_LINX
+				if (orig_size == 56 && current->pid == 1) {
+					static int linx_cmpxchg_fails;
+
+					if (linx_cmpxchg_fails++ < 20)
+						linx_debug_uart_putc('X');
+				}
+#endif
+				note_cmpxchg_failure("slab_alloc", s, tid);
+				goto redo;
+			}
+#ifdef CONFIG_LINX
+			if (orig_size == 56 && current->pid == 1) {
+				barrier();
+				linx_debug_uart_putc('f');
+				barrier();
+			}
+#endif
+			prefetch_freepointer(s, next_object);
+			stat(s, ALLOC_FASTPATH);
 	}
+
+	goto out;
+
+slow_path:
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1) {
+		barrier();
+		linx_debug_uart_putc('S');
+		barrier();
+	}
+#endif
+	object = __slab_alloc(s, gfpflags, node, addr, c, orig_size);
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1) {
+		barrier();
+		linx_debug_uart_putc('s');
+		barrier();
+	}
+#endif
+
+out:
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1) {
+		barrier();
+		linx_debug_uart_putc('3');
+		barrier();
+	}
+#endif
+
+#ifdef CONFIG_LINX
+	{
+		void *watch = READ_ONCE(linx_slub_alloc_watch_ptr);
+
+		if (unlikely(watch && object == watch)) {
+			const char *tag = READ_ONCE(linx_slub_alloc_watch_tag);
+
+			WRITE_ONCE(linx_slub_alloc_watch_ptr, NULL);
+			WRITE_ONCE(linx_slub_alloc_watch_tag, NULL);
+
+			pr_emerg("LinxISA: SLUB alloc watch hit tag=%s cache=%s orig_size=%zu gfp=%#x caller=%pS pid=%d comm=%s object=%px c=%px freelist=%px slab=%px tid=%lu\n",
+				 tag ? tag : "?", s->name, orig_size, gfpflags,
+				 (void *)addr, current->pid, current->comm, object,
+				 c, c ? c->freelist : NULL, slab, tid);
+			dump_stack();
+			panic("LinxISA: SLUB alloc watch hit");
+		}
+	}
+#endif
 
 	return object;
 }
@@ -5266,24 +5507,60 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
 	void *object;
 	bool init = false;
 
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1) {
+		static int once;
+
+		if (!once) {
+			once = 1;
+			linx_debug_uart_puts("\nKM56:");
+		}
+		linx_debug_uart_putc('a');
+	}
+#endif
+
 	s = slab_pre_alloc_hook(s, gfpflags);
 	if (unlikely(!s))
 		return NULL;
+
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('b');
+#endif
 
 	object = kfence_alloc(s, orig_size, gfpflags);
 	if (unlikely(object))
 		goto out;
 
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('c');
+#endif
+
 	if (s->cpu_sheaves)
 		object = alloc_from_pcs(s, gfpflags, node);
 
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('d');
+#endif
+
 	if (!object)
 		object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
+
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('e');
+#endif
 
 	maybe_wipe_obj_freeptr(s, object);
 	init = slab_want_init_on_alloc(gfpflags, s);
 
 out:
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('f');
+#endif
 	/*
 	 * When init equals 'true', like for kzalloc() family, only
 	 * @orig_size bytes might be zeroed instead of s->object_size
@@ -5291,6 +5568,11 @@ out:
 	 * object is set to NULL
 	 */
 	slab_post_alloc_hook(s, lru, gfpflags, 1, &object, init, orig_size);
+
+#ifdef CONFIG_LINX
+	if (orig_size == 56 && current->pid == 1)
+		linx_debug_uart_putc('g');
+#endif
 
 	return object;
 }
@@ -5646,16 +5928,17 @@ void *__do_kmalloc_node(size_t size, kmem_buckets *b, gfp_t flags, int node,
 		return ret;
 	}
 
-	if (unlikely(!size))
-		return ZERO_SIZE_PTR;
+		if (unlikely(!size))
+			return ZERO_SIZE_PTR;
 
-	s = kmalloc_slab(size, b, flags, caller);
+		s = kmalloc_slab(size, b, flags, caller);
 
-	ret = slab_alloc_node(s, NULL, flags, node, caller, size);
-	ret = kasan_kmalloc(s, ret, size, flags);
-	trace_kmalloc(caller, ret, size, s->size, flags, node);
-	return ret;
-}
+		ret = slab_alloc_node(s, NULL, flags, node, caller, size);
+
+		ret = kasan_kmalloc(s, ret, size, flags);
+		trace_kmalloc(caller, ret, size, s->size, flags, node);
+		return ret;
+	}
 void *__kmalloc_node_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags, int node)
 {
 	return __do_kmalloc_node(size, PASS_BUCKET_PARAM(b), flags, node, _RET_IP_);
@@ -6626,6 +6909,25 @@ redo:
 		tid = c->tid;
 		freelist = c->freelist;
 
+#ifdef CONFIG_LINX
+			if (unlikely(tail == freelist)) {
+				unsigned long caller_ra_entry = linx_get_ra_entry();
+				unsigned long last_kfree_ra_entry = READ_ONCE(linx_kfree_caller_ra_entry);
+				const void *last_kfree_obj = READ_ONCE(linx_kfree_object);
+				unsigned long prev_free_ra = 0;
+
+				if (s->size == 192 && s->offset == 96)
+					prev_free_ra = READ_ONCE(*(unsigned long *)kasan_reset_tag(tail));
+
+				pr_emerg("LinxISA: do_slab_free double-free cache=%s size=%u off=%u slab=%px head=%px tail=%px cnt=%d addr=%lx ra_entry=%lx last_kfree_ra=%lx last_kfree_obj=%px prev_free_ra=%lx pid=%d comm=%s\n",
+					 s->name, s->size, s->offset, slab, head, tail,
+					 cnt, addr, caller_ra_entry, last_kfree_ra_entry,
+					 last_kfree_obj,
+					 prev_free_ra, current->pid, current->comm);
+				panic("LinxISA: do_slab_free double-free");
+			}
+#endif
+
 		set_freepointer(s, tail, freelist);
 		c->freelist = head;
 		c->tid = next_tid(tid);
@@ -6652,6 +6954,18 @@ void slab_free(struct kmem_cache *s, struct slab *slab, void *object,
 
 	if (unlikely(!slab_free_hook(s, object, slab_want_init_on_free(s), false)))
 		return;
+
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: stash the free callsite for later diagnosis of
+	 * allocator corruption/double-free on kmalloc-192.
+	 *
+	 * kmalloc-192 uses an in-object freelist pointer at offset 96. The first
+	 * machine word remains available while the object is free.
+	 */
+	if (unlikely(s->size == 192 && s->offset == 96))
+		WRITE_ONCE(*(unsigned long *)kasan_reset_tag(object), addr);
+#endif
 
 	if (s->cpu_sheaves && likely(!IS_ENABLED(CONFIG_NUMA) ||
 				     slab_nid(slab) == numa_mem_id())) {
@@ -6756,11 +7070,23 @@ static inline struct kmem_cache *cache_from_obj(struct kmem_cache *s, void *x)
  */
 void kmem_cache_free(struct kmem_cache *s, void *x)
 {
+#ifdef CONFIG_LINX
+	unsigned long ra_entry = linx_get_ra_entry();
+
+	WRITE_ONCE(linx_kfree_caller_ra_entry, ra_entry);
+	WRITE_ONCE(linx_kfree_object, x);
+#endif
+
 	s = cache_from_obj(s, x);
 	if (!s)
 		return;
+#ifdef CONFIG_LINX
+	trace_kmem_cache_free(ra_entry, x, s);
+	slab_free(s, virt_to_slab(x), x, ra_entry);
+#else
 	trace_kmem_cache_free(_RET_IP_, x, s);
 	slab_free(s, virt_to_slab(x), x, _RET_IP_);
+#endif
 }
 EXPORT_SYMBOL(kmem_cache_free);
 
@@ -6843,8 +7169,18 @@ void kfree(const void *object)
 	struct slab *slab;
 	struct kmem_cache *s;
 	void *x = (void *)object;
+#ifdef CONFIG_LINX
+	unsigned long ra_entry = linx_get_ra_entry();
 
+	WRITE_ONCE(linx_kfree_caller_ra_entry, ra_entry);
+	WRITE_ONCE(linx_kfree_object, object);
+#endif
+
+#ifdef CONFIG_LINX
+	trace_kfree(ra_entry, object);
+#else
 	trace_kfree(_RET_IP_, object);
+#endif
 
 	if (unlikely(ZERO_OR_NULL_PTR(object)))
 		return;
@@ -6857,7 +7193,11 @@ void kfree(const void *object)
 
 	slab = folio_slab(folio);
 	s = slab->slab_cache;
+#ifdef CONFIG_LINX
+	slab_free(s, slab, x, ra_entry);
+#else
 	slab_free(s, slab, x, _RET_IP_);
+#endif
 }
 EXPORT_SYMBOL(kfree);
 
@@ -7730,6 +8070,23 @@ static void early_kmem_cache_node_alloc(int node)
 
 	slab = new_slab(kmem_cache_node, GFP_NOWAIT, node);
 
+#ifdef CONFIG_LINX
+	if (!slab) {
+		struct kmem_cache_order_objects oo = kmem_cache_node->oo;
+		struct kmem_cache_order_objects min = kmem_cache_node->min;
+
+		pr_err("SLUB: new_slab(kmem_cache_node) failed\n");
+		pr_err("SLUB: size=%u align=%u allocflags=0x%x flags=0x%x\n",
+		       kmem_cache_node->size, kmem_cache_node->align,
+		       kmem_cache_node->allocflags, kmem_cache_node->flags);
+		pr_err("SLUB: oo=(order=%u objs=%u) min=(order=%u objs=%u)\n",
+		       oo_order(oo), oo_objects(oo), oo_order(min),
+		       oo_objects(min));
+		pr_err("SLUB: nr_free_pages=%lu totalram_pages=%lu\n",
+		       nr_free_pages(), totalram_pages());
+	}
+#endif
+
 	BUG_ON(!slab);
 	if (slab_nid(slab) != node) {
 		pr_err("SLUB: Unable to allocate memory from node %d\n", node);
@@ -7737,6 +8094,20 @@ static void early_kmem_cache_node_alloc(int node)
 	}
 
 	n = slab->freelist;
+#ifdef CONFIG_LINX
+	if (!n) {
+		struct page *page = slab_page(slab);
+
+		pr_err("SLUB: kmem_cache_node slab has NULL freelist\n");
+		pr_err("SLUB: slab=%p page=%p mem_map=%p pfn=%lx\n",
+		       slab, page, mem_map, page_to_pfn(page));
+		pr_err("SLUB: slab_addr=%p slab_nid=%d order=%d objects=%u\n",
+		       slab_address(slab), slab_nid(slab), slab_order(slab),
+		       slab->objects);
+		pr_err("SLUB: nr_free_pages=%lu totalram_pages=%lu\n",
+		       nr_free_pages(), totalram_pages());
+	}
+#endif
 	BUG_ON(!n);
 #ifdef CONFIG_SLUB_DEBUG
 	init_object(kmem_cache_node, n, SLUB_RED_ACTIVE);

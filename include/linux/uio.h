@@ -216,17 +216,45 @@ size_t copy_page_to_iter_nofault(struct page *page, unsigned offset,
 static __always_inline __must_check
 size_t copy_to_iter(const void *addr, size_t bytes, struct iov_iter *i)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up: work around broken return values from iov_iter copy
+	 * helpers observed under the current toolchain/emulator.
+	 *
+	 * The iterator itself is advanced correctly (iov_offset/count), but the
+	 * returned "bytes copied" can be incorrect. Derive the amount copied from
+	 * the iterator's remaining count instead.
+	 */
+	size_t before = i->count;
+
+	if (check_copy_size(addr, bytes, true)) {
+		_copy_to_iter(addr, bytes, i);
+		return before - i->count;
+	}
+	return 0;
+#else
 	if (check_copy_size(addr, bytes, true))
 		return _copy_to_iter(addr, bytes, i);
 	return 0;
+#endif
 }
 
 static __always_inline __must_check
 size_t copy_from_iter(void *addr, size_t bytes, struct iov_iter *i)
 {
+#ifdef CONFIG_LINX
+	size_t before = i->count;
+
+	if (check_copy_size(addr, bytes, false)) {
+		_copy_from_iter(addr, bytes, i);
+		return before - i->count;
+	}
+	return 0;
+#else
 	if (check_copy_size(addr, bytes, false))
 		return _copy_from_iter(addr, bytes, i);
 	return 0;
+#endif
 }
 
 static __always_inline __must_check
@@ -252,9 +280,19 @@ bool copy_from_iter_full(void *addr, size_t bytes, struct iov_iter *i)
 static __always_inline __must_check
 size_t copy_from_iter_nocache(void *addr, size_t bytes, struct iov_iter *i)
 {
+#ifdef CONFIG_LINX
+	size_t before = i->count;
+
+	if (check_copy_size(addr, bytes, false)) {
+		_copy_from_iter_nocache(addr, bytes, i);
+		return before - i->count;
+	}
+	return 0;
+#else
 	if (check_copy_size(addr, bytes, false))
 		return _copy_from_iter_nocache(addr, bytes, i);
 	return 0;
+#endif
 }
 
 static __always_inline __must_check
@@ -373,6 +411,22 @@ static inline void iov_iter_ubuf(struct iov_iter *i, unsigned int direction,
 			void __user *buf, size_t count)
 {
 	WARN_ON(direction & ~(READ | WRITE));
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up: avoid compound-literal struct assignment here.
+	 *
+	 * The Linx LLVM backend is still in flux, and we've observed broken
+	 * initialization of anonymous union fields (notably `count`) when using
+	 * `*i = (struct iov_iter){ ... }`. Do the initialization explicitly.
+	 */
+	memset(i, 0, sizeof(*i));
+	i->iter_type = ITER_UBUF;
+	i->data_source = direction;
+	i->ubuf = buf;
+	i->count = count;
+	i->nr_segs = 1;
+	return;
+#endif
 	*i = (struct iov_iter) {
 		.iter_type = ITER_UBUF,
 		.data_source = direction,

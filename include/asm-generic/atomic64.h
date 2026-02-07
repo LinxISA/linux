@@ -9,9 +9,15 @@
 #define _ASM_GENERIC_ATOMIC64_H
 #include <linux/types.h>
 
+/*
+ * On 64-bit kernels, atomic64_t is provided by <linux/types.h>.
+ * Keep the asm-generic definition for 32-bit NOMMU / !64BIT builds.
+ */
+#ifndef CONFIG_64BIT
 typedef struct {
 	s64 counter;
 } atomic64_t;
+#endif
 
 #define ATOMIC64_INIT(i)	{ (i) }
 

@@ -579,7 +579,18 @@ static void __init_memblock memblock_insert_region(struct memblock_type *type,
 {
 	struct memblock_region *rgn = &type->regions[idx];
 
-	BUG_ON(type->cnt >= type->max);
+	if (type->cnt >= type->max) {
+		const char *type_name = "unknown";
+
+		if (type == &memblock.memory)
+			type_name = "memory";
+		else if (type == &memblock.reserved)
+			type_name = "reserved";
+
+		pr_emerg("memblock_insert_region overflow: type=%s cnt=%lu max=%lu base=%pa size=%pa\n",
+			 type_name, type->cnt, type->max, &base, &size);
+		panic("memblock_insert_region overflow\n");
+	}
 	memmove(rgn + 1, rgn, (type->cnt - idx) * sizeof(*rgn));
 	rgn->base = base;
 	rgn->size = size;

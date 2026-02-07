@@ -69,6 +69,21 @@
 #include "tree.h"
 #include "rcu.h"
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_virt_uart_putc(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+
+static __always_inline void linx_virt_uart_mark(char c)
+{
+	linx_virt_uart_putc(c);
+}
+#endif
+
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
 #endif
@@ -4867,16 +4882,42 @@ void __init rcu_init(void)
 {
 	int cpu = smp_processor_id();
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('\n');
+	linx_virt_uart_putc('R');
+	linx_virt_uart_putc('C');
+	linx_virt_uart_putc('U');
+	linx_virt_uart_putc(':');
+	linx_virt_uart_mark('0');
+#endif
 	rcu_early_boot_tests();
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('1');
+#endif
 	rcu_bootup_announce();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('2');
+#endif
 	sanitize_kthread_prio();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('3');
+#endif
 	rcu_init_geometry();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('4');
+#endif
 	rcu_init_one();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('5');
+#endif
 	if (dump_tree)
 		rcu_dump_rcu_node_tree();
 	if (use_softirq)
 		open_softirq(RCU_SOFTIRQ, rcu_core_si);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('6');
+#endif
 
 	/*
 	 * We don't need protection against CPU-hotplug here because
@@ -4884,16 +4925,34 @@ void __init rcu_init(void)
 	 * or the scheduler are operational.
 	 */
 	pm_notifier(rcu_pm_notify, 0);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('7');
+#endif
 	WARN_ON(num_online_cpus() > 1); // Only one CPU this early in boot.
 	rcutree_prepare_cpu(cpu);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('8');
+#endif
 	rcutree_report_cpu_starting(cpu);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('9');
+#endif
 	rcutree_online_cpu(cpu);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('A');
+#endif
 
 	/* Create workqueue for Tree SRCU and for expedited GPs. */
 	rcu_gp_wq = alloc_workqueue("rcu_gp", WQ_MEM_RECLAIM | WQ_PERCPU, 0);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('B');
+#endif
 	WARN_ON(!rcu_gp_wq);
 
 	sync_wq = alloc_workqueue("sync_wq", WQ_MEM_RECLAIM | WQ_UNBOUND, 0);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('C');
+#endif
 	WARN_ON(!sync_wq);
 
 	/* Respect if explicitly disabled via a boot parameter. */

@@ -28,6 +28,7 @@
 #include <linux/export.h>
 #include <linux/kernel.h>
 #include <linux/sched.h>
+#include <linux/sched/task_stack.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/signal.h>
@@ -57,6 +58,34 @@
 #include <linux/irq_work.h>
 
 #include "workqueue_internal.h"
+
+#ifdef CONFIG_LINX
+static void linx_wq_dbg_worker(const char *tag, struct worker *worker);
+void linx_memcpy_watch_set(void *lo, void *hi, const char *tag);
+void linx_memcpy_watch_clear(void);
+
+#if IS_ENABLED(CONFIG_SLUB)
+void linx_slub_alloc_watch_set(void *ptr, const char *tag);
+void linx_slub_alloc_watch_clear(void);
+void linx_slub_debug_dump_obj(void *object, const char *tag);
+#else
+static inline void linx_slub_alloc_watch_set(void *ptr, const char *tag)
+{
+	(void)ptr;
+	(void)tag;
+}
+
+static inline void linx_slub_alloc_watch_clear(void)
+{
+}
+
+static inline void linx_slub_debug_dump_obj(void *object, const char *tag)
+{
+	(void)object;
+	(void)tag;
+}
+#endif /* CONFIG_SLUB */
+#endif
 
 enum worker_pool_flags {
 	/*
@@ -1039,9 +1068,16 @@ static void worker_enter_idle(struct worker *worker)
 {
 	struct worker_pool *pool = worker->pool;
 
+#ifdef CONFIG_LINX
+	if (unlikely((worker->flags & WORKER_IDLE) ||
+		     (!list_empty(&worker->entry) &&
+		      (worker->hentry.next || worker->hentry.pprev))))
+		linx_wq_dbg_worker("worker_enter_idle bad", worker);
+#endif
+
 	if (WARN_ON_ONCE(worker->flags & WORKER_IDLE) ||
 	    WARN_ON_ONCE(!list_empty(&worker->entry) &&
-			 (worker->hentry.next || worker->hentry.pprev)))
+				 (worker->hentry.next || worker->hentry.pprev)))
 		return;
 
 	/* can't use worker_set_flags(), also called from create_worker() */
@@ -1071,6 +1107,11 @@ static void worker_enter_idle(struct worker *worker)
 static void worker_leave_idle(struct worker *worker)
 {
 	struct worker_pool *pool = worker->pool;
+
+#ifdef CONFIG_LINX
+	if (unlikely(!(worker->flags & WORKER_IDLE)))
+		linx_wq_dbg_worker("worker_leave_idle bad", worker);
+#endif
 
 	if (WARN_ON_ONCE(!(worker->flags & WORKER_IDLE)))
 		return;
@@ -2646,6 +2687,9 @@ static struct worker *alloc_worker(int node)
 
 	worker = kzalloc_node(sizeof(*worker), GFP_KERNEL, node);
 	if (worker) {
+#ifdef CONFIG_LINX
+		linx_slub_debug_dump_obj(worker, "alloc_worker:after_kzalloc_node");
+#endif
 		INIT_LIST_HEAD(&worker->entry);
 		INIT_LIST_HEAD(&worker->scheduled);
 		INIT_LIST_HEAD(&worker->node);
@@ -2778,6 +2822,10 @@ static struct worker *create_worker(struct worker_pool *pool)
 {
 	struct worker *worker;
 	int id;
+	static int linx_create_dbg;
+#ifdef CONFIG_LINX
+	int linx_dbg_id;
+#endif
 
 	/* ID is needed to determine kthread name */
 	id = ida_alloc(&pool->worker_ida, GFP_KERNEL);
@@ -2793,14 +2841,52 @@ static struct worker *create_worker(struct worker_pool *pool)
 		goto fail;
 	}
 
+#ifdef CONFIG_LINX
+	linx_dbg_id = linx_create_dbg++;
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker after alloc_worker", worker);
+	{
+		unsigned long stack_base = (unsigned long)task_stack_page(current);
+		unsigned long worker_u = (unsigned long)worker;
+
+		if (worker_u >= stack_base && worker_u < stack_base + THREAD_SIZE)
+			pr_err("Linx dbg: create_worker: worker %px overlaps current stack base=%px\n",
+			       worker, (void *)stack_base);
+	}
+#endif
+
 	worker->id = id;
+
+#ifdef CONFIG_LINX
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker after worker->id", worker);
+#endif
 
 	if (!(pool->flags & POOL_BH)) {
 		char id_buf[WORKER_ID_LEN];
+		struct task_struct *task;
 
 		format_worker_id(id_buf, sizeof(id_buf), worker, pool);
-		worker->task = kthread_create_on_node(worker_thread, worker,
-						      pool->node, "%s", id_buf);
+#ifdef CONFIG_LINX
+		linx_memcpy_watch_set(worker, (char *)worker + sizeof(*worker),
+				      "create_worker:kthread_create");
+		linx_slub_alloc_watch_set(worker, "create_worker:kthread_create");
+#endif
+		task = kthread_create_on_node(worker_thread, worker,
+					      pool->node, "%s", id_buf);
+#ifdef CONFIG_LINX
+		linx_slub_alloc_watch_clear();
+		linx_memcpy_watch_clear();
+#endif
+#ifdef CONFIG_LINX
+		if (linx_dbg_id < 16)
+			linx_wq_dbg_worker("create_worker after kthread_create (pre-store)", worker);
+#endif
+		worker->task = task;
+#ifdef CONFIG_LINX
+		if (linx_dbg_id < 16)
+			linx_wq_dbg_worker("create_worker after kthread_create (post-store)", worker);
+#endif
 		if (IS_ERR(worker->task)) {
 			if (PTR_ERR(worker->task) == -EINTR) {
 				pr_err("workqueue: Interrupted when creating a worker thread \"%s\"\n",
@@ -2819,10 +2905,19 @@ static struct worker *create_worker(struct worker_pool *pool)
 	/* successful, attach the worker to the pool */
 	worker_attach_to_pool(worker, pool);
 
+#ifdef CONFIG_LINX
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker after attach", worker);
+#endif
+
 	/* start the newly created worker */
 	raw_spin_lock_irq(&pool->lock);
 
 	worker->pool->nr_workers++;
+#ifdef CONFIG_LINX
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker before enter_idle", worker);
+#endif
 	worker_enter_idle(worker);
 
 	/*
@@ -3145,6 +3240,30 @@ static bool manage_workers(struct worker *worker)
 	return true;
 }
 
+#ifdef CONFIG_LINX
+static void linx_wq_dbg_worker(const char *tag, struct worker *worker)
+{
+	if (!worker) {
+		pr_err("Linx dbg: %s worker=NULL\n", tag);
+		return;
+	}
+
+	pr_err("Linx dbg: %s worker=%px pool=%px task=%px flags=0x%x id=%d "
+	       "entry(n=%px p=%px) scheduled(n=%px p=%px) node(n=%px p=%px)\n",
+	       tag, worker, worker->pool, worker->task, worker->flags, worker->id,
+	       worker->entry.next, worker->entry.prev,
+	       worker->scheduled.next, worker->scheduled.prev,
+	       worker->node.next, worker->node.prev);
+}
+#endif
+
+#ifdef CONFIG_LINX
+static void linx_workqueue_null_workfn(struct work_struct *work)
+{
+	(void)work;
+}
+#endif
+
 /**
  * process_one_work - process single work
  * @worker: self
@@ -3189,6 +3308,16 @@ __acquires(&pool->lock)
 	hash_add(pool->busy_hash, &worker->hentry, (unsigned long)work);
 	worker->current_work = work;
 	worker->current_func = work->func;
+#ifdef CONFIG_LINX
+	if (unlikely(!worker->current_func)) {
+		static int warned;
+
+		if (warned++ < 32)
+			pr_err("LinxISA: process_one_work: NULL work->func (work=%px)\n",
+			       work);
+		worker->current_func = linx_workqueue_null_workfn;
+	}
+#endif
 	worker->current_pwq = pwq;
 	if (worker->task)
 		worker->current_at = worker->task->se.sum_exec_runtime;
@@ -3407,6 +3536,10 @@ recheck:
 	 * preparing to process a work or actually processing it.
 	 * Make sure nobody diddled with it while I was sleeping.
 	 */
+#ifdef CONFIG_LINX
+	if (unlikely(!list_empty(&worker->scheduled)))
+		linx_wq_dbg_worker("worker_thread scheduled!=empty", worker);
+#endif
 	WARN_ON_ONCE(!list_empty(&worker->scheduled));
 
 	/*
@@ -7717,20 +7850,29 @@ static void __init restrict_unbound_cpumask(const char *name, const struct cpuma
 	cpumask_and(wq_unbound_cpumask, wq_unbound_cpumask, mask);
 }
 
+static __always_inline void linx_virt_uart_mark_wq(char c);
+
 static void __init init_cpu_worker_pool(struct worker_pool *pool, int cpu, int nice)
 {
+	linx_virt_uart_mark_wq('I');
 	BUG_ON(init_worker_pool(pool));
+	linx_virt_uart_mark_wq('i');
 	pool->cpu = cpu;
 	cpumask_copy(pool->attrs->cpumask, cpumask_of(cpu));
 	cpumask_copy(pool->attrs->__pod_cpumask, cpumask_of(cpu));
 	pool->attrs->nice = nice;
 	pool->attrs->affn_strict = true;
 	pool->node = cpu_to_node(cpu);
+	linx_virt_uart_mark_wq('n');
 
 	/* alloc pool ID */
+	linx_virt_uart_mark_wq('L');
 	mutex_lock(&wq_pool_mutex);
+	linx_virt_uart_mark_wq('l');
 	BUG_ON(worker_pool_assign_id(pool));
+	linx_virt_uart_mark_wq('a');
 	mutex_unlock(&wq_pool_mutex);
+	linx_virt_uart_mark_wq('U');
 }
 
 /**
@@ -7743,6 +7885,19 @@ static void __init init_cpu_worker_pool(struct worker_pool *pool, int cpu, int n
  * execution starts only after kthreads can be created and scheduled right
  * before early initcalls.
  */
+
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+static __always_inline void linx_virt_uart_mark_wq(char c)
+{
+	*(volatile unsigned char *)(0x10000000UL) = (unsigned char)c;
+}
+#else
+static __always_inline void linx_virt_uart_mark_wq(char c)
+{
+	(void)c;
+}
+#endif
+
 void __init workqueue_init_early(void)
 {
 	struct wq_pod_type *pt = &wq_pod_types[WQ_AFFN_SYSTEM];
@@ -7753,10 +7908,12 @@ void __init workqueue_init_early(void)
 
 	BUILD_BUG_ON(__alignof__(struct pool_workqueue) < __alignof__(long long));
 
+	linx_virt_uart_mark_wq('0');
 	BUG_ON(!alloc_cpumask_var(&wq_online_cpumask, GFP_KERNEL));
 	BUG_ON(!alloc_cpumask_var(&wq_unbound_cpumask, GFP_KERNEL));
 	BUG_ON(!alloc_cpumask_var(&wq_requested_unbound_cpumask, GFP_KERNEL));
 	BUG_ON(!zalloc_cpumask_var(&wq_isolated_cpumask, GFP_KERNEL));
+	linx_virt_uart_mark_wq('1');
 
 	cpumask_copy(wq_online_cpumask, cpu_online_mask);
 	cpumask_copy(wq_unbound_cpumask, cpu_possible_mask);
@@ -7769,9 +7926,11 @@ void __init workqueue_init_early(void)
 	cpumask_andnot(wq_isolated_cpumask, cpu_possible_mask,
 						housekeeping_cpumask(HK_TYPE_DOMAIN));
 	pwq_cache = KMEM_CACHE(pool_workqueue, SLAB_PANIC);
+	linx_virt_uart_mark_wq('2');
 
 	unbound_wq_update_pwq_attrs_buf = alloc_workqueue_attrs();
 	BUG_ON(!unbound_wq_update_pwq_attrs_buf);
+	linx_virt_uart_mark_wq('3');
 
 	/*
 	 * If nohz_full is enabled, set power efficient workqueue as unbound.
@@ -7787,11 +7946,13 @@ void __init workqueue_init_early(void)
 	BUG_ON(!pt->pod_cpus || !pt->pod_node || !pt->cpu_pod);
 
 	BUG_ON(!zalloc_cpumask_var_node(&pt->pod_cpus[0], GFP_KERNEL, NUMA_NO_NODE));
+	linx_virt_uart_mark_wq('4');
 
 	pt->nr_pods = 1;
 	cpumask_copy(pt->pod_cpus[0], cpu_possible_mask);
 	pt->pod_node[0] = NUMA_NO_NODE;
 	pt->cpu_pod[0] = 0;
+	linx_virt_uart_mark_wq('p');
 
 	/* initialize BH and CPU pools */
 	for_each_possible_cpu(cpu) {
@@ -7799,16 +7960,22 @@ void __init workqueue_init_early(void)
 
 		i = 0;
 		for_each_bh_worker_pool(pool, cpu) {
+			linx_virt_uart_mark_wq(i == 0 ? 'A' : 'B');
 			init_cpu_worker_pool(pool, cpu, std_nice[i]);
+			linx_virt_uart_mark_wq(i == 0 ? 'a' : 'b');
 			pool->flags |= POOL_BH;
 			init_irq_work(bh_pool_irq_work(pool), irq_work_fns[i]);
 			i++;
 		}
 
 		i = 0;
-		for_each_cpu_worker_pool(pool, cpu)
+		for_each_cpu_worker_pool(pool, cpu) {
+			linx_virt_uart_mark_wq(i == 0 ? 'C' : 'D');
 			init_cpu_worker_pool(pool, cpu, std_nice[i++]);
+			linx_virt_uart_mark_wq(i == 1 ? 'c' : 'd');
+		}
 	}
+	linx_virt_uart_mark_wq('5');
 
 	/* create default unbound and ordered wq attrs */
 	for (i = 0; i < NR_STD_WORKER_POOLS; i++) {
@@ -7827,23 +7994,36 @@ void __init workqueue_init_early(void)
 		attrs->ordered = true;
 		ordered_wq_attrs[i] = attrs;
 	}
+	linx_virt_uart_mark_wq('6');
 
+	linx_virt_uart_mark_wq('a');
 	system_wq = alloc_workqueue("events", WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('b');
 	system_percpu_wq = alloc_workqueue("events", WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('c');
 	system_highpri_wq = alloc_workqueue("events_highpri",
 					    WQ_HIGHPRI | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('d');
 	system_long_wq = alloc_workqueue("events_long", WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('e');
 	system_unbound_wq = alloc_workqueue("events_unbound", WQ_UNBOUND, WQ_MAX_ACTIVE);
+	linx_virt_uart_mark_wq('f');
 	system_dfl_wq = alloc_workqueue("events_unbound", WQ_UNBOUND, WQ_MAX_ACTIVE);
+	linx_virt_uart_mark_wq('g');
 	system_freezable_wq = alloc_workqueue("events_freezable",
 					      WQ_FREEZABLE | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('h');
 	system_power_efficient_wq = alloc_workqueue("events_power_efficient",
 					      WQ_POWER_EFFICIENT | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('i');
 	system_freezable_power_efficient_wq = alloc_workqueue("events_freezable_pwr_efficient",
 					      WQ_FREEZABLE | WQ_POWER_EFFICIENT | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('j');
 	system_bh_wq = alloc_workqueue("events_bh", WQ_BH | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('k');
 	system_bh_highpri_wq = alloc_workqueue("events_bh_highpri",
 					       WQ_BH | WQ_HIGHPRI | WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('7');
 	BUG_ON(!system_wq || !system_percpu_wq|| !system_highpri_wq || !system_long_wq ||
 	       !system_unbound_wq || !system_freezable_wq || !system_dfl_wq ||
 	       !system_power_efficient_wq ||
@@ -7856,7 +8036,14 @@ static void __init wq_cpu_intensive_thresh_init(void)
 	unsigned long thresh;
 	unsigned long bogo;
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: wq_cpu_intensive_thresh_init: creating pwq_release_worker\n");
+#endif
 	pwq_release_worker = kthread_run_worker(0, "pool_workqueue_release");
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: wq_cpu_intensive_thresh_init: pwq_release_worker=%px\n",
+	       pwq_release_worker);
+#endif
 	BUG_ON(IS_ERR(pwq_release_worker));
 
 	/* if the user set it to a specific value, keep it */
@@ -7905,9 +8092,19 @@ void __init workqueue_init(void)
 	struct worker_pool *pool;
 	int cpu, bkt;
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init start\n");
+#endif
 	wq_cpu_intensive_thresh_init();
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init after thresh init\n");
+#endif
+
 	mutex_lock(&wq_pool_mutex);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init got wq_pool_mutex\n");
+#endif
 
 	/*
 	 * Per-cpu pools created earlier could be missing node hint. Fix them
@@ -7928,6 +8125,10 @@ void __init workqueue_init(void)
 
 	mutex_unlock(&wq_pool_mutex);
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init pools fixed\n");
+#endif
+
 	/*
 	 * Create the initial workers. A BH pool has one pseudo worker that
 	 * represents the shared BH execution context and thus doesn't get
@@ -7938,6 +8139,10 @@ void __init workqueue_init(void)
 		for_each_bh_worker_pool(pool, cpu)
 			BUG_ON(!create_worker(pool));
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init BH workers created\n");
+#endif
+
 	for_each_online_cpu(cpu) {
 		for_each_cpu_worker_pool(pool, cpu) {
 			pool->flags &= ~POOL_DISASSOCIATED;
@@ -7945,8 +8150,16 @@ void __init workqueue_init(void)
 		}
 	}
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init per-cpu workers created\n");
+#endif
+
 	hash_for_each(unbound_pool_hash, bkt, pool, hash_node)
 		BUG_ON(!create_worker(pool));
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init unbound workers created\n");
+#endif
 
 	wq_online = true;
 	wq_watchdog_init();

@@ -357,7 +357,7 @@ struct prb_data_block {
  * Return the descriptor associated with @n. @n can be either a
  * descriptor ID or a sequence number.
  */
-static struct prb_desc *to_desc(struct prb_desc_ring *desc_ring, u64 n)
+static noinline struct prb_desc *to_desc(struct prb_desc_ring *desc_ring, u64 n)
 {
 	return &desc_ring->descs[DESC_INDEX(desc_ring, n)];
 }
@@ -366,7 +366,7 @@ static struct prb_desc *to_desc(struct prb_desc_ring *desc_ring, u64 n)
  * Return the printk_info associated with @n. @n can be either a
  * descriptor ID or a sequence number.
  */
-static struct printk_info *to_info(struct prb_desc_ring *desc_ring, u64 n)
+static noinline struct printk_info *to_info(struct prb_desc_ring *desc_ring, u64 n)
 {
 	return &desc_ring->infos[DESC_INDEX(desc_ring, n)];
 }

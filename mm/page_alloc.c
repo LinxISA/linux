@@ -716,6 +716,14 @@ static inline int pindex_to_order(unsigned int pindex)
 
 static inline bool pcp_allowed_order(unsigned int order)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: per-cpu page lists are still unstable (and are also
+	 * bypassed in rmqueue()). Disable PCP usage entirely so allocations and
+	 * frees consistently go through the buddy allocator.
+	 */
+	return false;
+#endif
 	if (order <= PAGE_ALLOC_COSTLY_ORDER)
 		return true;
 #ifdef CONFIG_TRANSPARENT_HUGEPAGE
@@ -3364,12 +3372,14 @@ struct page *rmqueue(struct zone *preferred_zone,
 {
 	struct page *page;
 
+#if !defined(CONFIG_LINX)
 	if (likely(pcp_allowed_order(order))) {
 		page = rmqueue_pcplist(preferred_zone, zone, order,
 				       migratetype, alloc_flags);
 		if (likely(page))
 			goto out;
 	}
+#endif
 
 	page = rmqueue_buddy(preferred_zone, zone, order, alloc_flags,
 							migratetype);

@@ -22,6 +22,11 @@ ifneq ($(CONFIG_SCHED_OMIT_FRAME_POINTER),y)
 CFLAGS_core.o := $(PROFILING) -fno-omit-frame-pointer
 endif
 
+ifdef CONFIG_LINX
+# Bring-up workaround: avoid scheduler miscompiles under optimization.
+CFLAGS_core.o += -O0
+endif
+
 # Branch profiling isn't noinstr-safe
 ifdef CONFIG_TRACE_BRANCH_PROFILING
 CFLAGS_build_policy.o += -DDISABLE_BRANCH_PROFILING

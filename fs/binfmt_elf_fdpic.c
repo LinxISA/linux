@@ -56,7 +56,7 @@ typedef char *elf_caddr_t;
 
 MODULE_LICENSE("GPL");
 
-static int load_elf_fdpic_binary(struct linux_binprm *);
+int load_elf_fdpic_binary(struct linux_binprm *);
 static int elf_fdpic_fetch_phdrs(struct elf_fdpic_params *, struct file *);
 static int elf_fdpic_map_file(struct elf_fdpic_params *, struct file *,
 			      struct mm_struct *, const char *);
@@ -179,7 +179,7 @@ static int elf_fdpic_fetch_phdrs(struct elf_fdpic_params *params,
 /*
  * load an fdpic binary into various bits of memory
  */
-static int load_elf_fdpic_binary(struct linux_binprm *bprm)
+int load_elf_fdpic_binary(struct linux_binprm *bprm)
 {
 	struct elf_fdpic_params exec_params, interp_params;
 	struct pt_regs *regs = current_pt_regs();
@@ -196,6 +196,11 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	int executable_stack;
 	int retval, i;
 	loff_t pos;
+#ifdef CONFIG_LINX
+	const char *stage = "start";
+	bool dbg = bprm->file && bprm->file->f_path.dentry &&
+		   !strcmp(bprm->file->f_path.dentry->d_name.name, "init");
+#endif
 
 	kdebug("____ LOAD %d ____", current->pid);
 
@@ -207,6 +212,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 
 	/* check that this is a binary we know how to deal with */
 	retval = -ENOEXEC;
+#ifdef CONFIG_LINX
+	stage = "is_elf";
+#endif
 	if (!is_elf(&exec_params.hdr, bprm->file))
 		goto error;
 	if (!elf_check_fdpic(&exec_params.hdr)) {
@@ -221,6 +229,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	}
 
 	/* read the program header table */
+#ifdef CONFIG_LINX
+	stage = "fetch_phdrs";
+#endif
 	retval = elf_fdpic_fetch_phdrs(&exec_params, bprm->file);
 	if (retval < 0)
 		goto error;
@@ -228,6 +239,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	/* scan for a program header that specifies an interpreter */
 	phdr = exec_params.phdrs;
 
+#ifdef CONFIG_LINX
+	stage = "scan_phdrs";
+#endif
 	for (i = 0; i < exec_params.hdr.e_phnum; i++, phdr++) {
 		switch (phdr->p_type) {
 		case PT_INTERP:
@@ -338,6 +352,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 		interp_params.flags |= ELF_FDPIC_FLAG_CONSTDISP;
 
 	/* flush all traces of the currently running executable */
+#ifdef CONFIG_LINX
+	stage = "begin_new_exec";
+#endif
 	retval = begin_new_exec(bprm);
 	if (retval)
 		goto error;
@@ -381,12 +398,18 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 #endif
 
 	/* load the executable and interpreter into memory */
+#ifdef CONFIG_LINX
+	stage = "map_exec";
+#endif
 	retval = elf_fdpic_map_file(&exec_params, bprm->file, current->mm,
 				    "executable");
 	if (retval < 0)
 		goto error;
 
 	if (interpreter_name) {
+#ifdef CONFIG_LINX
+		stage = "map_interp";
+#endif
 		retval = elf_fdpic_map_file(&interp_params, interpreter,
 					    current->mm, "interpreter");
 		if (retval < 0) {
@@ -417,6 +440,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	    (executable_stack == EXSTACK_DEFAULT && VM_STACK_FLAGS & VM_EXEC))
 		stack_prot |= PROT_EXEC;
 
+#ifdef CONFIG_LINX
+	stage = "vm_mmap_stack";
+#endif
 	current->mm->start_brk = vm_mmap(NULL, 0, stack_size, stack_prot,
 					 MAP_PRIVATE | MAP_ANONYMOUS |
 					 MAP_UNINITIALIZED | MAP_GROWSDOWN,
@@ -433,6 +459,9 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	current->mm->start_stack = current->mm->start_brk + stack_size;
 #endif
 
+#ifdef CONFIG_LINX
+	stage = "tables";
+#endif
 	retval = create_elf_fdpic_tables(bprm, current->mm, &exec_params,
 					 &interp_params);
 	if (retval < 0)
@@ -466,6 +495,16 @@ static int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	retval = 0;
 
 error:
+#ifdef CONFIG_LINX
+	if (dbg && retval) {
+		pr_err("LinxISA elf_fdpic: %pd2 stage=%s retval=%d type=%u phoff=%llu phnum=%u phentsize=%u entry=%llx\n",
+		       bprm->file ? bprm->file->f_path.dentry : NULL,
+		       stage, retval, exec_params.hdr.e_type,
+		       (unsigned long long)exec_params.hdr.e_phoff,
+		       exec_params.hdr.e_phnum, exec_params.hdr.e_phentsize,
+		       (unsigned long long)exec_params.hdr.e_entry);
+	}
+#endif
 	if (interpreter) {
 		exe_file_allow_write_access(interpreter);
 		fput(interpreter);
@@ -742,6 +781,10 @@ static int elf_fdpic_map_file(struct elf_fdpic_params *params,
 			      const char *what)
 {
 	struct elf_fdpic_loadmap *loadmap;
+#ifdef CONFIG_LINX
+	bool dbg = file && file->f_path.dentry &&
+		   !strcmp(file->f_path.dentry->d_name.name, "init");
+#endif
 #ifdef CONFIG_MMU
 	struct elf_fdpic_loadseg *mseg;
 	unsigned long load_addr;
@@ -761,9 +804,22 @@ static int elf_fdpic_map_file(struct elf_fdpic_params *params,
 	if (nloads == 0)
 		return -ELIBBAD;
 
-	loadmap = kzalloc(struct_size(loadmap, segs, nloads), GFP_KERNEL);
-	if (!loadmap)
+	size_t alloc_size = struct_size(loadmap, segs, nloads);
+#ifdef CONFIG_LINX
+	if (dbg) {
+		pr_err("LinxISA elf_fdpic: map_file(%s) phnum=%u nloads=%u flags=0x%lx alloc=%zu\n",
+		       what, params->hdr.e_phnum, nloads, params->flags, alloc_size);
+	}
+#endif
+	loadmap = kzalloc(alloc_size, GFP_KERNEL);
+	if (!loadmap) {
+#ifdef CONFIG_LINX
+		if (dbg)
+			pr_err("LinxISA elf_fdpic: map_file(%s) kzalloc(%zu) failed\n",
+			       what, alloc_size);
+#endif
 		return -ENOMEM;
+	}
 
 	params->loadmap = loadmap;
 
@@ -949,9 +1005,18 @@ static int elf_fdpic_map_file_constdisp_on_uclinux(
 
 	/* allocate one big anon block for everything */
 	maddr = vm_mmap(NULL, load_addr, top - base,
-			PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE, 0);
-	if (IS_ERR_VALUE(maddr))
+			PROT_READ | PROT_WRITE | PROT_EXEC,
+			MAP_PRIVATE | MAP_ANONYMOUS, 0);
+	if (IS_ERR_VALUE(maddr)) {
+#ifdef CONFIG_LINX
+		if (file && file->f_path.dentry &&
+		    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+			pr_err("LinxISA elf_fdpic: constdisp vm_mmap failed load_addr=%lx base=%lx top=%lx len=%lx ret=%ld\n",
+			       load_addr, base, top, top - base, (long)maddr);
+		}
+#endif
 		return (int) maddr;
+	}
 
 	if (load_addr != 0)
 		load_addr += PAGE_ALIGN(top - base);
@@ -1091,7 +1156,21 @@ static int elf_fdpic_map_file_by_direct_mmap(struct elf_fdpic_params *params,
 		       maddr);
 
 		if (IS_ERR_VALUE(maddr))
+#ifdef CONFIG_LINX
+		{
+			if (file && file->f_path.dentry &&
+			    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+				pr_err("LinxISA elf_fdpic: vm_mmap failed loop=%d va=%lx off=%llx len=%llx prot=%x flags=%x ret=%ld\n",
+				       loop, (unsigned long)phdr->p_vaddr,
+				       (unsigned long long)(phdr->p_offset - disp),
+				       (unsigned long long)phdr->p_memsz + disp,
+				       prot, flags, (long)maddr);
+			}
+			return (int)maddr;
+		}
+#else
 			return (int) maddr;
+#endif
 
 		if ((params->flags & ELF_FDPIC_FLAG_ARRANGEMENT) ==
 		    ELF_FDPIC_FLAG_CONTIGUOUS)

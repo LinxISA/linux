@@ -23,6 +23,9 @@
 #include <linux/linkage.h>
 #include <linux/stddef.h>
 #include <linux/string.h>
+#ifdef CONFIG_LINX
+#include <linux/sched.h>
+#endif
 #include <linux/types.h>
 
 #include <asm/page.h>
@@ -618,8 +621,95 @@ EXPORT_SYMBOL(memset64);
  * You should not use this function to access IO space, use memcpy_toio()
  * or memcpy_fromio() instead.
  */
+#ifdef CONFIG_LINX
+void *linx_memcpy_watch_lo;
+void *linx_memcpy_watch_hi;
+const char *linx_memcpy_watch_tag;
+
+void linx_memcpy_watch_set(void *lo, void *hi, const char *tag)
+{
+	WRITE_ONCE(linx_memcpy_watch_lo, lo);
+	WRITE_ONCE(linx_memcpy_watch_hi, hi);
+	WRITE_ONCE(linx_memcpy_watch_tag, tag);
+}
+
+void linx_memcpy_watch_clear(void)
+{
+	WRITE_ONCE(linx_memcpy_watch_lo, NULL);
+	WRITE_ONCE(linx_memcpy_watch_hi, NULL);
+	WRITE_ONCE(linx_memcpy_watch_tag, NULL);
+}
+#endif /* CONFIG_LINX */
+
 void *memcpy(void *dest, const void *src, size_t count)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * Save the initial return address as early as possible. This is the
+	 * callsite that entered memcpy(). The function becomes non-leaf once we
+	 * add debug printing below, so `ra` may be clobbered later.
+	 */
+	unsigned long caller_ra_entry = 0;
+	asm volatile("sdi ra, [%0, 0]"
+		     :
+		     : "r"(&caller_ra_entry)
+		     : "memory");
+
+	/*
+	 * LinxISA bring-up: debug helper to pinpoint unexpected overwrites of
+	 * specific objects during early bring-up (eg. worker struct corruption).
+	 *
+	 * Only enabled when a caller arms linx_memcpy_watch_*.
+	 */
+	void *lo = READ_ONCE(linx_memcpy_watch_lo);
+	void *hi = READ_ONCE(linx_memcpy_watch_hi);
+
+	if (unlikely(lo && hi)) {
+		uintptr_t dst = (uintptr_t)dest;
+		uintptr_t len = (uintptr_t)count;
+		uintptr_t lo_u = (uintptr_t)lo;
+		uintptr_t hi_u = (uintptr_t)hi;
+		uintptr_t end = dst;
+
+		if (len && dst <= ~(uintptr_t)0 - (len - 1))
+			end = dst + len;
+		else if (len)
+			end = ~(uintptr_t)0;
+
+		if (dst < hi_u && end > lo_u) {
+			void *caller0;
+			const char *tag;
+
+			/* Avoid recursion if printk ends up calling memcpy. */
+			WRITE_ONCE(linx_memcpy_watch_lo, NULL);
+			WRITE_ONCE(linx_memcpy_watch_hi, NULL);
+			tag = READ_ONCE(linx_memcpy_watch_tag);
+			WRITE_ONCE(linx_memcpy_watch_tag, NULL);
+
+			caller0 = __builtin_return_address(0);
+			pr_err("LinxISA: memcpy watch hit tag=%s pid=%d comm=%s dest=%px src=%px n=%zu ra_entry=%lx caller=%px\n",
+			       tag ? tag : "?", current->pid, current->comm,
+			       dest, src, count, caller_ra_entry, caller0);
+			/*
+			 * Dump a small window of stack words near the
+			 * caller_ra_entry slot. In practice the FENTRY-saved
+			 * RA often lives nearby, and this helps pinpoint the
+			 * real callsite even when __builtin_return_address()
+			 * is unavailable.
+			 */
+			{
+				unsigned long *w = (unsigned long *)&caller_ra_entry;
+
+				pr_err("LinxISA: memcpy watch stack @%px: w[-1]=%lx w[0]=%lx w[1]=%lx w[2]=%lx w[3]=%lx w[4]=%lx\n",
+				       w, w[-1], w[0], w[1], w[2], w[3], w[4]);
+			}
+			pr_err("LinxISA: memcpy watch range lo=%px hi=%px\n",
+			       lo, hi);
+			panic("LinxISA: memcpy watch hit");
+		}
+	}
+#endif /* CONFIG_LINX */
+
 	char *tmp = dest;
 	const char *s = src;
 

@@ -33,11 +33,39 @@ KCOV_INSTRUMENT_failslab.o := n
 
 CFLAGS_init-mm.o += -Wno-override-init
 
+ifdef CONFIG_LINX
+# LinxISA bring-up: work around remaining clang backend issues in early percpu
+# setup by compiling the core percpu allocator at -O0.
+CFLAGS_percpu.o += -O0
+
+# LinxISA bring-up: memblock_remove_region() is currently miscompiled at -O2
+# (argument/base pointer clobber), which corrupts kernel text via memmove().
+CFLAGS_memblock.o += -O0
+
+# LinxISA bring-up: SLUB bootstrap (struct slab bitfields/freelist setup) is
+# currently miscompiled at -O2, leading to early_kmem_cache_node_alloc() panics.
+CFLAGS_slub.o += -O0
+
+# LinxISA bring-up: kmalloc cache table/index setup in slab_common.c is still
+# miscompiled at -O2, which can make small kmalloc() (e.g. kstrdup_const) return
+# NULL despite plenty of free pages.
+CFLAGS_slab_common.o += -O0
+
+# LinxISA bring-up: string duplication helpers in util.c (kstrdup/_kmemdup_nul)
+# are still flaky at -O2. Build at -O0 to avoid spurious NULL returns that
+# break early VFS mounts (tmpfs/shmem_init).
+CFLAGS_util.o += -O0
+
+# LinxISA bring-up: page allocator is currently miscompiled at -O2 in early
+# boot (compound page prep), triggering folio_set_order() WARNs and hangs.
+CFLAGS_page_alloc.o += -O0
+endif
+
 mmu-y			:= nommu.o
 mmu-$(CONFIG_MMU)	:= highmem.o memory.o mincore.o \
-			   mlock.o mmap.o mmu_gather.o mprotect.o mremap.o \
-			   msync.o page_vma_mapped.o pagewalk.o \
-			   pgtable-generic.o rmap.o vmalloc.o vma.o vma_exec.o
+				   mlock.o mmap.o mmu_gather.o mprotect.o mremap.o \
+				   msync.o page_vma_mapped.o pagewalk.o \
+				   pgtable-generic.o rmap.o vmalloc.o vma.o vma_exec.o
 
 
 ifdef CONFIG_CROSS_MEMORY_ATTACH

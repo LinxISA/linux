@@ -15,6 +15,13 @@ obj-y     = fork.o exec_domain.o panic.o \
 obj-$(CONFIG_MULTIUSER) += groups.o
 obj-$(CONFIG_VHOST_TASK) += vhost_task.o
 
+ifdef CONFIG_LINX
+# Bring-up workaround: avoid miscompiles in task creation paths.
+CFLAGS_fork.o += -O0
+CFLAGS_workqueue.o += -O0
+CFLAGS_kthread.o += -O0
+endif
+
 ifdef CONFIG_FUNCTION_TRACER
 # Do not trace internal ftrace files
 CFLAGS_REMOVE_irq_work.o = $(CC_FLAGS_FTRACE)

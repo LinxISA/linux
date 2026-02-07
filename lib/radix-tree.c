@@ -1473,6 +1473,18 @@ void idr_preload(gfp_t gfp_mask)
 }
 EXPORT_SYMBOL(idr_preload);
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+static __always_inline void linx_virt_uart_mark_rt(char c)
+{
+	*(volatile unsigned char *)(0x10000000UL) = (unsigned char)c;
+}
+#else
+static __always_inline void linx_virt_uart_mark_rt(char c)
+{
+	(void)c;
+}
+#endif
+
 void __rcu **idr_get_free(struct radix_tree_root *root,
 			      struct radix_tree_iter *iter, gfp_t gfp,
 			      unsigned long max)
@@ -1481,16 +1493,21 @@ void __rcu **idr_get_free(struct radix_tree_root *root,
 	void __rcu **slot = (void __rcu **)&root->xa_head;
 	unsigned long maxindex, start = iter->next_index;
 	unsigned int shift, offset = 0;
+	static bool printed_offset;
 
  grow:
+	linx_virt_uart_mark_rt('0');
 	shift = radix_tree_load_root(root, &child, &maxindex);
+	linx_virt_uart_mark_rt('1');
 	if (!radix_tree_tagged(root, IDR_FREE))
 		start = max(start, maxindex + 1);
 	if (start > max)
 		return ERR_PTR(-ENOSPC);
 
 	if (start > maxindex) {
+		linx_virt_uart_mark_rt('E');
 		int error = radix_tree_extend(root, gfp, start, shift);
+		linx_virt_uart_mark_rt('e');
 		if (error < 0)
 			return ERR_PTR(error);
 		shift = error;
@@ -1500,14 +1517,31 @@ void __rcu **idr_get_free(struct radix_tree_root *root,
 		shift = RADIX_TREE_MAP_SHIFT;
 
 	while (shift) {
+		linx_virt_uart_mark_rt('s');
 		shift -= RADIX_TREE_MAP_SHIFT;
 		if (child == NULL) {
 			/* Have to add a child node.  */
+			linx_virt_uart_mark_rt('N');
 			child = radix_tree_node_alloc(gfp, node, root, shift,
 							offset, 0, 0);
+			linx_virt_uart_mark_rt('n');
 			if (!child)
 				return ERR_PTR(-ENOMEM);
 			all_tag_set(child, IDR_FREE);
+			{
+				unsigned long all = ~0UL;
+
+				linx_virt_uart_mark_rt('c');
+				linx_virt_uart_mark_rt((all & 1UL) ? '1' : '0');
+				linx_virt_uart_mark_rt((all & 2UL) ? '1' : '0');
+				linx_virt_uart_mark_rt((all & 4UL) ? '1' : '0');
+				linx_virt_uart_mark_rt((all & 8UL) ? '1' : '0');
+			}
+			linx_virt_uart_mark_rt(child->tags[IDR_FREE][0] ? 'T' : 't');
+			linx_virt_uart_mark_rt((child->tags[IDR_FREE][0] & 1UL) ? '1' : '0');
+			linx_virt_uart_mark_rt((child->tags[IDR_FREE][0] & 2UL) ? '1' : '0');
+			linx_virt_uart_mark_rt((child->tags[IDR_FREE][0] & 4UL) ? '1' : '0');
+			linx_virt_uart_mark_rt((child->tags[IDR_FREE][0] & 8UL) ? '1' : '0');
 			rcu_assign_pointer(*slot, node_to_entry(child));
 			if (node)
 				node->count++;
@@ -1515,10 +1549,18 @@ void __rcu **idr_get_free(struct radix_tree_root *root,
 			break;
 
 		node = entry_to_node(child);
+		linx_virt_uart_mark_rt('d');
 		offset = radix_tree_descend(node, &child, start);
+		linx_virt_uart_mark_rt('D');
+		if (!printed_offset) {
+			linx_virt_uart_mark_rt(offset == 0 ? 'o' : 'O');
+			printed_offset = true;
+		}
 		if (!tag_get(node, IDR_FREE, offset)) {
+			linx_virt_uart_mark_rt('f');
 			offset = radix_tree_find_next_bit(node, IDR_FREE,
 							offset + 1);
+			linx_virt_uart_mark_rt('F');
 			start = next_index(start, node, offset);
 			if (start > max || start == 0)
 				return ERR_PTR(-ENOSPC);

@@ -1429,12 +1429,24 @@ static int do_sys_openat2(int dfd, const char __user *filename,
 		return err;
 
 	tmp = getname(filename);
+#ifdef CONFIG_LINX
+	pr_alert("LinxISA: openat2: dfd=%d filename_user=%px tmp=%px err=%ld flags=0x%llx mode=0%llo\n",
+		 dfd, filename, tmp, IS_ERR(tmp) ? PTR_ERR(tmp) : 0L,
+		 (unsigned long long)how->flags, (unsigned long long)how->mode);
+#endif
 	if (IS_ERR(tmp))
 		return PTR_ERR(tmp);
 
 	fd = get_unused_fd_flags(how->flags);
+#ifdef CONFIG_LINX
+	pr_alert("LinxISA: openat2: get_unused_fd_flags(fd)=%d\n", fd);
+#endif
 	if (likely(fd >= 0)) {
 		struct file *f = do_filp_open(dfd, tmp, &op);
+#ifdef CONFIG_LINX
+		pr_alert("LinxISA: openat2: do_filp_open(f)=%px err=%ld\n",
+			 f, IS_ERR(f) ? PTR_ERR(f) : 0L);
+#endif
 		if (IS_ERR(f)) {
 			put_unused_fd(fd);
 			fd = PTR_ERR(f);
@@ -1443,6 +1455,9 @@ static int do_sys_openat2(int dfd, const char __user *filename,
 		}
 	}
 	putname(tmp);
+#ifdef CONFIG_LINX
+	pr_alert("LinxISA: openat2: return fd=%d\n", fd);
+#endif
 	return fd;
 }
 

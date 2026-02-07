@@ -7,6 +7,18 @@
 #include <linux/spinlock.h>
 #include <linux/xarray.h>
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+static __always_inline void linx_virt_uart_mark_idr(char c)
+{
+	*(volatile unsigned char *)(0x10000000UL) = (unsigned char)c;
+}
+#else
+static __always_inline void linx_virt_uart_mark_idr(char c)
+{
+	(void)c;
+}
+#endif
+
 /**
  * idr_alloc_u32() - Allocate an ID.
  * @idr: IDR handle.
@@ -38,6 +50,7 @@ int idr_alloc_u32(struct idr *idr, void *ptr, u32 *nextid,
 	unsigned int base = idr->idr_base;
 	unsigned int id = *nextid;
 
+	linx_virt_uart_mark_idr('u');
 	if (WARN_ON_ONCE(!(idr->idr_rt.xa_flags & ROOT_IS_IDR)))
 		idr->idr_rt.xa_flags |= IDR_RT_MARKER;
 	if (max < base)
@@ -45,14 +58,19 @@ int idr_alloc_u32(struct idr *idr, void *ptr, u32 *nextid,
 
 	id = (id < base) ? 0 : id - base;
 	radix_tree_iter_init(&iter, id);
+	linx_virt_uart_mark_idr('g');
 	slot = idr_get_free(&idr->idr_rt, &iter, gfp, max - base);
+	linx_virt_uart_mark_idr('G');
 	if (IS_ERR(slot))
 		return PTR_ERR(slot);
 
+	linx_virt_uart_mark_idr('r');
 	*nextid = iter.index + base;
 	/* there is a memory barrier inside radix_tree_iter_replace() */
 	radix_tree_iter_replace(&idr->idr_rt, &iter, slot, ptr);
+	linx_virt_uart_mark_idr('R');
 	radix_tree_iter_tag_clear(&idr->idr_rt, &iter, IDR_FREE);
+	linx_virt_uart_mark_idr('t');
 
 	return 0;
 }

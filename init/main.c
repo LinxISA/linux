@@ -720,6 +720,9 @@ static noinline void __ref __noreturn rest_init(void)
 	 * we schedule it before we create kthreadd, will OOPS.
 	 */
 	pid = user_mode_thread(kernel_init, NULL, CLONE_FS);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init: kernel_init pid=%d\n", pid);
+#endif
 	/*
 	 * Pin init on the boot CPU. Task migration is not properly working
 	 * until sched_init_smp() has been run. It will set the allowed
@@ -730,12 +733,26 @@ static noinline void __ref __noreturn rest_init(void)
 	tsk->flags |= PF_NO_SETAFFINITY;
 	set_cpus_allowed_ptr(tsk, cpumask_of(smp_processor_id()));
 	rcu_read_unlock();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init: pinned kernel_init\n");
+#endif
 
 	numa_default_policy();
 	pid = kernel_thread(kthreadd, NULL, NULL, CLONE_FS | CLONE_FILES);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init: kthreadd pid=%d\n", pid);
+#endif
 	rcu_read_lock();
 	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
 	rcu_read_unlock();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init: kthreadd_task=%px state=%ld on_rq=%d flags=0x%lx sched_class=%px\n",
+	       kthreadd_task,
+	       kthreadd_task ? READ_ONCE(kthreadd_task->__state) : -1L,
+	       kthreadd_task ? READ_ONCE(kthreadd_task->on_rq) : -1,
+	       kthreadd_task ? READ_ONCE(kthreadd_task->flags) : 0UL,
+	       kthreadd_task ? kthreadd_task->sched_class : NULL);
+#endif
 
 	/*
 	 * Enable might_sleep() and smp_processor_id() checks.
@@ -747,6 +764,9 @@ static noinline void __ref __noreturn rest_init(void)
 	system_state = SYSTEM_SCHEDULING;
 
 	complete(&kthreadd_done);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init: kthreadd_done complete\n");
+#endif
 
 	/*
 	 * The boot idle thread must execute schedule()
@@ -818,6 +838,18 @@ void __init __weak trap_init(void) { }
 
 bool initcall_debug;
 core_param(initcall_debug, initcall_debug, bool, 0644);
+
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+static __always_inline void linx_virt_uart_putc(char c)
+{
+	*(volatile unsigned char *)(0x10000000UL) = (unsigned char)c;
+}
+
+static __always_inline void linx_virt_uart_mark(char c)
+{
+	linx_virt_uart_putc(c);
+}
+#endif
 
 #ifdef TRACEPOINTS_ENABLED
 static void __init initcall_debug_enable(void);
@@ -912,24 +944,67 @@ void start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	/*
+	 * Bring-up aid: emit a marker on the QEMU LinxISA virt UART before the
+	 * console subsystem is initialized.
+	 */
+	linx_virt_uart_putc('\n');
+	linx_virt_uart_putc('S');
+	linx_virt_uart_putc('K');
+	linx_virt_uart_putc(':');
+	linx_virt_uart_putc('0');
+#endif
+
 	set_task_stack_end_magic(&init_task);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('1');
+#endif
 	smp_setup_processor_id();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('2');
+#endif
 	debug_objects_early_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('3');
+#endif
 	init_vmlinux_build_id();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('4');
+#endif
 
 	cgroup_init_early();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('5');
+#endif
 
 	local_irq_disable();
 	early_boot_irqs_disabled = true;
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('6');
+#endif
 
 	/*
 	 * Interrupts are still disabled. Do necessary setups, then
 	 * enable them.
 	 */
 	boot_cpu_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('7');
+#endif
 	page_address_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('8');
+#endif
 	pr_notice("%s", linux_banner);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('9');
+#endif
 	setup_arch(&command_line);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('A');
+	linx_virt_uart_putc('\n');
+#endif
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
 	static_call_init();
@@ -938,6 +1013,13 @@ void start_kernel(void)
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: reserve memblock allocations (notably the first percpu
+	 * chunk) before initializing the buddy allocator.
+	 */
+	paging_init();
+#endif
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 	early_numa_node_init();
 	boot_cpu_hotplug_init();
@@ -969,6 +1051,9 @@ void start_kernel(void)
 	sort_main_extable();
 	trap_init();
 	mm_core_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('B');
+#endif
 	maple_tree_init();
 	poking_init();
 	ftrace_init();
@@ -982,26 +1067,44 @@ void start_kernel(void)
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
 	sched_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('C');
+#endif
 
 	if (WARN(!irqs_disabled(),
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	radix_tree_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('r');
+#endif
 
 	/*
 	 * Set up housekeeping before setting up workqueues to allow the unbound
 	 * workqueue to take non-housekeeping into account.
 	 */
 	housekeeping_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('h');
+#endif
 
 	/*
 	 * Allow workqueue creation and work item queueing/cancelling
 	 * early.  Work item execution depends on kthreads and starts after
 	 * workqueue_init().
 	 */
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('w');
+#endif
 	workqueue_init_early();
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('d');
+#endif
 	rcu_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('D');
+#endif
 	kvfree_rcu_init();
 
 	/* Trace events are available after this */
@@ -1021,6 +1124,9 @@ void start_kernel(void)
 	hrtimers_init();
 	softirq_init();
 	timekeeping_init();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('E');
+#endif
 	time_init();
 
 	/* This must be after timekeeping is initialized */
@@ -1094,12 +1200,35 @@ void start_kernel(void)
 	pagecache_init();
 	signals_init();
 	seq_file_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: cpu0 online=%d active=%d possible=%d present=%d sched_class=%px\n",
+	       cpu_online(0), cpu_active(0), cpu_possible(0), cpu_present(0),
+	       current->sched_class);
+#endif
 	proc_root_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: proc_root_init done\n");
+#endif
 	nsfs_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: nsfs_init done\n");
+#endif
 	pidfs_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: pidfs_init done\n");
+#endif
 	cpuset_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: cpuset_init done\n");
+#endif
 	mem_cgroup_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: mem_cgroup_init done\n");
+#endif
 	cgroup_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: cgroup_init done\n");
+#endif
 	taskstats_init_early();
 	delayacct_init();
 
@@ -1108,6 +1237,12 @@ void start_kernel(void)
 	kcsan_init();
 
 	/* Do the rest non-__init'ed, we're now alive */
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark('F');
+#endif
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: entering rest_init\n");
+#endif
 	rest_init();
 
 	/*
@@ -1475,6 +1610,15 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
+#ifdef CONFIG_LINX
+	{
+		unsigned long linx_stack_marker = 0;
+
+		pr_err("Linx dbg: kernel_init started current=%px stack=%px\n",
+		       current, &linx_stack_marker);
+	}
+#endif
+
 	/*
 	 * Wait until kthreadd is all set-up.
 	 */
@@ -1555,14 +1699,28 @@ void __init console_on_rootfs(void)
 		pr_err("Warning: unable to open an initial console.\n");
 		return;
 	}
+#ifdef CONFIG_LINX
+	{
+		int r0 = init_dup(file);
+		int r1 = init_dup(file);
+		int r2 = init_dup(file);
+
+		pr_err("Linx dbg: console_on_rootfs: init_dup r0=%d r1=%d r2=%d files=%px\n",
+		       r0, r1, r2, current->files);
+	}
+#else
 	init_dup(file);
 	init_dup(file);
 	init_dup(file);
+#endif
 	fput(file);
 }
 
 static noinline void __init kernel_init_freeable(void)
 {
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kernel_init_freeable start\n");
+#endif
 	/* Now the scheduler is fully set up and can do blocking allocations */
 	gfp_allowed_mask = __GFP_BITS_MASK;
 
@@ -1575,7 +1733,21 @@ static noinline void __init kernel_init_freeable(void)
 
 	smp_prepare_cpus(setup_max_cpus);
 
+#ifdef CONFIG_LINX
+	/*
+	 * Bring-up: make sure kthreadd gets a chance to run before the first
+	 * workqueue/kthread creations below, otherwise early kthread_create()
+	 * users can deadlock.
+	 */
+	if (kthreadd_task)
+		wake_up_process(kthreadd_task);
+	yield();
+#endif
+
 	workqueue_init();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: workqueue_init done\n");
+#endif
 
 	init_mm_internals();
 
@@ -1591,6 +1763,9 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 
 	do_basic_setup();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: do_basic_setup done\n");
+#endif
 
 	kunit_run_all_tests();
 

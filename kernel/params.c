@@ -810,10 +810,25 @@ static void __init kernel_add_sysfs_param(const char *name,
 
 	/* These should not fail at boot. */
 	err = add_sysfs_param(mk, kparam, kparam->name + name_skip);
+#ifdef CONFIG_LINX
+	if (err) {
+		pr_err("LinxISA: kernel_add_sysfs_param: add_sysfs_param failed mod=%s param=%s err=%d\n",
+		       name, kparam->name, err);
+		goto out_put;
+	}
+	err = sysfs_create_group(&mk->kobj, &mk->mp->grp);
+	if (err) {
+		pr_err("LinxISA: kernel_add_sysfs_param: sysfs_create_group failed mod=%s err=%d\n",
+		       name, err);
+		goto out_put;
+	}
+#else
 	BUG_ON(err);
 	err = sysfs_create_group(&mk->kobj, &mk->mp->grp);
 	BUG_ON(err);
+#endif
 	kobject_uevent(&mk->kobj, KOBJ_ADD);
+out_put:
 	kobject_put(&mk->kobj);
 }
 

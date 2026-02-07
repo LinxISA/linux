@@ -109,7 +109,7 @@ typedef struct {
 
 typedef struct {
 	__u8 b[16];
-} uuid_t;
+} uuid_t_kbuild;
 
 #define	UUID_STRING_LEN		36
 
@@ -121,7 +121,9 @@ typedef struct {
 /* Big exception to the "don't include kernel headers into userspace, which
  * even potentially has different endianness and word sizes, since
  * we handle those differences explicitly below */
+#define uuid_t uuid_t_kbuild
 #include "../../include/linux/mod_devicetable.h"
+#undef uuid_t
 
 struct devtable {
 	const char *device_id;

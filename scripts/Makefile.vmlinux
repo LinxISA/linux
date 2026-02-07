@@ -7,6 +7,8 @@ include include/config/auto.conf
 include $(srctree)/scripts/Kbuild.include
 include $(srctree)/scripts/Makefile.lib
 
+SED ?= sed
+
 targets :=
 
 %.o: %.c FORCE
@@ -113,7 +115,7 @@ vmlinux: vmlinux.unstripped FORCE
 # what kmod expects to parse.
 quiet_cmd_modules_builtin_modinfo = GEN     $@
       cmd_modules_builtin_modinfo = $(cmd_objcopy); \
-                                    sed -i 's/\x00\+$$/\x00/g' $@
+                                    $(SED) -i 's/\x00\+$$/\x00/g' $@
 
 OBJCOPYFLAGS_modules.builtin.modinfo := -j .modinfo -O binary
 

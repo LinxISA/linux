@@ -9,3 +9,15 @@ printk_support-y	             := printk_ringbuffer.o
 printk_support-$(CONFIG_SYSCTL)	     += sysctl.o
 
 obj-$(CONFIG_PRINTK_RINGBUFFER_KUNIT_TEST) += printk_ringbuffer_kunit_test.o
+
+# LinxISA bring-up: clang backend still has issues at -O2 in printk ringbuffer
+# codepaths (e.g. descriptor state bit constants clobbering base pointers).
+# Build the ringbuffer with -O0 until the backend is fully fixed.
+#
+# IMPORTANT: Restrict to the Linx build only. Other architectures (e.g. RISC-V)
+# rely on inlining for certain asm-constraint patterns and will fail to build
+# if compiled at -O0.
+ifeq ($(ARCH),linx)
+CFLAGS_printk_ringbuffer.o += -O0
+CFLAGS_printk.o += -O0
+endif

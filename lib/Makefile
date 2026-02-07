@@ -40,7 +40,8 @@ lib-y := ctype.o string.o vsprintf.o cmdline.o \
 	 is_single_threaded.o plist.o decompress.o kobject_uevent.o \
 	 earlycpio.o seq_buf.o siphash.o dec_and_lock.o \
 	 nmi_backtrace.o win_minmax.o memcat_p.o \
-	 buildid.o objpool.o iomem_copy.o sys_info.o
+	 buildid.o objpool.o iomem_copy.o sys_info.o \
+	 wrong_size_cmpxchg.o
 
 lib-$(CONFIG_UNION_FIND) += union_find.o
 lib-$(CONFIG_PRINTK) += dump_stack.o
@@ -111,6 +112,19 @@ CFLAGS_test_fpu_impl.o += $(CC_FLAGS_FPU)
 CFLAGS_REMOVE_test_fpu_impl.o += $(CC_FLAGS_NO_FPU)
 
 obj-y += kunit/
+
+ifdef CONFIG_LINX
+# LinxISA bring-up: kobject naming/varargs path is currently miscompiled at -O2.
+# Build at -O0 until the backend is fully fixed.
+CFLAGS_kobject.o += -O0
+CFLAGS_xarray.o += -O0
+# LinxISA bring-up: format/string paths still show codegen issues at -O2
+# (observed as malformed kthread names and OF sysfs attribute names).
+# Keep these core helpers at -O0 until backend fixes land.
+CFLAGS_vsprintf.o += -O0
+CFLAGS_string.o += -O0
+CFLAGS_kasprintf.o += -O0
+endif
 
 ifeq ($(CONFIG_DEBUG_KOBJECT),y)
 CFLAGS_kobject.o += -DDEBUG

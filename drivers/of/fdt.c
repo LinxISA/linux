@@ -32,6 +32,29 @@
 
 #include "of_private.h"
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+#define LINX_VIRT_UART_BASE 0x10000000UL
+static inline void linx_virt_uart_putc(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+
+static inline void linx_virt_uart_puthex_u64(u64 v)
+{
+	static const char hexdigits[] = "0123456789abcdef";
+	int i;
+
+	for (i = 15; i >= 0; i--) {
+		unsigned int nibble = (v >> (i * 4)) & 0xf;
+		linx_virt_uart_putc(hexdigits[nibble]);
+	}
+}
+#define LINX_EARLY_MARK(c) linx_virt_uart_putc(c)
+#else
+#define LINX_EARLY_MARK(c) do { } while (0)
+#endif
+
 /*
  * __dtb_empty_root_begin[] and __dtb_empty_root_end[] magically created by
  * cmd_wrap_S_dtb in scripts/Makefile.dtbs
@@ -368,18 +391,27 @@ void *__unflatten_device_tree(const void *blob,
 		return NULL;
 	}
 
+	LINX_EARLY_MARK('U');
 	pr_debug("Unflattening device tree:\n");
 	pr_debug("magic: %08x\n", fdt_magic(blob));
 	pr_debug("size: %08x\n", fdt_totalsize(blob));
 	pr_debug("version: %08x\n", fdt_version(blob));
 
+	LINX_EARLY_MARK('0');
 	if (fdt_check_header(blob)) {
 		pr_err("Invalid device tree blob header\n");
 		return NULL;
 	}
 
 	/* First pass, scan for size */
+	LINX_EARLY_MARK('1');
 	size = unflatten_dt_nodes(blob, NULL, dad, NULL);
+	LINX_EARLY_MARK('2');
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('[');
+	linx_virt_uart_puthex_u64((u64)(unsigned int)size);
+	linx_virt_uart_putc(']');
+#endif
 	if (size <= 0)
 		return NULL;
 
@@ -387,18 +419,24 @@ void *__unflatten_device_tree(const void *blob,
 	pr_debug("  size is %d, allocating...\n", size);
 
 	/* Allocate memory for the expanded device tree */
+	LINX_EARLY_MARK('3');
 	mem = dt_alloc(size + 4, __alignof__(struct device_node));
+	LINX_EARLY_MARK('4');
 	if (!mem)
 		return NULL;
 
+	LINX_EARLY_MARK('5');
 	memset(mem, 0, size);
+	LINX_EARLY_MARK('6');
 
 	*(__be32 *)(mem + size) = cpu_to_be32(0xdeadbeef);
 
 	pr_debug("  unflattening %p...\n", mem);
 
 	/* Second pass, do actual unflattening */
+	LINX_EARLY_MARK('7');
 	ret = unflatten_dt_nodes(blob, mem, dad, mynodes);
+	LINX_EARLY_MARK('8');
 
 	if (be32_to_cpup(mem + size) != 0xdeadbeef)
 		pr_warn("End of tree marker overwritten: %08x\n",
@@ -413,6 +451,7 @@ void *__unflatten_device_tree(const void *blob,
 	}
 
 	pr_debug(" <- unflatten_device_tree()\n");
+	LINX_EARLY_MARK('9');
 	return mem;
 }
 
@@ -1031,7 +1070,13 @@ int __init early_init_dt_scan_memory(void)
 	int node, found_memory = 0;
 	const void *fdt = initial_boot_params;
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	LINX_EARLY_MARK('S');
+#endif
 	fdt_for_each_subnode(node, fdt, 0) {
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+		LINX_EARLY_MARK('n');
+#endif
 		const char *type = of_get_flat_dt_prop(node, "device_type", NULL);
 		const __be32 *reg, *endp;
 		int l;
@@ -1041,6 +1086,9 @@ int __init early_init_dt_scan_memory(void)
 		if (type == NULL || strcmp(type, "memory") != 0)
 			continue;
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+		LINX_EARLY_MARK('M');
+#endif
 		if (!of_fdt_device_is_available(fdt, node))
 			continue;
 
@@ -1050,6 +1098,9 @@ int __init early_init_dt_scan_memory(void)
 		if (reg == NULL)
 			continue;
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+		LINX_EARLY_MARK('R');
+#endif
 		endp = reg + (l / sizeof(__be32));
 		hotpluggable = of_get_flat_dt_prop(node, "hotpluggable", NULL);
 
@@ -1066,6 +1117,9 @@ int __init early_init_dt_scan_memory(void)
 				continue;
 			pr_debug(" - %llx, %llx\n", base, size);
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+				LINX_EARLY_MARK('A');
+#endif
 			early_init_dt_add_memory_arch(base, size);
 
 			found_memory = 1;
@@ -1275,11 +1329,14 @@ void __init unflatten_device_tree(void)
 {
 	void *fdt = initial_boot_params;
 
+	LINX_EARLY_MARK('u');
 	/* Save the statically-placed regions in the reserved_mem array */
 	fdt_scan_reserved_mem_reg_nodes();
+	LINX_EARLY_MARK('v');
 
 	/* Populate an empty root node when bootloader doesn't provide one */
 	if (!fdt) {
+		LINX_EARLY_MARK('n');
 		fdt = (void *) __dtb_empty_root_begin;
 		/* fdt_totalsize() will be used for copy size */
 		if (fdt_totalsize(fdt) >
@@ -1289,15 +1346,21 @@ void __init unflatten_device_tree(void)
 		}
 		of_fdt_crc32 = crc32_be(~0, fdt, fdt_totalsize(fdt));
 		fdt = copy_device_tree(fdt);
+	} else {
+		LINX_EARLY_MARK('p');
 	}
 
+	LINX_EARLY_MARK('w');
 	__unflatten_device_tree(fdt, NULL, &of_root,
 				early_init_dt_alloc_memory_arch, false);
+	LINX_EARLY_MARK('x');
 
 	/* Get pointer to "/chosen" and "/aliases" nodes for use everywhere */
 	of_alias_scan(early_init_dt_alloc_memory_arch);
+	LINX_EARLY_MARK('y');
 
 	unittest_unflatten_overlay_base();
+	LINX_EARLY_MARK('z');
 }
 
 /**

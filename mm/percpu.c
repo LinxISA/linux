@@ -3340,6 +3340,17 @@ void __init setup_per_cpu_areas(void)
 	ai->groups[0].nr_units = 1;
 	ai->groups[0].cpu_map[0] = 0;
 
+#ifdef CONFIG_LINX
+	{
+		phys_addr_t fc_pa = __pa(fc);
+
+		pr_emerg("linx percpu: ai=%px nr_groups=%d unit_size=%zu fc=%px fc_pa=%pa\n",
+			 ai, ai->nr_groups, unit_size, fc, &fc_pa);
+	}
+	pr_emerg("linx percpu: group0 nr_units=%d cpu0=%u\n",
+		 ai->groups[0].nr_units, ai->groups[0].cpu_map[0]);
+#endif
+
 	pcpu_setup_first_chunk(ai, fc);
 	pcpu_free_alloc_info(ai);
 }

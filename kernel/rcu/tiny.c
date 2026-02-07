@@ -27,6 +27,16 @@
 
 #include "rcu.h"
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_virt_uart_putc(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+#endif
+
 /* Global control variables for rcupdate callback mechanism. */
 struct rcu_ctrlblk {
 	struct rcu_head *rcucblist;	/* List of pending callbacks (CBs). */
@@ -248,7 +258,24 @@ EXPORT_SYMBOL_GPL(rcutorture_format_gp_seqs);
 
 void __init rcu_init(void)
 {
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('\n');
+	linx_virt_uart_putc('r');
+	linx_virt_uart_putc('c');
+	linx_virt_uart_putc('u');
+	linx_virt_uart_putc(':');
+	linx_virt_uart_putc('0');
+#endif
 	open_softirq(RCU_SOFTIRQ, rcu_process_callbacks);
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('1');
+#endif
 	rcu_early_boot_tests();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('2');
+#endif
 	tasks_cblist_init_generic();
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_putc('3');
+#endif
 }

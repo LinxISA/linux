@@ -1,0 +1,45 @@
+# SPDX-License-Identifier: GPL-2.0-only
+#
+# LinxISA architecture (bring-up skeleton)
+#
+
+config 64BIT
+	def_bool y
+
+config 32BIT
+	def_bool n
+
+config LINX
+	def_bool y
+	select OF
+	select OF_EARLY_FLATTREE
+	select ARCH_HAS_BINFMT_FLAT
+	select GENERIC_ATOMIC64
+	select UACCESS_MEMCPY
+	select MODULES_USE_ELF_RELA
+	select GENERIC_IRQ_SHOW
+	select GENERIC_IRQ_PROBE
+	select SPARSE_IRQ
+
+config GENERIC_CALIBRATE_DELAY
+	def_bool y
+
+config GENERIC_HWEIGHT
+	def_bool y
+
+menu "Processor type and features"
+
+config MMU
+	bool "MMU support"
+	default n
+	help
+	  Select if the LinxISA port should use paged MMU support. The bring-up
+	  starts with NOMMU on QEMU `virt`.
+
+config NR_CPUS
+	int
+	default 1
+
+endmenu
+
+source "kernel/Kconfig.hz"

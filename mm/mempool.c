@@ -228,8 +228,20 @@ int mempool_init_node(mempool_t *pool, int min_nr, mempool_alloc_t *alloc_fn,
 	 */
 	pool->elements = kmalloc_array_node(max(1, min_nr), sizeof(void *),
 					    gfp_mask, node_id);
-	if (!pool->elements)
+	if (!pool->elements) {
+#ifdef CONFIG_LINX
+		if (alloc_fn == mempool_alloc_slab) {
+			struct kmem_cache *mem = pool_data;
+
+			pr_emerg("LinxISA: mempool_init_node: kmalloc_array_node failed min_nr=%d gfp=0x%x node=%d cache=%s\n",
+				 min_nr, gfp_mask, node_id, mem ? mem->name : "?");
+		} else {
+			pr_emerg("LinxISA: mempool_init_node: kmalloc_array_node failed min_nr=%d gfp=0x%x node=%d alloc=%px\n",
+				 min_nr, gfp_mask, node_id, alloc_fn);
+		}
+#endif
 		return -ENOMEM;
+	}
 
 	/*
 	 * First pre-allocate the guaranteed number of buffers,
@@ -240,6 +252,18 @@ int mempool_init_node(mempool_t *pool, int min_nr, mempool_alloc_t *alloc_fn,
 
 		element = pool->alloc(gfp_mask, pool->pool_data);
 		if (unlikely(!element)) {
+#ifdef CONFIG_LINX
+			if (alloc_fn == mempool_alloc_slab) {
+				struct kmem_cache *mem = pool_data;
+
+				pr_emerg("LinxISA: mempool_init_node: alloc failed curr=%d min=%d gfp=0x%x node=%d cache=%s\n",
+					 pool->curr_nr, pool->min_nr, gfp_mask, node_id,
+					 mem ? mem->name : "?");
+			} else {
+				pr_emerg("LinxISA: mempool_init_node: alloc failed curr=%d min=%d gfp=0x%x node=%d alloc=%px\n",
+					 pool->curr_nr, pool->min_nr, gfp_mask, node_id, alloc_fn);
+			}
+#endif
 			mempool_exit(pool);
 			return -ENOMEM;
 		}

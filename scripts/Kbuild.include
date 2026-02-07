@@ -62,7 +62,11 @@ stringify = $(squote)$(quote)$1$(quote)$(squote)
 
 ###
 # The path to Kbuild or Makefile. Kbuild has precedence over Makefile.
-kbuild-file = $(or $(wildcard $(src)/Kbuild),$(src)/Makefile)
+# On case-insensitive filesystems (common on macOS), the wildcard check for
+# 'Kbuild' may incorrectly match an existing 'kbuild/' directory. Avoid
+# selecting a directory as an include file (Make's wildcard treats "Kbuild/"
+# as a match even when Kbuild is a plain file).
+kbuild-file = $(if $(wildcard $(src)/Kbuild/*),$(src)/Makefile,$(or $(wildcard $(src)/Kbuild),$(src)/Makefile))
 
 ###
 # Read a file, replacing newlines with spaces

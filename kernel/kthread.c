@@ -418,6 +418,14 @@ static int kthread(void *_create)
 	struct completion *done;
 	struct kthread *self;
 	int ret;
+#ifdef CONFIG_LINX
+	unsigned long linx_stack_marker = 0;
+#endif
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthread wrapper start: pid=%d create=%px data=%px threadfn=%px stack=%px name='%s'\n",
+	       current->pid, create, data, threadfn, &linx_stack_marker, create->full_name);
+#endif
 
 	self = to_kthread(current);
 
@@ -448,6 +456,9 @@ static int kthread(void *_create)
 	 */
 	preempt_disable();
 	complete(done);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthread wrapper complete(done): pid=%d\n", current->pid);
+#endif
 	schedule_preempt_disabled();
 	preempt_enable();
 
@@ -479,12 +490,20 @@ static void create_kthread(struct kthread_create_info *create)
 {
 	int pid;
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: create_kthread start: create=%px name='%s' node=%d\n",
+	       create, create->full_name, create->node);
+#endif
+
 #ifdef CONFIG_NUMA
 	current->pref_node_fork = create->node;
 #endif
 	/* We want our own signal handler (we take no signals by default). */
 	pid = kernel_thread(kthread, create, create->full_name,
 			    CLONE_FS | CLONE_FILES | SIGCHLD);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: create_kthread kernel_thread pid=%d create=%px\n", pid, create);
+#endif
 	if (pid < 0) {
 		/* Release the structure when caller killed by a fatal signal. */
 		struct completion *done = xchg(&create->done, NULL);
@@ -510,6 +529,11 @@ struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
 	struct kthread_create_info *create = kmalloc(sizeof(*create),
 						     GFP_KERNEL);
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: enter kthreadd_task=%px namefmt=%px\n",
+	       kthreadd_task, namefmt);
+#endif
+
 	if (!create)
 		return ERR_PTR(-ENOMEM);
 	create->threadfn = threadfn;
@@ -522,16 +546,56 @@ struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
 		goto free_create;
 	}
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: allocated create=%px full_name='%s'\n",
+	       create, create->full_name);
+#endif
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: before spin_lock preempt=%x irqs_disabled=%d\n",
+	       preempt_count(), irqs_disabled());
+#endif
 	spin_lock(&kthread_create_lock);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: after spin_lock\n");
+#endif
 	list_add_tail(&create->list, &kthread_create_list);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: after list_add_tail\n");
+#endif
 	spin_unlock(&kthread_create_lock);
 
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: queued '%s' create=%px done=%px kthreadd_task=%px\n",
+	       create->full_name, create, create->done, kthreadd_task);
+#endif
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: waking kthreadd_task=%px state=%ld on_rq=%d\n",
+	       kthreadd_task,
+	       kthreadd_task ? (long)READ_ONCE(kthreadd_task->__state) : -1L,
+	       kthreadd_task ? (int)READ_ONCE(kthreadd_task->on_rq) : -1);
+#endif
+#ifdef CONFIG_LINX
+	{
+		int woken = wake_up_process(kthreadd_task);
+
+		pr_err("Linx dbg: __kthread_create_on_node: wake_up_process=%d kthreadd_state=%ld on_rq=%d\n",
+		       woken,
+		       kthreadd_task ? (long)READ_ONCE(kthreadd_task->__state) : -1L,
+		       kthreadd_task ? (int)READ_ONCE(kthreadd_task->on_rq) : -1);
+	}
+#else
 	wake_up_process(kthreadd_task);
+#endif
 	/*
 	 * Wait for completion in killable state, for I might be chosen by
 	 * the OOM killer while kthreadd is trying to allocate memory for
 	 * new kernel thread.
 	 */
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: waiting for done\n");
+#endif
 	if (unlikely(wait_for_completion_killable(&done))) {
 		/*
 		 * If I was killed by a fatal signal before kthreadd (or new
@@ -547,6 +611,10 @@ struct task_struct *__kthread_create_on_node(int (*threadfn)(void *data),
 		wait_for_completion(&done);
 	}
 	task = create->result;
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_on_node: done signaled result=%px\n", task);
+#endif
 free_create:
 	kfree(create);
 	return task;
@@ -818,28 +886,74 @@ int kthreadd(void *unused)
 {
 	static const char comm[TASK_COMM_LEN] = "kthreadd";
 	struct task_struct *tsk = current;
+#ifdef CONFIG_LINX
+	unsigned long linx_stack_marker = 0;
+#endif
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthreadd running pid=%d\n", current->pid);
+	pr_err("Linx dbg: kthreadd stack=%px current=%px\n",
+	       &linx_stack_marker, current);
+#endif
 
 	/* Setup a clean context for our children to inherit. */
 	set_task_comm(tsk, comm);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthreadd after set_task_comm\n");
+#endif
 	ignore_signals(tsk);
-	set_cpus_allowed_ptr(tsk, housekeeping_cpumask(HK_TYPE_KTHREAD));
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthreadd after ignore_signals\n");
+#endif
+	{
+		const struct cpumask *mask = housekeeping_cpumask(HK_TYPE_KTHREAD);
+		int ret = set_cpus_allowed_ptr(tsk, mask);
+
+#ifdef CONFIG_LINX
+		pr_err("Linx dbg: kthreadd set_cpus_allowed_ptr ret=%d mask_empty=%d\n",
+		       ret, cpumask_empty(mask));
+#endif
+	}
 	set_mems_allowed(node_states[N_MEMORY]);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthreadd after set_mems_allowed\n");
+#endif
 
 	current->flags |= PF_NOFREEZE;
 	cgroup_init_kthreadd();
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: kthreadd after cgroup_init_kthreadd\n");
+#endif
 
 	for (;;) {
+#ifdef CONFIG_LINX
+		static int linx_dbg_loops;
+
+		if (linx_dbg_loops++ < 20)
+			pr_err("Linx dbg: kthreadd loop: state=%u on_rq=%u list_empty=%d\n",
+			       READ_ONCE(current->__state), READ_ONCE(current->on_rq),
+			       list_empty(&kthread_create_list));
+#endif
 		set_current_state(TASK_INTERRUPTIBLE);
 		if (list_empty(&kthread_create_list))
 			schedule();
 		__set_current_state(TASK_RUNNING);
 
 		spin_lock(&kthread_create_lock);
+#ifdef CONFIG_LINX
+		if (linx_dbg_loops < 20)
+			pr_err("Linx dbg: kthreadd got lock: list_empty=%d\n",
+			       list_empty(&kthread_create_list));
+#endif
 		while (!list_empty(&kthread_create_list)) {
 			struct kthread_create_info *create;
 
 			create = list_entry(kthread_create_list.next,
 					    struct kthread_create_info, list);
+#ifdef CONFIG_LINX
+			pr_err("Linx dbg: kthreadd dequeue create=%px name='%s'\n",
+			       create, create->full_name);
+#endif
 			list_del_init(&create->list);
 			spin_unlock(&kthread_create_lock);
 
@@ -1037,11 +1151,40 @@ __kthread_create_worker_on_node(unsigned int flags, int node,
 	struct kthread_worker *worker;
 	struct task_struct *task;
 
-	worker = kzalloc(sizeof(*worker), GFP_KERNEL);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: enter flags=0x%x node=%d namefmt=%px\n",
+	       flags, node, namefmt);
+#endif
+
+	/*
+	 * LinxISA bring-up debug: split kzalloc() into kmalloc + memset so we can
+	 * tell whether we hang in the allocator or during zeroing.
+	 */
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: before kmalloc size=%zu\n",
+	       sizeof(*worker));
+#endif
+	worker = kmalloc(sizeof(*worker), GFP_KERNEL);
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: after kmalloc worker=%px\n",
+	       worker);
+#endif
 	if (!worker)
 		return ERR_PTR(-ENOMEM);
+	memset(worker, 0, sizeof(*worker));
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: after memset\n");
+#endif
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: worker=%px\n", worker);
+#endif
 
 	kthread_init_worker(worker);
+
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: __kthread_create_worker_on_node: init done, creating task\n");
+#endif
 
 	task = __kthread_create_on_node(kthread_worker_fn, worker,
 					node, namefmt, args);

@@ -10,6 +10,7 @@
 #include <linux/fs_struct.h>
 #include <linux/file.h>
 #include <linux/init_syscalls.h>
+#include <linux/printk.h>
 #include <linux/security.h>
 #include "internal.h"
 
@@ -267,5 +268,8 @@ int __init init_dup(struct file *file)
 	if (fd < 0)
 		return fd;
 	fd_install(fd, get_file(file));
+#ifdef CONFIG_LINX
+	pr_err("Linx dbg: init_dup fd=%d files=%px\n", fd, current->files);
+#endif
 	return 0;
 }

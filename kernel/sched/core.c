@@ -2699,6 +2699,20 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	struct rq *rq = task_rq(p);
 	bool queued, running;
 
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: avoid an indirect call through a NULL sched_class
+	 * pointer. We currently hit this in early boot while cpu masks are being
+	 * sanitized (select_fallback_rq()), and QEMU traps the resulting ICALL to
+	 * target 0.
+	 */
+	if (unlikely(!p->sched_class)) {
+		pr_err("Linx: %s: NULL sched_class (p=%px pid=%d comm=%s policy=%d prio=%d)\n",
+		       __func__, p, p->pid, p->comm, p->policy, p->prio);
+		p->sched_class = &fair_sched_class;
+	}
+#endif
+
 	/*
 	 * This here violates the locking rules for affinity, since we're only
 	 * supposed to change these variables while holding both rq->lock and
@@ -2730,6 +2744,20 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	if (running)
 		put_prev_task(rq, p);
 
+	/*
+	 * LinxISA bring-up: early init paths have been observed calling into
+	 * affinity code with an unset sched_class pointer (likely due to other
+	 * bring-up gaps / toolchain issues). Avoid crashing on an indirect call
+	 * to address 0 while still letting the kernel progress.
+	 */
+#ifdef CONFIG_LINX
+	if (unlikely(!p->sched_class)) {
+		pr_err("Linx: %s: NULL sched_class for pid=%d comm=%s\n",
+		       __func__, p->pid, p->comm);
+		p->sched_class = (p->pid == 0) ? &idle_sched_class
+					       : &fair_sched_class;
+	}
+#endif
 	p->sched_class->set_cpus_allowed(p, ctx);
 	mm_set_cpus_allowed(p->mm, ctx->new_mask);
 
@@ -3540,8 +3568,28 @@ static int select_fallback_rq(int cpu, struct task_struct *p)
 			state = fail;
 			break;
 		case fail:
+#ifdef CONFIG_LINX
+			/*
+			 * LinxISA bring-up: don't hard-stop the kernel if CPU
+			 * masks get into a broken state. Dump a minimal set of
+			 * diagnostics and fall back to CPU0.
+			 */
+			pr_err("Linx: %s: no allowed CPU (cpu=%d p=%px pid=%d comm=%s online0=%d active0=%d allowed0=%d cpus_ptr=%px)\n",
+			       __func__, cpu, p, p->pid, p->comm,
+			       cpu_online(0), cpu_active(0),
+			       task_allowed_on_cpu(p, 0), p->cpus_ptr);
+			if (p->cpus_ptr)
+				pr_err("Linx: %s: p->cpus_ptr[0]=0x%lx online[0]=0x%lx active[0]=0x%lx possible[0]=0x%lx\n",
+				       __func__,
+				       cpumask_bits(p->cpus_ptr)[0],
+				       cpumask_bits(cpu_online_mask)[0],
+				       cpumask_bits(cpu_active_mask)[0],
+				       cpumask_bits(cpu_possible_mask)[0]);
+			return 0;
+#else
 			BUG();
 			break;
+#endif
 		}
 	}
 

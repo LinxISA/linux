@@ -2,7 +2,21 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if defined(__has_include)
+#if __has_include(<elf.h>)
 #include <elf.h>
+#else
+/* Minimal ELF definitions for hosts without <elf.h> (e.g. macOS). */
+#define EI_NIDENT 16
+#define ELFMAG "\177ELF"
+#define SELFMAG 4
+#define EI_CLASS 4
+#define ELFCLASS32 1
+#define ELFCLASS64 2
+#endif
+#else
+#include <elf.h>
+#endif
 
 int
 main(int argc, char **argv)

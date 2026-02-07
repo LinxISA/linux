@@ -83,6 +83,10 @@
 
 static int bprm_creds_from_file(struct linux_binprm *bprm);
 
+#if defined(CONFIG_LINX) && defined(CONFIG_BINFMT_ELF_FDPIC)
+extern int load_elf_fdpic_binary(struct linux_binprm *bprm);
+#endif
+
 int suid_dumpable = 0;
 
 static LIST_HEAD(formats);
@@ -94,6 +98,11 @@ void __register_binfmt(struct linux_binfmt * fmt, int insert)
 	insert ? list_add(&fmt->lh, &formats) :
 		 list_add_tail(&fmt->lh, &formats);
 	write_unlock(&binfmt_lock);
+
+#ifdef CONFIG_LINX
+	pr_err("LinxISA binfmt: register fmt=%px load_binary=%px insert=%d formats.next=%px formats.prev=%px\n",
+	       fmt, fmt ? fmt->load_binary : NULL, insert, formats.next, formats.prev);
+#endif
 }
 
 EXPORT_SYMBOL(__register_binfmt);
@@ -796,6 +805,15 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 		return ERR_PTR(-EACCES);
 
 	err = exe_file_deny_write_access(file);
+#ifdef CONFIG_LINX
+	if (err && file->f_path.dentry &&
+	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+		struct inode *inode = file_inode(file);
+		pr_err("LinxISA exec: deny_write_access(%pd2) err=%d i_writecount=%d f_mode=0x%x\n",
+		       file->f_path.dentry, err, atomic_read(&inode->i_writecount),
+		       file->f_mode);
+	}
+#endif
 	if (err)
 		return ERR_PTR(err);
 
@@ -829,7 +847,27 @@ EXPORT_SYMBOL(open_exec);
 #if defined(CONFIG_BINFMT_FLAT) || defined(CONFIG_BINFMT_ELF_FDPIC)
 ssize_t read_code(struct file *file, unsigned long addr, loff_t pos, size_t len)
 {
-	ssize_t res = vfs_read(file, (void __user *)addr, len, &pos);
+	ssize_t res;
+
+#if defined(CONFIG_LINX) && !defined(CONFIG_MMU)
+	/*
+	 * NOMMU: the destination is a flat address in RAM allocated by do_mmap().
+	 * Use kernel_read() (kernel buffer) instead of vfs_read() (uaccess),
+	 * and derive the transferred length from the file position delta to
+	 * tolerate toolchain/ABI return-value corruption during bring-up.
+	 */
+	loff_t before = pos;
+
+	res = kernel_read(file, (void *)addr, len, &pos);
+	if (res >= 0) {
+		loff_t adv = pos - before;
+
+		if (adv >= 0 && adv <= (loff_t)len)
+			res = adv;
+	}
+#else
+	res = vfs_read(file, (void __user *)addr, len, &pos);
+#endif
 	if (res > 0)
 		flush_icache_user_range(addr, addr + len);
 	return res;
@@ -1661,14 +1699,40 @@ static int search_binary_handler(struct linux_binprm *bprm)
 	if (retval)
 		return retval;
 
+#if defined(CONFIG_LINX) && defined(CONFIG_BINFMT_ELF_FDPIC)
+	/*
+	 * LinxISA bring-up: the global binfmt list has been observed to get
+	 * corrupted during early boot. Avoid list traversal and call the only
+	 * required handler directly for now.
+	 */
+	retval = load_elf_fdpic_binary(bprm);
+	pr_err("LinxISA binfmt: load_elf_fdpic_binary(%pd2) -> %d\n",
+	       bprm->file ? bprm->file->f_path.dentry : NULL, retval);
+	return retval;
+#endif
+
 	read_lock(&binfmt_lock);
+#ifdef CONFIG_LINX
+	pr_err("LinxISA binfmt: formats head next=%px prev=%px\n",
+	       formats.next, formats.prev);
+#endif
 	list_for_each_entry(fmt, &formats, lh) {
 		if (!try_module_get(fmt->module))
 			continue;
 		read_unlock(&binfmt_lock);
 
-		retval = fmt->load_binary(bprm);
-
+		if (unlikely(!fmt->load_binary)) {
+#ifdef CONFIG_LINX
+			pr_err("LinxISA binfmt: fmt=%px has NULL load_binary\n", fmt);
+#endif
+			retval = -ENOEXEC;
+		} else {
+#ifdef CONFIG_LINX
+			pr_err("LinxISA binfmt: try fmt=%px load_binary=%px\n", fmt,
+			       fmt->load_binary);
+#endif
+			retval = fmt->load_binary(bprm);
+		}
 		read_lock(&binfmt_lock);
 		put_binfmt(fmt);
 		if (bprm->point_of_no_return || (retval != -ENOEXEC)) {

@@ -15,6 +15,15 @@
 #include <limits.h>
 
 /*
+ * Host-tool portability: O_LARGEFILE and copy_file_range() are Linux/glibc
+ * interfaces. When building on non-Linux hosts (e.g. macOS), fall back to the
+ * read/write loop below.
+ */
+#ifndef O_LARGEFILE
+#define O_LARGEFILE 0
+#endif
+
+/*
  * Original work by Jeff Garzik
  *
  * External file lists, symlink, pipe and fifo support by Thayne Harbaugh
@@ -456,16 +465,18 @@ static int cpio_mkfile(const char *name, const char *location,
 		    push_pad(namepadlen ? namepadlen : padlen(offset, 4)) < 0)
 			goto error;
 
-		if (size) {
-			this_read = copy_file_range(file, NULL, outfd, NULL, size, 0);
-			if (this_read > 0) {
-				if (this_read > size)
-					goto error;
-				offset += this_read;
-				size -= this_read;
+			if (size) {
+#ifdef __linux__
+				this_read = copy_file_range(file, NULL, outfd, NULL, size, 0);
+				if (this_read > 0) {
+					if (this_read > size)
+						goto error;
+					offset += this_read;
+					size -= this_read;
+				}
+				/* short or failed copy falls back to read/write... */
+#endif
 			}
-			/* short or failed copy falls back to read/write... */
-		}
 
 		while (size) {
 			unsigned char filebuf[65536];

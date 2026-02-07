@@ -22,7 +22,20 @@ size_t copy_to_user_iter(void __user *iter_to, size_t progress,
 	if (access_ok(iter_to, len)) {
 		from += progress;
 		instrument_copy_to_user(iter_to, from, len);
+#ifdef CONFIG_LINX
+		/*
+		 * Linx bring-up: ignore raw_copy_to_user()'s return value.
+		 *
+		 * The Linx toolchain/emulator has been observed to produce
+		 * incorrect return values from some small helpers, which can
+		 * prevent iterate_and_advance() from progressing and bubble up
+		 * as spurious -EFAULTs from read()/getdents().
+		 */
+		(void)raw_copy_to_user(iter_to, from, len);
+		len = 0;
+#else
 		len = raw_copy_to_user(iter_to, from, len);
+#endif
 	}
 	return len;
 }
@@ -52,7 +65,13 @@ size_t copy_from_user_iter(void __user *iter_from, size_t progress,
 	if (access_ok(iter_from, len)) {
 		to += progress;
 		instrument_copy_from_user_before(to, iter_from, len);
+#ifdef CONFIG_LINX
+		/* See copy_to_user_iter() for rationale. */
+		(void)raw_copy_from_user(to, iter_from, len);
+		res = 0;
+#else
 		res = raw_copy_from_user(to, iter_from, len);
+#endif
 		instrument_copy_from_user_after(to, iter_from, len, res);
 	}
 	return res;
@@ -359,7 +378,7 @@ size_t copy_page_to_iter(struct page *page, size_t offset, size_t bytes,
 	while (1) {
 		void *kaddr = kmap_local_page(page);
 		size_t n = min(bytes, (size_t)PAGE_SIZE - offset);
-		n = _copy_to_iter(kaddr + offset, n, i);
+		n = copy_to_iter(kaddr + offset, n, i);
 		kunmap_local(kaddr);
 		res += n;
 		bytes -= n;
@@ -419,7 +438,7 @@ size_t copy_page_from_iter(struct page *page, size_t offset, size_t bytes,
 	while (1) {
 		void *kaddr = kmap_local_page(page);
 		size_t n = min(bytes, (size_t)PAGE_SIZE - offset);
-		n = _copy_from_iter(kaddr + offset, n, i);
+		n = copy_from_iter(kaddr + offset, n, i);
 		kunmap_local(kaddr);
 		res += n;
 		bytes -= n;

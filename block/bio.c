@@ -1824,26 +1824,51 @@ int bioset_init(struct bio_set *bs,
 	INIT_WORK(&bs->rescue_work, bio_alloc_rescue);
 
 	bs->bio_slab = bio_find_or_create_slab(bs);
-	if (!bs->bio_slab)
+	if (!bs->bio_slab) {
+#ifdef CONFIG_LINX
+		pr_emerg("bioset_init: bio_find_or_create_slab failed pool=%u front_pad=%u back_pad=%u flags=0x%x\n",
+			 pool_size, front_pad, bs->back_pad, flags);
+#endif
 		return -ENOMEM;
+	}
 
-	if (mempool_init_slab_pool(&bs->bio_pool, pool_size, bs->bio_slab))
+	if (mempool_init_slab_pool(&bs->bio_pool, pool_size, bs->bio_slab)) {
+#ifdef CONFIG_LINX
+		pr_emerg("bioset_init: mempool_init_slab_pool failed pool=%u flags=0x%x\n",
+			 pool_size, flags);
+#endif
 		goto bad;
+	}
 
 	if ((flags & BIOSET_NEED_BVECS) &&
-	    biovec_init_pool(&bs->bvec_pool, pool_size))
+	    biovec_init_pool(&bs->bvec_pool, pool_size)) {
+#ifdef CONFIG_LINX
+		pr_emerg("bioset_init: biovec_init_pool failed pool=%u flags=0x%x\n",
+			 pool_size, flags);
+#endif
 		goto bad;
+	}
 
 	if (flags & BIOSET_NEED_RESCUER) {
 		bs->rescue_workqueue = alloc_workqueue("bioset",
 							WQ_MEM_RECLAIM, 0);
-		if (!bs->rescue_workqueue)
+		if (!bs->rescue_workqueue) {
+#ifdef CONFIG_LINX
+			pr_emerg("bioset_init: alloc_workqueue failed flags=0x%x\n",
+				 flags);
+#endif
 			goto bad;
+		}
 	}
 	if (flags & BIOSET_PERCPU_CACHE) {
 		bs->cache = alloc_percpu(struct bio_alloc_cache);
-		if (!bs->cache)
+		if (!bs->cache) {
+#ifdef CONFIG_LINX
+			pr_emerg("bioset_init: alloc_percpu(bio_alloc_cache) failed flags=0x%x\n",
+				 flags);
+#endif
 			goto bad;
+		}
 		cpuhp_state_add_instance_nocalls(CPUHP_BIO_DEAD, &bs->cpuhp_dead);
 	}
 
@@ -1857,6 +1882,8 @@ EXPORT_SYMBOL(bioset_init);
 static int __init init_bio(void)
 {
 	int i;
+	int fs_bioset_flags = BIOSET_NEED_BVECS | BIOSET_PERCPU_CACHE;
+	unsigned int fs_bioset_pool = BIO_POOL_SIZE;
 
 	BUILD_BUG_ON(BIO_FLAG_LAST > 8 * sizeof_field(struct bio, bi_flags));
 
@@ -1871,8 +1898,22 @@ static int __init init_bio(void)
 	cpuhp_setup_state_multi(CPUHP_BIO_DEAD, "block/bio:dead", NULL,
 					bio_cpu_dead);
 
-	if (bioset_init(&fs_bio_set, BIO_POOL_SIZE, 0,
-			BIOSET_NEED_BVECS | BIOSET_PERCPU_CACHE))
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: BIOSET_PERCPU_CACHE currently fails early in
+	 * init_bio() (per-cpu cache allocation path). Keep fs_bio_set usable by
+	 * falling back to the non-percpu bioset.
+	 */
+	fs_bioset_flags = BIOSET_NEED_BVECS;
+	/*
+	 * LinxISA bring-up: preallocating the fs bioset mempool can fail
+	 * transiently during early boot allocator stabilization. Use a zero-depth
+	 * pool and rely on direct allocation for now.
+	 */
+	fs_bioset_pool = 0;
+#endif
+
+	if (bioset_init(&fs_bio_set, fs_bioset_pool, 0, fs_bioset_flags))
 		panic("bio: can't allocate bios\n");
 
 	return 0;

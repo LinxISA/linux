@@ -34,14 +34,46 @@ static ssize_t __init xwrite(struct file *file, const unsigned char *p,
 
 	/* sys_write only can write MAX_RW_COUNT aka 2G-4K bytes at most */
 	while (count) {
+		loff_t before_pos = pos ? *pos : 0;
 		ssize_t rv = kernel_write(file, p, count, pos);
+#ifdef CONFIG_LINX
+		/*
+		 * Linx bring-up: kernel_write() has been observed to advance *pos
+		 * correctly while returning a corrupted value (including negative
+		 * errno). Prefer the observed position delta when it is sane.
+		 */
+		if (pos) {
+			loff_t after_pos = *pos;
+			ssize_t adv = after_pos - before_pos;
+
+			if (adv > 0 && adv <= (ssize_t)count && adv != rv)
+				rv = adv;
+		}
+#endif
+
+#ifdef CONFIG_LINX
+		if (file && file->f_path.dentry &&
+		    !strcmp(file->f_path.dentry->d_name.name, "init")) {
+			pr_err("LinxISA initramfs: kernel_write(%pd2) asked=%zu rv=%zd out=%zd pos=%lld\n",
+			       file->f_path.dentry, count, rv, out,
+			       pos ? *pos : 0);
+		}
+#endif
 
 		if (rv < 0) {
 			if (rv == -EINTR || rv == -EAGAIN)
 				continue;
 			return out ? out : rv;
 		} else if (rv == 0)
+#ifdef CONFIG_LINX
+		{
+			pr_err("LinxISA initramfs: kernel_write(%pd2) returned 0 (count=%zu pos=%lld)\n",
+			       file->f_path.dentry, count, pos ? *pos : 0);
 			break;
+		}
+#else
+			break;
+#endif
 
 		if (csum_present) {
 			ssize_t i;
@@ -357,6 +389,7 @@ static int __init maybe_link(void)
 
 static __initdata struct file *wfile;
 static __initdata loff_t wfile_pos;
+static __initdata bool wfile_is_init;
 
 static int __init do_name(void)
 {
@@ -386,12 +419,25 @@ static int __init do_name(void)
 			if (IS_ERR(wfile))
 				return 0;
 			wfile_pos = 0;
+			wfile_is_init = wfile->f_path.dentry &&
+					!strcmp(wfile->f_path.dentry->d_name.name, "init");
 			io_csum = 0;
+
+#ifdef CONFIG_LINX
+			if (wfile_is_init) {
+				struct inode *inode = file_inode(wfile);
+				pr_err("LinxISA initramfs: opened %pd2 for write i_writecount=%d f_mode=0x%x\n",
+				       wfile->f_path.dentry, atomic_read(&inode->i_writecount),
+				       wfile->f_mode);
+			}
+#endif
 
 			vfs_fchown(wfile, uid, gid);
 			vfs_fchmod(wfile, mode);
+#ifndef CONFIG_LINX
 			if (body_len)
 				vfs_truncate(&wfile->f_path, body_len);
+#endif
 			state = CopyFile;
 		}
 	} else if (S_ISDIR(mode)) {
@@ -414,18 +460,49 @@ static int __init do_name(void)
 static int __init do_copy(void)
 {
 	if (byte_count >= body_len) {
-		if (xwrite(wfile, victim, body_len, &wfile_pos) != body_len)
+		struct inode *inode_dbg = NULL;
+#ifdef CONFIG_LINX
+		int writecount_before = -1;
+
+		if (wfile_is_init) {
+			inode_dbg = file_inode(wfile);
+			writecount_before = atomic_read(&inode_dbg->i_writecount);
+		}
+#endif
+		ssize_t rv = xwrite(wfile, victim, body_len, &wfile_pos);
+
+#ifdef CONFIG_LINX
+		if (rv != (ssize_t)body_len)
+			pr_err("LinxISA initramfs: xwrite(%s) rv=%zd expected=%lu pos=%lld\n",
+			       collected, rv, body_len, wfile_pos);
+#endif
+		if (rv != (ssize_t)body_len)
 			error("write error");
 
 		do_utime_path(&wfile->f_path, mtime);
 		fput(wfile);
+#ifdef CONFIG_LINX
+		if (wfile_is_init) {
+			init_flush_fput();
+			pr_err("LinxISA initramfs: closed /init i_writecount before=%d after=%d\n",
+			       writecount_before,
+			       inode_dbg ? atomic_read(&inode_dbg->i_writecount) : -1);
+		}
+#endif
 		if (csum_present && io_csum != hdr_csum)
 			error("bad data checksum");
 		eat(body_len);
 		state = SkipIt;
 		return 0;
 	} else {
-		if (xwrite(wfile, victim, byte_count, &wfile_pos) != byte_count)
+		ssize_t rv = xwrite(wfile, victim, byte_count, &wfile_pos);
+
+#ifdef CONFIG_LINX
+		if (rv != (ssize_t)byte_count)
+			pr_err("LinxISA initramfs: xwrite(%s) rv=%zd expected=%u pos=%lld\n",
+			       collected, rv, byte_count, wfile_pos);
+#endif
+		if (rv != (ssize_t)byte_count)
 			error("write error");
 		body_len -= byte_count;
 		eat(byte_count);
