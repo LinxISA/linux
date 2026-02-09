@@ -16,6 +16,7 @@ unsigned long linx_boot_hartid;
 asmlinkage void __noreturn _start(unsigned long hartid, void *fdt);
 
 extern void linx_trap_vector(void);
+extern void linx_trap_vector_acr0(void);
 
 static inline void linx_virt_uart_putc(char c)
 {
@@ -79,11 +80,22 @@ asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 	asm volatile("c.movr %0, ->sp" : : "r"(new_sp) : "memory");
 
 	/*
-	 * Install the bring-up trap vector and start with interrupts disabled.
-	 * (start_kernel() expects interrupts to remain disabled until later.)
+	 * Install trap vectors and start with interrupts disabled.
+	 *
+	 * Bring-up alignment:
+	 * - ACR1 is the Linux kernel ring (interrupts + syscalls route here).
+	 * - ACR0 is reserved for monitor/secure services; keep a minimal handler.
 	 */
-	linx_ssr_write_evbase_acr0((unsigned long)&linx_trap_vector);
-	linx_ssr_write_cstate(linx_ssr_read_cstate() & ~LINX_CSTATE_I_BIT);
+	linx_ssr_write_evbase_acr0((unsigned long)&linx_trap_vector_acr0);
+	linx_ssr_write_evbase_acr1((unsigned long)&linx_trap_vector);
+	{
+		unsigned long cstate = linx_ssr_read_cstate();
+
+		/* Disable interrupts and switch into the kernel ring (ACR1). */
+		cstate &= ~LINX_CSTATE_I_BIT;
+		cstate = (cstate & ~0xfull) | 1ul;
+		linx_ssr_write_cstate(cstate);
+	}
 
 	start_kernel();
 }

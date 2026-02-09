@@ -5,6 +5,13 @@
 #include <linux/mm.h>
 #include <linux/syscalls.h>
 
+/* Not defined using SYSCALL_DEFINE0 to avoid error injection. */
+asmlinkage long __linx_sys_ni_syscall(const struct pt_regs *__unused)
+{
+	(void)__unused;
+	return -ENOSYS;
+}
+
 SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 		unsigned long, prot, unsigned long, flags,
 		unsigned long, fd, unsigned long, offset)
@@ -23,4 +30,3 @@ SYSCALL_DEFINE0(rt_sigreturn)
 {
 	return -ENOSYS;
 }
-

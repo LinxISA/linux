@@ -22,9 +22,8 @@ need() {
   }
 }
 
-need /opt/homebrew/bin/gmake
-need /opt/homebrew/bin/gsed
 need "$CLANG"
+need /usr/bin/clang
 
 export PATH="$LLVM_BUILD/bin:$PATH"
 
@@ -32,9 +31,9 @@ mkdir -p "$OUT_DIR"
 
 echo "[1/3] Ensuring usr/gen_init_cpio exists (O=$O) ..."
 if [[ ! -x "$GEN_INIT_CPIO" ]]; then
-  /opt/homebrew/bin/gmake -C "$LINUX_ROOT" O="$O" ARCH=linx \
-    LLVM=1 LLVM_IAS=1 HOSTCC=/usr/bin/clang HOSTCXX=/usr/bin/clang++ SED=gsed \
-    usr/gen_init_cpio >/dev/null
+  mkdir -p "$(dirname "$GEN_INIT_CPIO")"
+  /usr/bin/clang -O2 -Wall -Wextra -o "$GEN_INIT_CPIO" \
+    "$LINUX_ROOT/usr/gen_init_cpio.c"
 fi
 
 echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, ET_DYN) ..."

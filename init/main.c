@@ -720,7 +720,7 @@ static noinline void __ref __noreturn rest_init(void)
 	 * we schedule it before we create kthreadd, will OOPS.
 	 */
 	pid = user_mode_thread(kernel_init, NULL, CLONE_FS);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: rest_init: kernel_init pid=%d\n", pid);
 #endif
 	/*
@@ -733,19 +733,19 @@ static noinline void __ref __noreturn rest_init(void)
 	tsk->flags |= PF_NO_SETAFFINITY;
 	set_cpus_allowed_ptr(tsk, cpumask_of(smp_processor_id()));
 	rcu_read_unlock();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: rest_init: pinned kernel_init\n");
 #endif
 
 	numa_default_policy();
 	pid = kernel_thread(kthreadd, NULL, NULL, CLONE_FS | CLONE_FILES);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: rest_init: kthreadd pid=%d\n", pid);
 #endif
 	rcu_read_lock();
 	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
 	rcu_read_unlock();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: rest_init: kthreadd_task=%px state=%ld on_rq=%d flags=0x%lx sched_class=%px\n",
 	       kthreadd_task,
 	       kthreadd_task ? READ_ONCE(kthreadd_task->__state) : -1L,
@@ -764,7 +764,7 @@ static noinline void __ref __noreturn rest_init(void)
 	system_state = SYSTEM_SCHEDULING;
 
 	complete(&kthreadd_done);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: rest_init: kthreadd_done complete\n");
 #endif
 
@@ -1013,13 +1013,6 @@ void start_kernel(void)
 	setup_command_line(command_line);
 	setup_nr_cpu_ids();
 	setup_per_cpu_areas();
-#ifdef CONFIG_LINX
-	/*
-	 * LinxISA bring-up: reserve memblock allocations (notably the first percpu
-	 * chunk) before initializing the buddy allocator.
-	 */
-	paging_init();
-#endif
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
 	early_numa_node_init();
 	boot_cpu_hotplug_init();
@@ -1200,33 +1193,33 @@ void start_kernel(void)
 	pagecache_init();
 	signals_init();
 	seq_file_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: cpu0 online=%d active=%d possible=%d present=%d sched_class=%px\n",
 	       cpu_online(0), cpu_active(0), cpu_possible(0), cpu_present(0),
 	       current->sched_class);
 #endif
 	proc_root_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: proc_root_init done\n");
 #endif
 	nsfs_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: nsfs_init done\n");
 #endif
 	pidfs_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: pidfs_init done\n");
 #endif
 	cpuset_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: cpuset_init done\n");
 #endif
 	mem_cgroup_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: mem_cgroup_init done\n");
 #endif
 	cgroup_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: cgroup_init done\n");
 #endif
 	taskstats_init_early();
@@ -1240,7 +1233,7 @@ void start_kernel(void)
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('F');
 #endif
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: entering rest_init\n");
 #endif
 	rest_init();
@@ -1610,7 +1603,7 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	{
 		unsigned long linx_stack_marker = 0;
 
@@ -1699,7 +1692,7 @@ void __init console_on_rootfs(void)
 		pr_err("Warning: unable to open an initial console.\n");
 		return;
 	}
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	{
 		int r0 = init_dup(file);
 		int r1 = init_dup(file);
@@ -1718,7 +1711,7 @@ void __init console_on_rootfs(void)
 
 static noinline void __init kernel_init_freeable(void)
 {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: kernel_init_freeable start\n");
 #endif
 	/* Now the scheduler is fully set up and can do blocking allocations */
@@ -1745,7 +1738,7 @@ static noinline void __init kernel_init_freeable(void)
 #endif
 
 	workqueue_init();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init done\n");
 #endif
 
@@ -1763,7 +1756,7 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 
 	do_basic_setup();
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: do_basic_setup done\n");
 #endif
 

@@ -2,6 +2,8 @@
 #ifndef _ASM_LINX_PROCESSOR_H
 #define _ASM_LINX_PROCESSOR_H
 
+#include <linux/const.h>
+
 #include <asm/page.h>
 #include <asm/thread_info.h>
 #include <asm/ptrace.h>
@@ -10,8 +12,14 @@
 #define STACK_ALIGN 16
 
 #ifdef CONFIG_MMU
-/* Bring-up currently targets NOMMU; fill in once VM layout exists. */
-#define TASK_SIZE	0UL
+/*
+ * v0.1 bring-up profile: 48-bit canonical VA, user space in the low half
+ * (VA[47]=0). Keep kernel mappings at low addresses for now, but place user
+ * mappings and stacks far from the kernel image by using the default mmap base
+ * near TASK_SIZE/3.
+ */
+#define TASK_SIZE	(UL(1) << 47)
+#define TASK_UNMAPPED_BASE	PAGE_ALIGN(TASK_SIZE / 3)
 #else
 /*
  * NOMMU: user mappings are allocated from available RAM and returned as

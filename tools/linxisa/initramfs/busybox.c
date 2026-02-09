@@ -64,10 +64,10 @@ enum {
 	LINUX_REBOOT_CMD_POWER_OFF = 0x4321fedc,
 };
 
-static inline int sys_call6(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
-			    ulong a4, ulong a5)
+static inline slong sys_call6(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
+			      ulong a4, ulong a5)
 {
-	register ulong ret __asm__("a0");
+	slong ret;
 
 	__asm__ volatile(
 		"c.movr %1, ->a0\n"
@@ -78,77 +78,69 @@ static inline int sys_call6(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
 		"c.movr %6, ->a5\n"
 		"c.movr %7, ->a7\n"
 		"acrc 1\n"
-		: "=&r"(ret)
+		"c.movr a0, ->%0\n"
+		: "=r"(ret)
 		: "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
 		  "r"((ulong)nr)
-		: "a1", "a2", "a3", "a4", "a5", "a7", "memory");
+		: "a0", "a1", "a2", "a3", "a4", "a5", "a7", "memory");
 
-	/*
-	 * Linx bring-up: syscall return values currently come back truncated such
-	 * that the sign bit lives in bit 30 (31-bit signed). Recover 32-bit signed
-	 * values by sign-extending bit 30 into bit 31.
-	 */
-	{
-		unsigned int u = (unsigned int)ret;
-		u = (u & 0x7fffffffU) | ((u & 0x40000000U) << 1);
-		return (int)u;
-	}
+	return ret;
 }
 
-static inline int sys_call5(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
-			    ulong a4)
+static inline slong sys_call5(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
+			      ulong a4)
 {
 	return sys_call6(nr, a0, a1, a2, a3, a4, 0);
 }
 
-static inline int sys_call4(int nr, ulong a0, ulong a1, ulong a2, ulong a3)
+static inline slong sys_call4(int nr, ulong a0, ulong a1, ulong a2, ulong a3)
 {
 	return sys_call6(nr, a0, a1, a2, a3, 0, 0);
 }
 
-static inline int sys_call3(int nr, ulong a0, ulong a1, ulong a2)
+static inline slong sys_call3(int nr, ulong a0, ulong a1, ulong a2)
 {
 	return sys_call6(nr, a0, a1, a2, 0, 0, 0);
 }
 
-static inline int sys_call1(int nr, ulong a0)
+static inline slong sys_call1(int nr, ulong a0)
 {
 	return sys_call6(nr, a0, 0, 0, 0, 0, 0);
 }
 
-static inline int sys_read(int fd, void *buf, ulong count)
+static inline slong sys_read(int fd, void *buf, ulong count)
 {
 	return sys_call3(__NR_read, (ulong)fd, (ulong)buf, count);
 }
 
-static inline int sys_write(int fd, const void *buf, ulong count)
+static inline slong sys_write(int fd, const void *buf, ulong count)
 {
 	return sys_call3(__NR_write, (ulong)fd, (ulong)buf, count);
 }
 
-static inline int sys_openat(int dirfd, const char *path, int flags, int mode)
+static inline slong sys_openat(int dirfd, const char *path, int flags, int mode)
 {
 	return sys_call4(__NR_openat, (ulong)dirfd, (ulong)path, (ulong)flags, (ulong)mode);
 }
 
-static inline int sys_close(int fd)
+static inline slong sys_close(int fd)
 {
 	return sys_call1(__NR_close, (ulong)fd);
 }
 
-static inline int sys_getdents64(int fd, void *dirp, ulong count)
+static inline slong sys_getdents64(int fd, void *dirp, ulong count)
 {
 	return sys_call3(__NR_getdents64, (ulong)fd, (ulong)dirp, count);
 }
 
-static inline int sys_mount(const char *source, const char *target,
-			    const char *fstype, ulong flags, const void *data)
+static inline slong sys_mount(const char *source, const char *target,
+			      const char *fstype, ulong flags, const void *data)
 {
 	return sys_call5(__NR_mount, (ulong)source, (ulong)target, (ulong)fstype,
 			 flags, (ulong)data);
 }
 
-static inline int sys_reboot(int magic1, int magic2, int cmd, const void *arg)
+static inline slong sys_reboot(int magic1, int magic2, int cmd, const void *arg)
 {
 	return sys_call4(__NR_reboot, (ulong)magic1, (ulong)magic2, (ulong)cmd, (ulong)arg);
 }
@@ -168,10 +160,9 @@ static ulong c_strlen(const char *s)
 	return n;
 }
 
-static int is_errno(int rc)
+static int is_errno(slong rc)
 {
-	/* Treat any negative syscall return as an error (bring-up: 32-bit results). */
-	return ((unsigned int)rc) >> 31;
+	return rc < 0;
 }
 
 static int is_space(char c)

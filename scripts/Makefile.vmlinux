@@ -115,7 +115,7 @@ vmlinux: vmlinux.unstripped FORCE
 # what kmod expects to parse.
 quiet_cmd_modules_builtin_modinfo = GEN     $@
       cmd_modules_builtin_modinfo = $(cmd_objcopy); \
-                                    $(SED) -i 's/\x00\+$$/\x00/g' $@
+                                    python3 -c 'import sys; p=sys.argv[1]; d=open(p,"rb").read(); s=d.rstrip(b"\\x00"); open(p,"wb").write(s + (b"\\x00" if len(s)!=len(d) else b""))' $@
 
 OBJCOPYFLAGS_modules.builtin.modinfo := -j .modinfo -O binary
 

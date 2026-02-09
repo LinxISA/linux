@@ -14,6 +14,7 @@ config LINX
 	select OF
 	select OF_EARLY_FLATTREE
 	select ARCH_HAS_BINFMT_FLAT
+	select ARCH_HAS_SYSCALL_WRAPPER
 	select GENERIC_ATOMIC64
 	select UACCESS_MEMCPY
 	select MODULES_USE_ELF_RELA
@@ -36,9 +37,21 @@ config MMU
 	  Select if the LinxISA port should use paged MMU support. The bring-up
 	  starts with NOMMU on QEMU `virt`.
 
+config PGTABLE_LEVELS
+	int
+	default 4 if MMU
+	default 2
+
 config NR_CPUS
 	int
 	default 1
+
+config LINX_DEBUG
+	bool "Linx bring-up debug instrumentation"
+	default n
+	help
+	  Enable verbose LinxISA bring-up debug logging and watchpoints wired into
+	  core kernel subsystems (kthreads/workqueues/SLUB/initramfs/etc).
 
 endmenu
 

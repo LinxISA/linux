@@ -3310,6 +3310,8 @@ static __always_inline void unaccount_slab(struct slab *slab, int order,
 			    -(PAGE_SIZE << order));
 }
 
+static struct kmem_cache *kmem_cache_node;
+
 static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 {
 	bool allow_spin = gfpflags_allow_spinning(flags);
@@ -3339,6 +3341,15 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
 	if (unlikely(!slab)) {
 #ifdef CONFIG_LINX
+		if (s == kmem_cache_node) {
+			static int printed_kmn;
+
+			if (printed_kmn++ < 8)
+				pr_emerg("SLUB: alloc_slab_page failed for kmem_cache_node order=%u flags=%#x alloc_gfp=%#x allowed=%#x node=%d allow_spin=%d free=%lu\n",
+					 oo_order(oo), flags, alloc_gfp,
+					 gfp_allowed_mask, node, allow_spin,
+					 nr_free_pages());
+		}
 		if (is_kmalloc_cache(s)) {
 			static int printed;
 
@@ -3357,6 +3368,15 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 		slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
 		if (unlikely(!slab)) {
 #ifdef CONFIG_LINX
+			if (s == kmem_cache_node) {
+				static int printed_kmn2;
+
+				if (printed_kmn2++ < 8)
+					pr_emerg("SLUB: alloc_slab_page fallback failed for kmem_cache_node order=%u flags=%#x alloc_gfp=%#x allowed=%#x node=%d allow_spin=%d free=%lu\n",
+						 oo_order(oo), flags, alloc_gfp,
+						 gfp_allowed_mask, node, allow_spin,
+						 nr_free_pages());
+			}
 			if (is_kmalloc_cache(s)) {
 				static int printed2;
 

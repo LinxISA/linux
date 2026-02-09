@@ -18,6 +18,6 @@ obj-$(CONFIG_PRINTK_RINGBUFFER_KUNIT_TEST) += printk_ringbuffer_kunit_test.o
 # rely on inlining for certain asm-constraint patterns and will fail to build
 # if compiled at -O0.
 ifeq ($(ARCH),linx)
-CFLAGS_printk_ringbuffer.o += -O0
-CFLAGS_printk.o += -O0
+CFLAGS_printk_ringbuffer.o += -Og
+CFLAGS_printk.o += -Og
 endif

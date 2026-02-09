@@ -19,6 +19,44 @@
 #include <linux/slab.h>
 #include <linux/random.h>
 
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
+
+#ifdef CONFIG_LINX
+static bool linx_ptr_in_range(unsigned long addr, const void *start,
+			      const void *end)
+{
+	return addr >= (unsigned long)start && addr < (unsigned long)end;
+}
+
+static bool linx_rodata_ptr_is_sane(const void *p)
+{
+	extern char __start_rodata[], _end[];
+	const unsigned long addr = (unsigned long)p;
+
+	return linx_ptr_in_range(addr, __start_rodata, _end);
+}
+
+static void linx_log_bad_ptr(const char *tag, unsigned long v,
+			     unsigned long extra)
+{
+	static int printed;
+
+	if (printed++ >= 16)
+		return;
+	linx_debug_uart_puts("\nlinx: bad ");
+	linx_debug_uart_puts(tag);
+	linx_debug_uart_puts("=");
+	linx_debug_uart_puthex_ulong(v);
+	if (extra) {
+		linx_debug_uart_puts(" extra=");
+		linx_debug_uart_puthex_ulong(extra);
+	}
+	linx_debug_uart_puts("\n");
+}
+#endif /* CONFIG_LINX */
+
 /**
  * kobject_namespace() - Return @kobj's namespace tag.
  * @kobj: kobject in question
@@ -52,8 +90,55 @@ void kobject_get_ownership(const struct kobject *kobj, kuid_t *uid, kgid_t *gid)
 	*uid = GLOBAL_ROOT_UID;
 	*gid = GLOBAL_ROOT_GID;
 
-	if (kobj->ktype->get_ownership)
-		kobj->ktype->get_ownership(kobj, uid, gid);
+	const struct kobj_type *ktype = kobj->ktype;
+
+	if (!ktype)
+		return;
+
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: kobj->ktype should point into kernel rodata. If it's
+	 * corrupted, avoid dereferencing it to prevent cascading invalid sysfs
+	 * callback/group pointers.
+	 */
+	if (!linx_rodata_ptr_is_sane(ktype)) {
+		linx_log_bad_ptr("ktype", (unsigned long)ktype,
+				 (unsigned long)kobj);
+		return;
+	}
+#endif
+
+	if (ktype->get_ownership) {
+#ifdef CONFIG_LINX
+		/*
+		 * LinxISA bring-up: guard against corrupted function pointers in
+		 * early sysfs ownership lookups. A bad target trips the Block ISA
+		 * safety rule (branch target must be a block start marker) and
+		 * aborts QEMU. If the pointer is outside kernel text, treat it as
+		 * NULL and keep the default root uid/gid.
+		 */
+		extern char _stext[], _etext[];
+		static int printed;
+
+		void (*fn)(const struct kobject *, kuid_t *, kgid_t *) =
+			ktype->get_ownership;
+		const unsigned long addr = (unsigned long)fn;
+
+		if (addr < (unsigned long)_stext || addr >= (unsigned long)_etext) {
+			if (printed++ < 8) {
+				linx_debug_uart_puts("\nlinx: bad ktype->get_ownership=");
+				linx_debug_uart_puthex_ulong(addr);
+				linx_debug_uart_puts(" kobj=");
+				linx_debug_uart_puthex_ulong((unsigned long)kobj);
+				linx_debug_uart_puts("\n");
+			}
+		} else {
+			fn(kobj, uid, gid);
+		}
+#else
+		ktype->get_ownership(kobj, uid, gid);
+#endif
+	}
 }
 
 static bool kobj_ns_type_is_valid(enum kobj_ns_type type)
@@ -70,12 +155,30 @@ static int create_dir(struct kobject *kobj)
 	const struct kobj_ns_type_operations *ops;
 	int error;
 
+#ifdef CONFIG_LINX
+	if (ktype && !linx_rodata_ptr_is_sane(ktype)) {
+		linx_log_bad_ptr("ktype", (unsigned long)ktype,
+				 (unsigned long)kobj);
+		ktype = NULL;
+	}
+#endif
+
 	error = sysfs_create_dir_ns(kobj, kobject_namespace(kobj));
 	if (error)
 		return error;
 
 	if (ktype) {
+#ifdef CONFIG_LINX
+		const struct attribute_group **groups = ktype->default_groups;
+		if (groups && !linx_rodata_ptr_is_sane(groups)) {
+			linx_log_bad_ptr("default_groups", (unsigned long)groups,
+					 (unsigned long)ktype);
+			groups = NULL;
+		}
+		error = sysfs_create_groups(kobj, groups);
+#else
 		error = sysfs_create_groups(kobj, ktype->default_groups);
+#endif
 		if (error) {
 			sysfs_remove_dir(kobj);
 			return error;
@@ -1060,8 +1163,34 @@ const struct kobj_ns_type_operations *kobj_child_ns_ops(const struct kobject *pa
 {
 	const struct kobj_ns_type_operations *ops = NULL;
 
-	if (parent && parent->ktype && parent->ktype->child_ns_type)
+	if (parent && parent->ktype && parent->ktype->child_ns_type) {
+#ifdef CONFIG_LINX
+		const struct kobj_type *ktype = parent->ktype;
+
+		if (!linx_rodata_ptr_is_sane(ktype)) {
+			linx_log_bad_ptr("ktype", (unsigned long)ktype,
+					 (unsigned long)parent);
+			return NULL;
+		}
+
+		{
+			extern char _stext[], _etext[];
+			const unsigned long addr =
+				(unsigned long)ktype->child_ns_type;
+
+			if (addr < (unsigned long)_stext ||
+			    addr >= (unsigned long)_etext) {
+				linx_log_bad_ptr("ktype->child_ns_type", addr,
+						 (unsigned long)parent);
+				return NULL;
+			}
+		}
+
+		ops = ktype->child_ns_type(parent);
+#else
 		ops = parent->ktype->child_ns_type(parent);
+#endif
+	}
 
 	return ops;
 }

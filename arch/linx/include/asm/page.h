@@ -6,6 +6,8 @@
 #include <linux/const.h>
 #include <linux/types.h>
 
+#include <asm/pgtable-bits.h>
+
 #define PAGE_SHIFT 12
 #define PAGE_SIZE (_AC(1, UL) << PAGE_SHIFT)
 #define PAGE_MASK (~(PAGE_SIZE - 1))
@@ -49,7 +51,12 @@ typedef struct { unsigned long pgprot; } pgprot_t;
  * NOMMU bring-up: no arch-specific page protection bits. Core code still
  * expects PAGE_KERNEL to exist (e.g. vmap()).
  */
+#ifdef CONFIG_MMU
+#define PAGE_KERNEL	__pgprot(LINX_PTE_AF | LINX_PTE_R | LINX_PTE_W | LINX_PTE_X | \
+				 ((unsigned long)LINX_MAIR_ATTR_NORMAL_WB << LINX_PTE_ATTRIDX_SHIFT))
+#else
 #define PAGE_KERNEL	__pgprot(0)
+#endif
 
 #define __pa(x)		((phys_addr_t)(unsigned long)(x))
 #define __va(x)		((void *)(unsigned long)(x))
@@ -66,7 +73,12 @@ typedef struct { unsigned long pgprot; } pgprot_t;
  * Early bring-up: avoid wiring up an actual shared zero page until the basic
  * memory model is in place.
  */
+#ifdef CONFIG_MMU
+extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
+#define ZERO_PAGE(vaddr)	(virt_to_page(empty_zero_page))
+#else
 #define ZERO_PAGE(vaddr)	((struct page *)0)
+#endif
 
 static inline void clear_user_page(void *addr, unsigned long vaddr,
 				   struct page *page)

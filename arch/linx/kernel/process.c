@@ -25,7 +25,7 @@ asmlinkage void __noreturn linx_ret_from_fork(struct task_struct *prev)
 	void *fn_arg;
 	int ret = 0;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: ret_from_fork enter pid=%d prev=%px fn=%px arg=%px\n",
 	       current->pid, prev,
 	       (void *)current->thread.kthread_fn,
@@ -34,7 +34,7 @@ asmlinkage void __noreturn linx_ret_from_fork(struct task_struct *prev)
 
 	schedule_tail(prev);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: ret_from_fork after schedule_tail pid=%d\n", current->pid);
 #endif
 

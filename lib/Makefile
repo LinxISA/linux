@@ -116,14 +116,14 @@ obj-y += kunit/
 ifdef CONFIG_LINX
 # LinxISA bring-up: kobject naming/varargs path is currently miscompiled at -O2.
 # Build at -O0 until the backend is fully fixed.
-CFLAGS_kobject.o += -O0
-CFLAGS_xarray.o += -O0
+CFLAGS_kobject.o += -Og
+CFLAGS_xarray.o += -Og
 # LinxISA bring-up: format/string paths still show codegen issues at -O2
 # (observed as malformed kthread names and OF sysfs attribute names).
 # Keep these core helpers at -O0 until backend fixes land.
-CFLAGS_vsprintf.o += -O0
-CFLAGS_string.o += -O0
-CFLAGS_kasprintf.o += -O0
+CFLAGS_vsprintf.o += -Og
+CFLAGS_string.o += -Og
+CFLAGS_kasprintf.o += -Og
 endif
 
 ifeq ($(CONFIG_DEBUG_KOBJECT),y)

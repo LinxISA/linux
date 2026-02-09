@@ -146,6 +146,14 @@ void __init setup_arch(char **cmdline_p)
 	unflatten_device_tree();
 	linx_virt_uart_putc('j');
 
+	/*
+	 * Initialize the Linx paging/MMU and the buddy allocator data structures.
+	 *
+	 * Must run before core mm initialization (mm_core_init -> memblock_free_all)
+	 * so that zones, struct page metadata, and the direct map are ready.
+	 */
+	paging_init();
+
 	linx_virt_uart_putc('\n');
 }
 

@@ -51,7 +51,7 @@ static ssize_t __init xwrite(struct file *file, const unsigned char *p,
 		}
 #endif
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 		if (file && file->f_path.dentry &&
 		    !strcmp(file->f_path.dentry->d_name.name, "init")) {
 			pr_err("LinxISA initramfs: kernel_write(%pd2) asked=%zu rv=%zd out=%zd pos=%lld\n",
@@ -64,16 +64,13 @@ static ssize_t __init xwrite(struct file *file, const unsigned char *p,
 			if (rv == -EINTR || rv == -EAGAIN)
 				continue;
 			return out ? out : rv;
-		} else if (rv == 0)
-#ifdef CONFIG_LINX
-		{
+		} else if (rv == 0) {
+#ifdef CONFIG_LINX_DEBUG
 			pr_err("LinxISA initramfs: kernel_write(%pd2) returned 0 (count=%zu pos=%lld)\n",
 			       file->f_path.dentry, count, pos ? *pos : 0);
+#endif
 			break;
 		}
-#else
-			break;
-#endif
 
 		if (csum_present) {
 			ssize_t i;
@@ -423,7 +420,7 @@ static int __init do_name(void)
 					!strcmp(wfile->f_path.dentry->d_name.name, "init");
 			io_csum = 0;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 			if (wfile_is_init) {
 				struct inode *inode = file_inode(wfile);
 				pr_err("LinxISA initramfs: opened %pd2 for write i_writecount=%d f_mode=0x%x\n",
@@ -460,8 +457,8 @@ static int __init do_name(void)
 static int __init do_copy(void)
 {
 	if (byte_count >= body_len) {
+#ifdef CONFIG_LINX_DEBUG
 		struct inode *inode_dbg = NULL;
-#ifdef CONFIG_LINX
 		int writecount_before = -1;
 
 		if (wfile_is_init) {
@@ -471,7 +468,7 @@ static int __init do_copy(void)
 #endif
 		ssize_t rv = xwrite(wfile, victim, body_len, &wfile_pos);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 		if (rv != (ssize_t)body_len)
 			pr_err("LinxISA initramfs: xwrite(%s) rv=%zd expected=%lu pos=%lld\n",
 			       collected, rv, body_len, wfile_pos);
@@ -481,7 +478,7 @@ static int __init do_copy(void)
 
 		do_utime_path(&wfile->f_path, mtime);
 		fput(wfile);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 		if (wfile_is_init) {
 			init_flush_fput();
 			pr_err("LinxISA initramfs: closed /init i_writecount before=%d after=%d\n",
@@ -497,7 +494,7 @@ static int __init do_copy(void)
 	} else {
 		ssize_t rv = xwrite(wfile, victim, byte_count, &wfile_pos);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 		if (rv != (ssize_t)byte_count)
 			pr_err("LinxISA initramfs: xwrite(%s) rv=%zd expected=%u pos=%lld\n",
 			       collected, rv, byte_count, wfile_pos);

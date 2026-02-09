@@ -23,7 +23,7 @@ static struct clocksource linx_clocksource = {
 static int linx_clockevent_shutdown(struct clock_event_device *ced)
 {
 	(void)ced;
-	linx_ssr_write_timecmp_acr0(0);
+	linx_ssr_write_timecmp_acr1(0);
 	return 0;
 }
 
@@ -34,7 +34,7 @@ static int linx_clockevent_set_next_event(unsigned long delta,
 
 	(void)ced;
 	now = linx_ssr_read_time();
-	linx_ssr_write_timecmp_acr0(now + (u64)delta);
+	linx_ssr_write_timecmp_acr1(now + (u64)delta);
 	return 0;
 }
 
@@ -61,7 +61,7 @@ void linx_timer_handle_irq(void)
 void __init time_init(void)
 {
 	/* Ensure no stale timer interrupt remains armed across resets. */
-	linx_ssr_write_timecmp_acr0(0);
+	linx_ssr_write_timecmp_acr1(0);
 
 	linx_clockevent.cpumask = cpumask_of(0);
 

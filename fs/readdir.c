@@ -397,34 +397,6 @@ efault:
 SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 		struct linux_dirent64 __user *, dirent, unsigned int, count)
 {
-#ifdef CONFIG_LINX
-	struct file *file = current->files ? files_lookup_fd_raw(current->files, fd) : NULL;
-	struct getdents_callback64 buf = {
-		.ctx.actor = filldir64,
-		.ctx.count = count,
-		.current_dir = dirent
-	};
-	int error;
-
-	if (!file)
-		return -EBADF;
-
-	error = iterate_dir(file, &buf.ctx);
-	if (error >= 0)
-		error = buf.error;
-	if (buf.prev_reclen) {
-		struct linux_dirent64 __user *lastdirent;
-		typeof(lastdirent->d_off) d_off = buf.ctx.pos;
-
-		lastdirent = (void __user *)buf.current_dir - buf.prev_reclen;
-		if (put_user(d_off, &lastdirent->d_off))
-			error = -EFAULT;
-		else
-			error = count - buf.ctx.count;
-	}
-
-	return error;
-#else
 	CLASS(fd_pos, f)(fd);
 	struct getdents_callback64 buf = {
 		.ctx.actor = filldir64,
@@ -450,7 +422,6 @@ SYSCALL_DEFINE3(getdents64, unsigned int, fd,
 			error = count - buf.ctx.count;
 	}
 	return error;
-#endif
 }
 
 #ifdef CONFIG_COMPAT
