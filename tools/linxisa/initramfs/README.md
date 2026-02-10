@@ -26,3 +26,26 @@ cd /Users/zhoubot/linux/tools/linxisa/initramfs
 ```
 
 Once booted, you should land at a `#` prompt. Try `help`, `ls`, `cat`, `echo`.
+
+## Regression scripts
+
+Baseline smoke:
+
+```bash
+cd /Users/zhoubot/linux
+python3 tools/linxisa/initramfs/smoke.py
+```
+
+Full userspace boot checks (`/proc` + `/sys` + exception applets):
+
+```bash
+cd /Users/zhoubot/linux
+python3 tools/linxisa/initramfs/full_boot.py
+```
+
+Virtio disk smoke (`virtio-mmio` transport + `virtio-blk` enumeration):
+
+```bash
+cd /Users/zhoubot/linux
+python3 tools/linxisa/initramfs/virtio_disk_smoke.py
+```

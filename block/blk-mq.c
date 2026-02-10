@@ -31,6 +31,19 @@
 #include <linux/part_stat.h>
 #include <linux/sched/isolation.h>
 
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+static inline void linx_blk_mq_dbg(const char *tag, unsigned long val)
+{
+	linx_debug_uart_puts("[BLKMQ] ");
+	linx_debug_uart_puts(tag);
+	linx_debug_uart_puthex_ulong(val);
+	linx_debug_uart_putc('\n');
+}
+#else
+static inline void linx_blk_mq_dbg(const char *tag, unsigned long val) { }
+#endif
+
 #include <trace/events/block.h>
 
 #include <linux/t10-pi.h>
@@ -3521,6 +3534,19 @@ static int blk_mq_get_hctx_node(struct blk_mq_tag_set *set,
 	return blk_mq_hw_queue_to_node(&set->map[type], hctx_idx);
 }
 
+static inline gfp_t blk_mq_request_gfp_flags(void)
+{
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up profile: avoid premature ENOMEM from queue-tag
+	 * allocations on early boot paths (virtio-blk rootfs bring-up).
+	 */
+	return GFP_KERNEL;
+#else
+	return GFP_NOIO | __GFP_NOWARN | __GFP_NORETRY;
+#endif
+}
+
 static struct blk_mq_tags *blk_mq_alloc_rq_map(struct blk_mq_tag_set *set,
 					       unsigned int hctx_idx,
 					       unsigned int nr_tags,
@@ -3537,13 +3563,13 @@ static struct blk_mq_tags *blk_mq_alloc_rq_map(struct blk_mq_tag_set *set,
 		return NULL;
 
 	tags->rqs = kcalloc_node(nr_tags, sizeof(struct request *),
-				 GFP_NOIO | __GFP_NOWARN | __GFP_NORETRY,
+				 blk_mq_request_gfp_flags(),
 				 node);
 	if (!tags->rqs)
 		goto err_free_tags;
 
 	tags->static_rqs = kcalloc_node(nr_tags, sizeof(struct request *),
-					GFP_NOIO | __GFP_NOWARN | __GFP_NORETRY,
+					blk_mq_request_gfp_flags(),
 					node);
 	if (!tags->static_rqs)
 		goto err_free_rqs;
@@ -3602,7 +3628,7 @@ static int blk_mq_alloc_rqs(struct blk_mq_tag_set *set,
 
 		do {
 			page = alloc_pages_node(node,
-				GFP_NOIO | __GFP_NOWARN | __GFP_NORETRY | __GFP_ZERO,
+				blk_mq_request_gfp_flags() | __GFP_ZERO,
 				this_order);
 			if (page)
 				break;
@@ -3626,6 +3652,8 @@ static int blk_mq_alloc_rqs(struct blk_mq_tag_set *set,
 		kmemleak_alloc(p, order_to_size(this_order), 1, GFP_NOIO);
 		entries_per_page = order_to_size(this_order) / rq_size;
 		to_do = min(entries_per_page, depth - i);
+		if (unlikely(!to_do))
+			goto fail;
 		left -= to_do * rq_size;
 		for (j = 0; j < to_do; j++) {
 			struct request *rq = p;
@@ -4117,7 +4145,6 @@ struct blk_mq_tags *blk_mq_alloc_map_and_rqs(struct blk_mq_tag_set *set,
 		blk_mq_free_rq_map(set, tags);
 		return NULL;
 	}
-
 	return tags;
 }
 
@@ -4834,15 +4861,21 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 
 	if (set->flags & BLK_MQ_F_BLOCKING) {
 		set->srcu = kmalloc(sizeof(*set->srcu), GFP_KERNEL);
-		if (!set->srcu)
+		if (!set->srcu) {
+			linx_blk_mq_dbg("alloc_tag_set:srcu kmalloc fail=", 0);
 			return -ENOMEM;
+		}
 		ret = init_srcu_struct(set->srcu);
-		if (ret)
+		if (ret) {
+			linx_blk_mq_dbg("alloc_tag_set:init srcu fail=", (unsigned long)ret);
 			goto out_free_srcu;
+		}
 	}
 	ret = init_srcu_struct(&set->tags_srcu);
-	if (ret)
+	if (ret) {
+		linx_blk_mq_dbg("alloc_tag_set:init tags_srcu fail=", (unsigned long)ret);
 		goto out_cleanup_srcu;
+	}
 
 	init_rwsem(&set->update_nr_hwq_lock);
 
@@ -4850,23 +4883,29 @@ int blk_mq_alloc_tag_set(struct blk_mq_tag_set *set)
 	set->tags = kcalloc_node(set->nr_hw_queues,
 				 sizeof(struct blk_mq_tags *), GFP_KERNEL,
 				 set->numa_node);
-	if (!set->tags)
+	if (!set->tags) {
+		linx_blk_mq_dbg("alloc_tag_set:tags alloc fail=", 0);
 		goto out_cleanup_tags_srcu;
+	}
 
 	for (i = 0; i < set->nr_maps; i++) {
 		set->map[i].mq_map = kcalloc_node(nr_cpu_ids,
 						  sizeof(set->map[i].mq_map[0]),
 						  GFP_KERNEL, set->numa_node);
-		if (!set->map[i].mq_map)
+		if (!set->map[i].mq_map) {
+			linx_blk_mq_dbg("alloc_tag_set:mq_map alloc fail=", (unsigned long)i);
 			goto out_free_mq_map;
+		}
 		set->map[i].nr_queues = set->nr_hw_queues;
 	}
 
 	blk_mq_update_queue_map(set);
 
 	ret = blk_mq_alloc_set_map_and_rqs(set);
-	if (ret)
+	if (ret) {
+		linx_blk_mq_dbg("alloc_tag_set:alloc_set_map_and_rqs fail=", (unsigned long)ret);
 		goto out_free_mq_map;
+	}
 
 	mutex_init(&set->tag_list_lock);
 	INIT_LIST_HEAD(&set->tag_list);

@@ -189,6 +189,13 @@ static int topology_add_dev(unsigned int cpu)
 {
 	struct device *dev = get_cpu_device(cpu);
 
+	/*
+	 * LinxISA bring-up: tolerate early init ordering where the CPU device
+	 * exists but has not been instantiated in sysfs yet.
+	 */
+	if (!dev || !dev->kobj.sd)
+		return 0;
+
 	return sysfs_create_group(&dev->kobj, &topology_attr_group);
 }
 

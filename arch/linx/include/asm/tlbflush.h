@@ -5,7 +5,7 @@
 #include <linux/mm_types.h>
 
 /*
- * v0.1 bring-up: single-core, no ASIDs. Keep the implementation conservative
+ * v0.2 bring-up: single-core, no ASIDs. Keep the implementation conservative
  * by invalidating the entire TLB for all flush operations.
  */
 static inline void linx_tlb_iall(void)

@@ -55,7 +55,7 @@ static void __init linx_mmu_map_direct(phys_addr_t mem_start, phys_addr_t mem_en
 	const phys_addr_t block_size = (phys_addr_t)1ull << PMD_SHIFT;
 
 	/*
-	 * v0.1 bring-up uses a very small physical memory map on QEMU `virt`.
+	 * v0.2 bring-up uses a very small physical memory map on QEMU `virt`.
 	 * Use 4 KiB pages for the initial direct map to avoid depending on
 	 * PMD-level block descriptors while the MMU model is still stabilizing.
 	 */

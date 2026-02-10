@@ -36,13 +36,13 @@ if [[ ! -x "$GEN_INIT_CPIO" ]]; then
     "$LINUX_ROOT/usr/gen_init_cpio.c"
 fi
 
-echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, ET_DYN) ..."
+echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, static PIE ET_DYN) ..."
 "$CLANG" -target linx64-unknown-linux-gnu \
-  -Oz -ffreestanding -fno-builtin -fpie -fPIC \
+  -Oz -ffreestanding -fno-builtin -fpie -fpic \
   -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
-  -nostdlib -static -fuse-ld=lld -Wl,-e,_start -Wl,-pie \
+  -nostdlib -static -fuse-ld=lld -Wl,-pie -Wl,-e,_start \
   -Wl,--build-id=none \
-  -o "$BUSYBOX_BIN" "$SCRIPT_DIR/busybox.c"
+  -o "$BUSYBOX_BIN" "$SCRIPT_DIR/busybox.c" "$SCRIPT_DIR/sig_tramp.c"
 
 echo "[3/3] Generating initramfs (newc) ..."
 cat >"$CPIO_LIST" <<EOF
@@ -52,6 +52,7 @@ cat >"$CPIO_LIST" <<EOF
 dir /dev 0755 0 0
 nod /dev/console 0600 0 0 c 5 1
 nod /dev/null 0666 0 0 c 1 3
+nod /dev/ttyS0 0600 0 0 c 4 64
 dir /proc 0755 0 0
 dir /sys 0755 0 0
 dir /run 0755 0 0
@@ -65,6 +66,9 @@ slink /bin/sh /bin/busybox 0755 0 0
 slink /bin/echo /bin/busybox 0755 0 0
 slink /bin/cat /bin/busybox 0755 0 0
 slink /bin/ls /bin/busybox 0755 0 0
+slink /bin/getdents64_probe /bin/busybox 0755 0 0
+slink /bin/sigill_test /bin/busybox 0755 0 0
+slink /bin/sigsegv_test /bin/busybox 0755 0 0
 slink /sbin/reboot /bin/busybox 0755 0 0
 slink /sbin/poweroff /bin/busybox 0755 0 0
 EOF

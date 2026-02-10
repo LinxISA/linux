@@ -13,7 +13,7 @@
 
 #ifdef CONFIG_MMU
 /*
- * v0.1 bring-up profile: 48-bit canonical VA, user space in the low half
+ * v0.2 bring-up profile: 48-bit canonical VA, user space in the low half
  * (VA[47]=0). Keep kernel mappings at low addresses for now, but place user
  * mappings and stacks far from the kernel image by using the default mmap base
  * near TASK_SIZE/3.

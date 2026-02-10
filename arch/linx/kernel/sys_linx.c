@@ -22,11 +22,4 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 	return ksys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
 }
 
-/*
- * Signal delivery/frames are not implemented for the LinxISA bring-up port yet.
- * Provide a stub so the syscall table can link.
- */
-SYSCALL_DEFINE0(rt_sigreturn)
-{
-	return -ENOSYS;
-}
+/* Signal support is implemented in arch/linx/kernel/signal.c. */

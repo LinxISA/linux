@@ -51,10 +51,10 @@ static inline void linx_virt_uart_puthex_u64(unsigned long v)
  * sets up the full execution environment (traps/MMU/early DT parsing).
  */
 __attribute__((section(".head.text"), used))
-asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
-{
-	unsigned long new_sp;
-	unsigned int fdt_magic = 0;
+	asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
+	{
+		unsigned long new_sp;
+		unsigned int fdt_magic = 0;
 
 	linx_boot_hartid = hartid;
 	linx_dtb_early_va = fdt;
@@ -79,6 +79,8 @@ asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 	new_sp = (unsigned long)&init_thread_union + THREAD_SIZE;
 	asm volatile("c.movr %0, ->sp" : : "r"(new_sp) : "memory");
 
+		/* Initialize ETEMP0_ACR1 to the init task's kernel stack top. */
+
 	/*
 	 * Install trap vectors and start with interrupts disabled.
 	 *
@@ -86,8 +88,9 @@ asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 	 * - ACR1 is the Linux kernel ring (interrupts + syscalls route here).
 	 * - ACR0 is reserved for monitor/secure services; keep a minimal handler.
 	 */
-	linx_ssr_write_evbase_acr0((unsigned long)&linx_trap_vector_acr0);
-	linx_ssr_write_evbase_acr1((unsigned long)&linx_trap_vector);
+		linx_ssr_write_evbase_acr0((unsigned long)&linx_trap_vector_acr0);
+		linx_ssr_write_evbase_acr1((unsigned long)&linx_trap_vector);
+		linx_ssr_write_etemp0_acr1(new_sp);
 	{
 		unsigned long cstate = linx_ssr_read_cstate();
 

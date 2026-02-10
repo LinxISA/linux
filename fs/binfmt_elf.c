@@ -49,6 +49,9 @@
 #include <linux/rseq.h>
 #include <asm/param.h>
 #include <asm/page.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #ifndef ELF_COMPAT
 #define ELF_COMPAT 0
@@ -190,6 +193,9 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	 */
 
 	p = arch_align_stack(p);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('0');
+#endif
 
 	/*
 	 * If this architecture has a platform capability string, copy it
@@ -223,10 +229,19 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	 * Generate 16 random bytes for userspace PRNG seeding.
 	 */
 	get_random_bytes(k_rand_bytes, sizeof(k_rand_bytes));
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('u');
+#endif
 	u_rand_bytes = (elf_addr_t __user *)
 		       STACK_ALLOC(p, sizeof(k_rand_bytes));
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('U');
+#endif
 	if (copy_to_user(u_rand_bytes, k_rand_bytes, sizeof(k_rand_bytes)))
 		return -EFAULT;
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('V');
+#endif
 
 	/* Create the ELF interpreter info */
 	elf_info = (elf_addr_t *)mm->saved_auxv;
@@ -852,6 +867,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	struct mm_struct *mm;
 	struct pt_regs *regs;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('L');
+#endif
 	retval = -ENOEXEC;
 	/* First of all, some simple consistency checks */
 	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
@@ -867,6 +885,9 @@ static int load_elf_binary(struct linux_binprm *bprm)
 		goto out;
 
 	elf_phdata = load_elf_phdrs(elf_ex, bprm->file);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('p');
+#endif
 	if (!elf_phdata)
 		goto out;
 
@@ -992,6 +1013,9 @@ out_free_interp:
 
 	retval = parse_elf_properties(interpreter ?: bprm->file,
 				      elf_property_phdata, &arch_state);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('o');
+#endif
 	if (retval)
 		goto out_free_dentry;
 
@@ -1003,11 +1027,17 @@ out_free_interp:
 	retval = arch_check_elf(elf_ex,
 				!!interpreter, interp_elf_ex,
 				&arch_state);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('c');
+#endif
 	if (retval)
 		goto out_free_dentry;
 
 	/* Flush all traces of the currently running executable */
 	retval = begin_new_exec(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('n');
+#endif
 	if (retval)
 		goto out_free_dentry;
 
@@ -1027,6 +1057,9 @@ out_free_interp:
 	   change some of these later */
 	retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
 				 executable_stack);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('a');
+#endif
 	if (retval < 0)
 		goto out_free_dentry;
 
@@ -1039,18 +1072,21 @@ out_free_interp:
 
 	/* Now we do a little grungy work by mmapping the ELF image into
 	   the correct location in memory. */
-	for(i = 0, elf_ppnt = elf_phdata;
-	    i < elf_ex->e_phnum; i++, elf_ppnt++) {
+		for(i = 0, elf_ppnt = elf_phdata;
+		    i < elf_ex->e_phnum; i++, elf_ppnt++) {
 		int elf_prot, elf_flags;
 		unsigned long k, vaddr;
 		unsigned long total_size = 0;
 		unsigned long alignment;
 
-		if (elf_ppnt->p_type != PT_LOAD)
-			continue;
+			if (elf_ppnt->p_type != PT_LOAD)
+				continue;
 
-		elf_prot = make_prot(elf_ppnt->p_flags, &arch_state,
-				     !!interpreter, false);
+#ifdef CONFIG_LINX
+			linx_debug_uart_putc('M');
+#endif
+			elf_prot = make_prot(elf_ppnt->p_flags, &arch_state,
+					     !!interpreter, false);
 
 		elf_flags = MAP_PRIVATE;
 
@@ -1185,13 +1221,16 @@ out_free_interp:
 			load_bias = ELF_PAGESTART(load_bias - vaddr);
 		}
 
-		error = elf_load(bprm->file, load_bias + vaddr, elf_ppnt,
-				elf_prot, elf_flags, total_size);
-		if (BAD_ADDR(error)) {
-			retval = IS_ERR_VALUE(error) ?
-				PTR_ERR((void*)error) : -EINVAL;
-			goto out_free_dentry;
-		}
+			error = elf_load(bprm->file, load_bias + vaddr, elf_ppnt,
+					elf_prot, elf_flags, total_size);
+#ifdef CONFIG_LINX
+			linx_debug_uart_putc('m');
+#endif
+			if (BAD_ADDR(error)) {
+				retval = IS_ERR_VALUE(error) ?
+					PTR_ERR((void*)error) : -EINVAL;
+				goto out_free_dentry;
+			}
 
 		if (first_pt_load) {
 			first_pt_load = 0;
@@ -1238,12 +1277,15 @@ out_free_interp:
 		if (end_data < k)
 			end_data = k;
 		k = elf_ppnt->p_vaddr + elf_ppnt->p_memsz;
-		if (k > elf_brk)
-			elf_brk = k;
-	}
+			if (k > elf_brk)
+				elf_brk = k;
+		}
 
-	e_entry = elf_ex->e_entry + load_bias;
-	phdr_addr += load_bias;
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('Z');
+#endif
+		e_entry = elf_ex->e_entry + load_bias;
+		phdr_addr += load_bias;
 	elf_brk += load_bias;
 	start_code += load_bias;
 	end_code += load_bias;
@@ -1275,28 +1317,46 @@ out_free_interp:
 
 		kfree(interp_elf_ex);
 		kfree(interp_elf_phdata);
-	} else {
-		elf_entry = e_entry;
-		if (BAD_ADDR(elf_entry)) {
-			retval = -EINVAL;
-			goto out_free_dentry;
+		} else {
+			elf_entry = e_entry;
+			if (BAD_ADDR(elf_entry)) {
+				retval = -EINVAL;
+				goto out_free_dentry;
+			}
 		}
-	}
 
-	kfree(elf_phdata);
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('E');
+#endif
+		kfree(elf_phdata);
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('k');
+#endif
 
 	set_binfmt(&elf_format);
 
 #ifdef ARCH_HAS_SETUP_ADDITIONAL_PAGES
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('a');
+#endif
 	retval = ARCH_SETUP_ADDITIONAL_PAGES(bprm, elf_ex, !!interpreter);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('A');
+#endif
 	if (retval < 0)
 		goto out;
 #endif /* ARCH_HAS_SETUP_ADDITIONAL_PAGES */
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('t');
+#endif
 	retval = create_elf_tables(bprm, elf_ex, interp_load_addr,
 				   e_entry, phdr_addr);
-	if (retval < 0)
-		goto out;
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('T');
+#endif
+		if (retval < 0)
+			goto out;
 
 	mm = current->mm;
 	mm->end_code = end_code;
@@ -1327,7 +1387,10 @@ out_free_interp:
 		/* This counts as moving the brk, so let brk(2) know. */
 		brk_moved = true;
 	}
-	mm->start_brk = mm->brk = ELF_PAGEALIGN(elf_brk);
+		mm->start_brk = mm->brk = ELF_PAGEALIGN(elf_brk);
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('B');
+#endif
 
 	if ((current->flags & PF_RANDOMIZE) && snapshot_randomize_va_space > 1) {
 		/*
@@ -1375,9 +1438,15 @@ out_free_interp:
 	ELF_PLAT_INIT(regs, reloc_func_desc);
 #endif
 
-	finalize_exec(bprm);
-	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
-	retval = 0;
+		finalize_exec(bprm);
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('F');
+#endif
+		START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('S');
+#endif
+		retval = 0;
 out:
 	return retval;
 

@@ -3,7 +3,7 @@
 #define _ASM_LINX_PGTABLE_BITS_H
 
 /*
- * LinxISA page table entry bits (v0.1 bring-up profile).
+ * LinxISA page table entry bits (v0.2 bring-up profile).
  *
  * This matches the QEMU Linx MMU page-walk model:
  * - Descriptor type in bits[1:0]

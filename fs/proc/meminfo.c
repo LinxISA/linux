@@ -41,6 +41,27 @@ static int meminfo_proc_show(struct seq_file *m, void *v)
 	unsigned long sreclaimable, sunreclaim;
 	int lru;
 
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up profile:
+	 * keep /proc/meminfo lightweight and avoid vmstat paths that are still
+	 * being stabilized during early architecture enablement.
+	 */
+	si_meminfo(&i);
+	si_swapinfo(&i);
+
+	show_val_kb(m, "MemTotal:       ", i.totalram);
+	show_val_kb(m, "MemFree:        ", i.freeram);
+	show_val_kb(m, "MemAvailable:   ", i.freeram);
+	show_val_kb(m, "Buffers:        ", i.bufferram);
+	show_val_kb(m, "Cached:         ", 0);
+	show_val_kb(m, "SwapTotal:      ", i.totalswap);
+	show_val_kb(m, "SwapFree:       ", i.freeswap);
+	show_val_kb(m, "Committed_AS:   ", vm_memory_committed());
+
+	return 0;
+#endif
+
 	si_meminfo(&i);
 	si_swapinfo(&i);
 	committed = vm_memory_committed();

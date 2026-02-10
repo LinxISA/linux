@@ -13,6 +13,7 @@ obj-y += ptrace.o
 obj-y += reboot.o
 obj-y += setup.o
 obj-y += switch_to.o
+obj-y += signal.o
 obj-y += irq.o
 obj-y += time.o
 obj-y += traps.o

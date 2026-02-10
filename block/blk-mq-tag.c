@@ -570,7 +570,8 @@ struct blk_mq_tags *blk_mq_init_tags(unsigned int total_tags,
 
 	if (bt_alloc(&tags->bitmap_tags, depth, round_robin, node))
 		goto out_free_tags;
-	if (bt_alloc(&tags->breserved_tags, reserved_tags, round_robin, node))
+	if (reserved_tags &&
+	    bt_alloc(&tags->breserved_tags, reserved_tags, round_robin, node))
 		goto out_free_bitmap_tags;
 
 	return tags;

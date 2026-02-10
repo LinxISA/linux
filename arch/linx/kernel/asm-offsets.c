@@ -42,9 +42,13 @@ void asm_offsets(void)
 	DEFINE(PT_REGS_ECSTATE, offsetof(struct pt_regs, ecstate));
 	DEFINE(PT_REGS_TRAPNO, offsetof(struct pt_regs, trapno));
 	DEFINE(PT_REGS_TRAPARG0, offsetof(struct pt_regs, traparg0));
-	DEFINE(PT_REGS_EBPC, offsetof(struct pt_regs, ebpc));
-	DEFINE(PT_REGS_ETPC, offsetof(struct pt_regs, etpc));
-	DEFINE(PT_REGS_EBPCN, offsetof(struct pt_regs, ebpcn));
+	DEFINE(PT_REGS_EBARG0, offsetof(struct pt_regs, ebarg0));
+	DEFINE(PT_REGS_EBARG_BPC_CUR, offsetof(struct pt_regs, ebarg_bpc_cur));
+	DEFINE(PT_REGS_EBARG_BPC_TGT, offsetof(struct pt_regs, ebarg_bpc_tgt));
+	DEFINE(PT_REGS_EBARG_TPC, offsetof(struct pt_regs, ebarg_tpc));
+	DEFINE(PT_REGS_EBARG_LRA, offsetof(struct pt_regs, ebarg_lra));
+	DEFINE(PT_REGS_EBARG_LB, offsetof(struct pt_regs, ebarg_lb));
+	DEFINE(PT_REGS_EBARG_LC, offsetof(struct pt_regs, ebarg_lc));
 
 	DEFINE(TASK_THREAD_RA, offsetof(struct task_struct, thread.ra));
 	DEFINE(TASK_THREAD_SP, offsetof(struct task_struct, thread.sp));
@@ -59,4 +63,8 @@ void asm_offsets(void)
 	DEFINE(TASK_THREAD_S8, offsetof(struct task_struct, thread.s[8]));
 	DEFINE(TASK_THREAD_KTHREAD_FN, offsetof(struct task_struct, thread.kthread_fn));
 	DEFINE(TASK_THREAD_KTHREAD_ARG, offsetof(struct task_struct, thread.kthread_arg));
+
+	/* Kernel stack base (thread_info*) for per-task ETEMP0 setup. */
+	DEFINE(TASK_STACK, offsetof(struct task_struct, stack));
+	DEFINE(THREAD_SIZE, THREAD_SIZE);
 }

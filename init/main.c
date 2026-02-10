@@ -110,6 +110,9 @@
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/initcall.h>
@@ -117,6 +120,18 @@
 #include <kunit/test.h>
 
 static int kernel_init(void *);
+
+#ifdef CONFIG_LINX
+static __always_inline void linx_boot_mark(char c)
+{
+	linx_debug_uart_putc(c);
+}
+#else
+static __always_inline void linx_boot_mark(char c)
+{
+	(void)c;
+}
+#endif
 
 /*
  * Debug helper: via this flag we know that we are in 'early bootup code'
@@ -1529,7 +1544,19 @@ static int run_init_process(const char *init_filename)
 	pr_debug("  with environment:\n");
 	for (p = envp_init; *p; p++)
 		pr_debug("    %s\n", *p);
-	return kernel_execve(init_filename, argv_init, envp_init);
+	linx_boot_mark('e');
+	{
+		int ret = kernel_execve(init_filename, argv_init, envp_init);
+		linx_boot_mark('x');
+#ifdef CONFIG_LINX
+		if (ret) {
+			linx_boot_mark('[');
+			linx_debug_uart_puthex_ulong((unsigned long)ret);
+			linx_boot_mark(']');
+		}
+#endif
+		return ret;
+	}
 }
 
 static int try_to_run_init_process(const char *init_filename)
@@ -1603,6 +1630,7 @@ static int __ref kernel_init(void *unused)
 {
 	int ret;
 
+	linx_boot_mark('I');
 #ifdef CONFIG_LINX_DEBUG
 	{
 		unsigned long linx_stack_marker = 0;
@@ -1616,10 +1644,13 @@ static int __ref kernel_init(void *unused)
 	 * Wait until kthreadd is all set-up.
 	 */
 	wait_for_completion(&kthreadd_done);
+	linx_boot_mark('T');
 
 	kernel_init_freeable();
+	linx_boot_mark('F');
 	/* need to finish all async __init code before freeing the memory */
 	async_synchronize_full();
+	linx_boot_mark('A');
 
 	system_state = SYSTEM_FREEING_INITMEM;
 	kprobe_free_init_mem();
@@ -1641,9 +1672,12 @@ static int __ref kernel_init(void *unused)
 	rcu_end_inkernel_boot();
 
 	do_sysctl_args();
+	linx_boot_mark('S');
 
 	if (ramdisk_execute_command) {
+		linx_boot_mark('r');
 		ret = run_init_process(ramdisk_execute_command);
+		linx_boot_mark(ret ? 'E' : '0');
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",
@@ -1711,6 +1745,7 @@ void __init console_on_rootfs(void)
 
 static noinline void __init kernel_init_freeable(void)
 {
+	linx_boot_mark('f');
 #ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: kernel_init_freeable start\n");
 #endif
@@ -1756,6 +1791,7 @@ static noinline void __init kernel_init_freeable(void)
 	page_alloc_init_late();
 
 	do_basic_setup();
+	linx_boot_mark('B');
 #ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: do_basic_setup done\n");
 #endif
@@ -1763,7 +1799,15 @@ static noinline void __init kernel_init_freeable(void)
 	kunit_run_all_tests();
 
 	wait_for_initramfs();
+	linx_boot_mark('R');
+#ifdef CONFIG_LINX
+	/*
+	 * LinxISA bring-up: let userspace open its own console once /dev is
+	 * populated; opening /dev/console here can wedge early boot.
+	 */
+#else
 	console_on_rootfs();
+#endif
 
 	/*
 	 * check if there is an early userspace init.  If yes, let it do all
@@ -1777,6 +1821,7 @@ static noinline void __init kernel_init_freeable(void)
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
+	linx_boot_mark('N');
 
 	/*
 	 * Ok, we have completed the initial bootup, and
@@ -1788,4 +1833,5 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 
 	integrity_load_keys();
+	linx_boot_mark('K');
 }

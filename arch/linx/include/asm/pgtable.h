@@ -6,7 +6,7 @@
 #include <asm/pgtable-bits.h>
 
 /*
- * Page table format (v0.1 bring-up):
+ * Page table format (v0.2 bring-up):
  * - 4 KiB pages, 48-bit canonical VA, 48-bit PA.
  * - 4-level walk (L0..L3) with 512 entries per table.
  *
@@ -282,7 +282,7 @@ static inline struct page *p4d_page(p4d_t p4d)
 }
 
 /*
- * v0.1 bring-up: no software-managed TLB caching; flushes are explicit via
+ * v0.2 bring-up: no software-managed TLB caching; flushes are explicit via
  * tlbflush.h and TTBR/TCR writes.
  */
 #ifndef update_mmu_cache
@@ -334,7 +334,7 @@ static inline void set_pte(pte_t *ptep, pte_t pte)
 #define PFN_PTE_SHIFT	PAGE_SHIFT
 
 /*
- * Swap entry encoding (v0.1 bring-up):
+ * Swap entry encoding (v0.2 bring-up):
  * - Store the arch-independent swp_entry_t value in bits[63:LINX_SWP_PTE_SHIFT].
  * - Keep Desc[1:0]=00 so the hardware sees the PTE as not-present.
  * - Use bit[2] as the swap-exclusive marker.

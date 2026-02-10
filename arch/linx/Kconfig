@@ -20,7 +20,6 @@ config LINX
 	select MODULES_USE_ELF_RELA
 	select GENERIC_IRQ_SHOW
 	select GENERIC_IRQ_PROBE
-	select SPARSE_IRQ
 
 config GENERIC_CALIBRATE_DELAY
 	def_bool y

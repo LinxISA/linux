@@ -35,8 +35,13 @@ static inline void destroy_context(struct mm_struct *mm)
 
 static inline void activate_mm(struct mm_struct *prev_mm, struct mm_struct *next_mm)
 {
+	u64 ttbr0;
+
 	(void)prev_mm;
-	(void)next_mm;
+
+	ttbr0 = (u64)__pa(next_mm->pgd);
+	linx_hl_ssrset(ttbr0, 0x1f10); /* TTBR0_ACR1 */
+	linx_flush_tlb_all();
 }
 
 static inline void deactivate_mm(struct task_struct *tsk, struct mm_struct *mm)

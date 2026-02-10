@@ -4,5 +4,20 @@ CONFIG_MMU=y
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_OF=y
 CONFIG_OF_EARLY_FLATTREE=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_PRINTK=y
 CONFIG_BINFMT_ELF=y
+CONFIG_TTY=y
+CONFIG_VIRTIO_MMIO=y
+CONFIG_VIRTIO_MMIO_CMDLINE_DEVICES=y
+CONFIG_VIRTIO_BLK=y
+CONFIG_EXT2_FS=y
+CONFIG_SERIAL_CORE=y
+CONFIG_SERIAL_LINX_VIRT_UART=y
+CONFIG_SERIAL_LINX_VIRT_UART_CONSOLE=y
+
+# Bring-up hardening: avoid early-mm background threads until core trap/MM is stable.
+# (kcompactd/compaction currently triggers kernel waitqueue faults in QEMU bring-up.)
+# CONFIG_MIGRATION is not set
+# CONFIG_COMPACTION is not set

@@ -16,59 +16,6 @@
 #include <linux/fs.h>
 #include "sysfs.h"
 
-#ifdef CONFIG_LINX
-#include <asm/debug_uart.h>
-#endif
-
-#ifdef CONFIG_LINX
-static bool linx_ptr_in_range(unsigned long addr, const void *start,
-			      const void *end)
-{
-	return addr >= (unsigned long)start && addr < (unsigned long)end;
-}
-
-static bool linx_sysfs_grp_is_sane(const struct attribute_group *grp)
-{
-	/*
-	 * LinxISA bring-up: guard against corrupted sysfs group pointers or
-	 * callback function pointers. A bad indirect call target trips the Block
-	 * ISA safety rule and aborts QEMU. Keep sysfs non-fatal so we can reach a
-	 * minimal initramfs shell while we debug ABI/codegen issues.
-	 */
-	extern char __start_rodata[], _end[];
-	const unsigned long addr = (unsigned long)grp;
-
-	return linx_ptr_in_range(addr, __start_rodata, _end);
-}
-
-static bool linx_sysfs_fn_is_sane(const void *fn)
-{
-	extern char _stext[], _etext[];
-	const unsigned long addr = (unsigned long)fn;
-
-	return linx_ptr_in_range(addr, _stext, _etext);
-}
-
-static void linx_sysfs_log_bad_ptr(const char *tag, unsigned long v,
-				   unsigned long extra)
-{
-	static int printed;
-
-	if (printed++ >= 16)
-		return;
-	linx_debug_uart_puts("\nlinx: sysfs bad ");
-	linx_debug_uart_puts(tag);
-	linx_debug_uart_puts("=");
-	linx_debug_uart_puthex_ulong(v);
-	if (extra) {
-		linx_debug_uart_puts(" extra=");
-		linx_debug_uart_puthex_ulong(extra);
-	}
-	linx_debug_uart_puts("\n");
-}
-#endif /* CONFIG_LINX */
-
-
 static void remove_files(struct kernfs_node *parent,
 				 const struct attribute_group *grp)
 {
@@ -88,26 +35,6 @@ static umode_t __first_visible(const struct attribute_group *grp, struct kobject
 	umode_t (*is_visible)(struct kobject *, struct attribute *, int) = grp->is_visible;
 	umode_t (*is_bin_visible)(struct kobject *, const struct bin_attribute *, int) =
 		grp->is_bin_visible;
-
-#ifdef CONFIG_LINX
-	if (!linx_sysfs_grp_is_sane(grp)) {
-		linx_sysfs_log_bad_ptr("grp", (unsigned long)grp,
-				       (unsigned long)kobj);
-		return 0;
-	}
-	if (is_visible && !linx_sysfs_fn_is_sane((const void *)is_visible)) {
-		linx_sysfs_log_bad_ptr("is_visible", (unsigned long)is_visible,
-				       (unsigned long)grp);
-		is_visible = NULL;
-	}
-	if (is_bin_visible &&
-	    !linx_sysfs_fn_is_sane((const void *)is_bin_visible)) {
-		linx_sysfs_log_bad_ptr("is_bin_visible",
-				       (unsigned long)is_bin_visible,
-				       (unsigned long)grp);
-		is_bin_visible = NULL;
-	}
-#endif
 
 	if (grp->attrs && grp->attrs[0] && is_visible)
 		return is_visible(kobj, grp->attrs[0], 0);
@@ -129,31 +56,6 @@ static int create_files(struct kernfs_node *parent, struct kobject *kobj,
 		grp->is_bin_visible;
 	size_t (*bin_size)(struct kobject *, const struct bin_attribute *, int) = grp->bin_size;
 	int error = 0, i;
-
-#ifdef CONFIG_LINX
-	if (!linx_sysfs_grp_is_sane(grp)) {
-		linx_sysfs_log_bad_ptr("grp", (unsigned long)grp,
-				       (unsigned long)kobj);
-		return 0;
-	}
-	if (is_visible && !linx_sysfs_fn_is_sane((const void *)is_visible)) {
-		linx_sysfs_log_bad_ptr("is_visible", (unsigned long)is_visible,
-				       (unsigned long)grp);
-		is_visible = NULL;
-	}
-	if (is_bin_visible &&
-	    !linx_sysfs_fn_is_sane((const void *)is_bin_visible)) {
-		linx_sysfs_log_bad_ptr("is_bin_visible",
-				       (unsigned long)is_bin_visible,
-				       (unsigned long)grp);
-		is_bin_visible = NULL;
-	}
-	if (bin_size && !linx_sysfs_fn_is_sane((const void *)bin_size)) {
-		linx_sysfs_log_bad_ptr("bin_size", (unsigned long)bin_size,
-				       (unsigned long)grp);
-		bin_size = NULL;
-	}
-#endif
 
 	if (grp->attrs) {
 		for (i = 0, attr = grp->attrs; *attr && !error; i++, attr++) {
@@ -239,14 +141,6 @@ static int internal_create_group(struct kobject *kobj, int update,
 	/* Updates may happen before the object has been instantiated */
 	if (unlikely(update && !kobj->sd))
 		return -EINVAL;
-
-#ifdef CONFIG_LINX
-	if (!linx_sysfs_grp_is_sane(grp)) {
-		linx_sysfs_log_bad_ptr("grp", (unsigned long)grp,
-				       (unsigned long)kobj);
-		return 0;
-	}
-#endif
 
 	if (!grp->attrs && !grp->bin_attrs) {
 		pr_debug("sysfs: (bin_)attrs not set by subsystem for group: %s/%s, skipping\n",

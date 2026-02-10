@@ -23,9 +23,13 @@ struct pt_regs {
 	unsigned long ecstate;
 	unsigned long trapno;
 	unsigned long traparg0;
-	unsigned long ebpc;
-	unsigned long etpc;
-	unsigned long ebpcn;
+	unsigned long ebarg0;
+	unsigned long ebarg_bpc_cur;
+	unsigned long ebarg_bpc_tgt;
+	unsigned long ebarg_tpc;
+	unsigned long ebarg_lra;
+	unsigned long ebarg_lb;
+	unsigned long ebarg_lc;
 };
 
 /*

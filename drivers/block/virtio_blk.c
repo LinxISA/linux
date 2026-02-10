@@ -1513,6 +1513,9 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->disk->private_data = vblk;
 	vblk->disk->fops = &virtblk_fops;
 	vblk->index = index;
+#ifdef CONFIG_LINX
+	vblk->disk->flags |= GENHD_FL_NO_PART;
+#endif
 
 	/* If disk is read-only in the host, the guest should obey */
 	if (virtio_has_feature(vdev, VIRTIO_BLK_F_RO))
