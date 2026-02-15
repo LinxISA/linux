@@ -8,6 +8,9 @@
 #include <asm/thread_info.h>
 #include <asm/ptrace.h>
 #include <asm/ssr.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #define STACK_ALIGN 16
 
@@ -88,6 +91,16 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 	ecstate |= LINX_CSTATE_I_BIT;
 	ecstate = (ecstate & ~LINX_CSTATE_ACR_MASK) | LINX_CSTATE_ACR_USER;
 	regs->ecstate = ecstate;
+
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('J');
+	linx_debug_uart_puthex_ulong(pc);
+	linx_debug_uart_putc('j');
+	linx_debug_uart_puthex_ulong(sp);
+	linx_debug_uart_putc('e');
+	linx_debug_uart_puthex_ulong(regs->ecstate);
+	linx_debug_uart_putc('\n');
+#endif
 }
 
 #define cpu_relax()	barrier()

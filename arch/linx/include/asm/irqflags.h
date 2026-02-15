@@ -9,28 +9,26 @@
 
 #include <asm/ssr.h>
 
-static inline unsigned long arch_local_save_flags(void)
+static __always_inline unsigned long arch_local_save_flags(void)
 {
-	return linx_ssr_read_cstate() & LINX_CSTATE_I_BIT;
+	return linx_ssr_read_cstate();
 }
 
-static inline void arch_local_irq_enable(void)
-{
-	unsigned long cstate = linx_ssr_read_cstate();
-
-	cstate |= LINX_CSTATE_I_BIT;
-	linx_ssr_write_cstate(cstate);
-}
-
-static inline void arch_local_irq_disable(void)
+static __always_inline void arch_local_irq_enable(void)
 {
 	unsigned long cstate = linx_ssr_read_cstate();
 
-	cstate &= ~LINX_CSTATE_I_BIT;
-	linx_ssr_write_cstate(cstate);
+	linx_ssr_write_cstate(cstate | LINX_CSTATE_I_BIT);
 }
 
-static inline unsigned long arch_local_irq_save(void)
+static __always_inline void arch_local_irq_disable(void)
+{
+	unsigned long cstate = linx_ssr_read_cstate();
+
+	linx_ssr_write_cstate(cstate & ~LINX_CSTATE_I_BIT);
+}
+
+static __always_inline unsigned long arch_local_irq_save(void)
 {
 	unsigned long flags = arch_local_save_flags();
 
@@ -38,25 +36,27 @@ static inline unsigned long arch_local_irq_save(void)
 	return flags;
 }
 
-static inline int arch_irqs_disabled_flags(unsigned long flags)
+static __always_inline int arch_irqs_disabled_flags(unsigned long flags)
 {
-	return (flags & LINX_CSTATE_I_BIT) == 0;
+	return !(flags & LINX_CSTATE_I_BIT);
 }
 
-static inline int arch_irqs_disabled(void)
+static __always_inline int arch_irqs_disabled(void)
 {
 	return arch_irqs_disabled_flags(arch_local_save_flags());
 }
 
-static inline void arch_local_irq_restore(unsigned long flags)
+static __always_inline void arch_local_irq_restore(unsigned long flags)
 {
+	unsigned long cstate = linx_ssr_read_cstate();
+
 	if (flags & LINX_CSTATE_I_BIT)
-		arch_local_irq_enable();
+		linx_ssr_write_cstate(cstate | LINX_CSTATE_I_BIT);
 	else
-		arch_local_irq_disable();
+		linx_ssr_write_cstate(cstate & ~LINX_CSTATE_I_BIT);
 }
 
-static inline void arch_safe_halt(void)
+static __always_inline void arch_safe_halt(void)
 {
 }
 

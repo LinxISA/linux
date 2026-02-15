@@ -4,6 +4,7 @@
 #include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/linkage.h>
+#include <linux/sizes.h>
 
 #include <asm/pgtable.h>
 #include <asm/ssr.h>
@@ -14,6 +15,8 @@
  */
 
 #ifdef CONFIG_MMU
+
+#define LINX_VIRT_UART_BASE 0x10000000UL
 
 static const pgprot_t protection_map[16] = {
 	[VM_NONE]					= PAGE_NONE,
@@ -44,6 +47,13 @@ static void * __init linx_alloc_pgtable_page(void)
 
 	memset(va, 0, PAGE_SIZE);
 	return va;
+}
+
+static inline pgprot_t __init linx_pgprot_device_rw(void)
+{
+	return __pgprot(LINX_PTE_AF | LINX_PTE_R | LINX_PTE_W |
+			((unsigned long)LINX_MAIR_ATTR_DEVICE <<
+			 LINX_PTE_ATTRIDX_SHIFT));
 }
 
 static void __init linx_mmu_map_direct(phys_addr_t mem_start, phys_addr_t mem_end)
@@ -85,19 +95,43 @@ static void __init linx_mmu_map_direct(phys_addr_t mem_start, phys_addr_t mem_en
 
 		pmd[idx] = __pmd((unsigned long)__pa(pte) | LINX_PTE_TYPE_TABLE);
 	}
+
+	/*
+	 * Keep the QEMU virt UART page strongly ordered after MMU enable.
+	 * The linear mapping above marks everything as normal WB memory, which
+	 * can make post-MMU UART output disappear or become unstable.
+	 */
+	{
+		const phys_addr_t uart_pa = (phys_addr_t)LINX_VIRT_UART_BASE;
+		const unsigned long pmd_idx =
+			(unsigned long)((uart_pa >> PMD_SHIFT) & (PTRS_PER_PMD - 1));
+		const unsigned long pte_idx =
+			(unsigned long)((uart_pa >> PAGE_SHIFT) & (PTRS_PER_PTE - 1));
+		pte_t *uart_pte;
+
+		if (pmd_none(pmd[pmd_idx])) {
+			pte_t *new_pte = (pte_t *)linx_alloc_pgtable_page();
+			pmd[pmd_idx] =
+				__pmd((unsigned long)__pa(new_pte) | LINX_PTE_TYPE_TABLE);
+		}
+
+		uart_pte = (pte_t *)pmd_page_vaddr(pmd[pmd_idx]);
+		uart_pte[pte_idx] = pfn_pte(PHYS_PFN(uart_pa),
+					    linx_pgprot_device_rw());
+	}
 }
 
-	static void __init linx_mmu_enable(void)
-	{
-		const u64 ttbr = (u64)__pa(swapper_pg_dir);
+static void __init linx_mmu_enable(void)
+{
+	const u64 ttbr = (u64)__pa(swapper_pg_dir);
 	const u64 mair =
 		(0x00ull << 0) |	/* Attr0: Device-nGnRnE */
 		(0xffull << 8) |	/* Attr1: Normal WB RA/WA */
 		(0x44ull << 16);	/* Attr2: Normal NC */
-		const u64 tcr =
-			(1ull << 0) |		/* MME */
-			(16ull << 1) |		/* T0SZ (48-bit VA) */
-			(16ull << 7);		/* T1SZ (48-bit VA) */
+	const u64 tcr =
+		(1ull << 0) |		/* MME */
+		(16ull << 1) |		/* T0SZ (48-bit VA) */
+		(16ull << 7);		/* T1SZ (48-bit VA) */
 
 	/*
 	 * Program ACR1 privileged registers (see LinxISA manual).

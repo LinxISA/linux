@@ -16,6 +16,7 @@
 #include <linux/unistd.h>
 
 #include <asm/irq_regs.h>
+#include <asm/debug_uart.h>
 #include <asm/ptrace.h>
 #include <asm/ssr.h>
 #include <asm/thread_info.h>
@@ -133,12 +134,28 @@ static void linx_handle_syscall(struct pt_regs *regs)
 
 asmlinkage void linx_do_trap(struct pt_regs *regs)
 {
+	static unsigned int trap_debug_count;
 	const u64 trapno = regs->trapno;
 	const bool is_async = (trapno & LINX_TRAPNO_E_BIT) != 0;
 	const bool argv = (trapno & LINX_TRAPNO_ARGV_BIT) != 0;
 	const u8 trapnum = linx_trapno_trapnum(trapno);
 	const u32 cause = linx_trapno_cause(trapno);
 	const u64 pending = linx_ssr_read_ipending_acr1();
+
+	if (trap_debug_count < 8) {
+		linx_debug_uart_puts("\n[linx trap] n=");
+		linx_debug_uart_puthex_ulong((unsigned long)trapnum);
+		linx_debug_uart_puts(" c=");
+		linx_debug_uart_puthex_ulong((unsigned long)cause);
+		linx_debug_uart_puts(" a=");
+		linx_debug_uart_puthex_ulong((unsigned long)regs->traparg0);
+		linx_debug_uart_puts(" pc=");
+		linx_debug_uart_puthex_ulong((unsigned long)regs->regs[PTR_PC]);
+		linx_debug_uart_puts(" e=");
+		linx_debug_uart_puthex_ulong((unsigned long)is_async);
+		linx_debug_uart_puts("\n");
+		trap_debug_count++;
+	}
 
 	/*
 	 * IRQ handling (bring-up, v0.2):
@@ -165,23 +182,13 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 
 		if (irq_id == 0) {
 			/*
-			 * Early bring-up guard:
-			 * ignore timer ticks before the system reaches RUNNING.
-			 *
-			 * Otherwise the boot idle task can be preempted while still
-			 * carrying __init return frames, and a later reschedule may
-			 * jump back into freed init text.
+			 * Linx bring-up runtime gate:
+			 * keep timer IRQs masked to avoid scheduler tick paths
+			 * while trap/MMU return semantics are being stabilized.
 			 */
-			if (system_state < SYSTEM_RUNNING) {
-				/* Acknowledge and drop early boot timer ticks. */
-				linx_ssr_write_eoiei_acr1(irq_id);
-				set_irq_regs(old_regs);
-				return;
-			}
-
-			irq_enter();
-			linx_timer_handle_irq();
-			irq_exit();
+			linx_ssr_write_eoiei_acr1(irq_id);
+			set_irq_regs(old_regs);
+			return;
 		} else {
 			irq_enter();
 			generic_handle_irq((unsigned int)irq_id);
