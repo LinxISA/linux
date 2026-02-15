@@ -1711,18 +1711,6 @@ static int search_binary_handler(struct linux_binprm *bprm)
 	if (retval)
 		return retval;
 
-#if defined(CONFIG_LINX) && defined(CONFIG_BINFMT_ELF_FDPIC)
-	/*
-	 * LinxISA bring-up: the global binfmt list has been observed to get
-	 * corrupted during early boot. Avoid list traversal and call the only
-	 * required handler directly for now.
-	 */
-	retval = load_elf_fdpic_binary(bprm);
-	pr_err("LinxISA binfmt: load_elf_fdpic_binary(%pd2) -> %d\n",
-	       bprm->file ? bprm->file->f_path.dentry : NULL, retval);
-	return retval;
-#endif
-
 	read_lock(&binfmt_lock);
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('L');
@@ -1756,6 +1744,10 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			       fmt->load_binary);
 #endif
 			retval = fmt->load_binary(bprm);
+#ifdef CONFIG_LINX
+			pr_err("LinxISA binfmt: done fmt=%px load_binary=%px ret=%d\n",
+			       fmt, fmt->load_binary, retval);
+#endif
 #ifdef CONFIG_LINX
 			linx_debug_uart_putc('o');
 #endif

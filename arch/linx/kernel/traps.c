@@ -78,18 +78,10 @@ static bool linx_try_handle_page_fault(struct pt_regs *regs, unsigned long addr,
 	struct mm_struct *mm = current->mm ? current->mm : current->active_mm;
 	struct vm_area_struct *vma;
 	vm_fault_t fault;
-	unsigned int flags = 0;
+	unsigned int flags = FAULT_FLAG_DEFAULT;
 
 	if (!mm)
 		return false;
-
-	mmap_read_lock(mm);
-
-	vma = find_vma(mm, addr);
-	if (!vma || addr < vma->vm_start) {
-		mmap_read_unlock(mm);
-		return false;
-	}
 
 	if (is_instruction)
 		flags |= FAULT_FLAG_INSTRUCTION;
@@ -98,7 +90,58 @@ static bool linx_try_handle_page_fault(struct pt_regs *regs, unsigned long addr,
 	if (user_mode(regs))
 		flags |= FAULT_FLAG_USER;
 
+retry:
+	mmap_read_lock(mm);
+
+	vma = find_vma(mm, addr);
+	if (!vma) {
+		mmap_read_unlock(mm);
+		return false;
+	}
+
+	if (addr < vma->vm_start) {
+		if (!(vma->vm_flags & VM_GROWSDOWN)) {
+			mmap_read_unlock(mm);
+			return false;
+		}
+
+		mmap_read_unlock(mm);
+		mmap_write_lock(mm);
+
+		vma = find_vma(mm, addr);
+		if (!vma) {
+			mmap_write_unlock(mm);
+			return false;
+		}
+
+		if (addr < vma->vm_start) {
+			if (!(vma->vm_flags & VM_GROWSDOWN)) {
+				mmap_write_unlock(mm);
+				return false;
+			}
+			vma = expand_stack(mm, addr);
+			if (!vma) {
+				mmap_write_unlock(mm);
+				return false;
+			}
+		}
+
+		mmap_write_downgrade(mm);
+	}
+
 	fault = handle_mm_fault(vma, addr, flags, regs);
+	if (fault_signal_pending(fault, regs))
+		return true;
+
+	/* mmap lock already released by the core fault path. */
+	if (fault & VM_FAULT_COMPLETED)
+		return true;
+
+	if (fault & VM_FAULT_RETRY) {
+		flags |= FAULT_FLAG_TRIED;
+		goto retry;
+	}
+
 	mmap_read_unlock(mm);
 
 	if (!(fault & VM_FAULT_ERROR))
@@ -135,6 +178,7 @@ static void linx_handle_syscall(struct pt_regs *regs)
 asmlinkage void linx_do_trap(struct pt_regs *regs)
 {
 	static unsigned int trap_debug_count;
+	static unsigned int syscall_debug_count;
 	const u64 trapno = regs->trapno;
 	const bool is_async = (trapno & LINX_TRAPNO_E_BIT) != 0;
 	const bool argv = (trapno & LINX_TRAPNO_ARGV_BIT) != 0;
@@ -217,6 +261,25 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			return;
 		}
 		if (user_mode(regs)) {
+			const unsigned long nr = regs->regs[PTR_R9];
+			const unsigned long arg0 = regs->regs[PTR_R2];
+			const unsigned long arg1 = regs->regs[PTR_R3];
+			const unsigned long arg2 = regs->regs[PTR_R4];
+
+			if (syscall_debug_count < 24) {
+				linx_debug_uart_puts("\n[linx sys] nr=");
+				linx_debug_uart_puthex_ulong(nr);
+				linx_debug_uart_puts(" a0=");
+				linx_debug_uart_puthex_ulong(arg0);
+				linx_debug_uart_puts(" a1=");
+				linx_debug_uart_puthex_ulong(arg1);
+				linx_debug_uart_puts(" a2=");
+				linx_debug_uart_puthex_ulong(arg2);
+				linx_debug_uart_puts(" pc=");
+				linx_debug_uart_puthex_ulong(regs->regs[PTR_PC]);
+				linx_debug_uart_puts("\n");
+			}
+
 			/*
 			 * Trap entry arrives with CSTATE.I masked by hardware.
 			 * Linux syscalls must run with normal interrupt/preemption
@@ -226,6 +289,13 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			local_irq_enable();
 			linx_handle_syscall(regs);
 			local_irq_disable();
+
+			if (syscall_debug_count < 24) {
+				linx_debug_uart_puts("[linx sys] ret=");
+				linx_debug_uart_puthex_ulong(regs->regs[PTR_R2]);
+				linx_debug_uart_puts("\n");
+				syscall_debug_count++;
+			}
 			return;
 		}
 

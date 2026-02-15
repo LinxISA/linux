@@ -12,8 +12,8 @@ def main() -> int:
 
     o_dir = pathlib.Path(os.environ.get("O", str(linux_root / "build-linx-fixed")))
     qemu_default_candidates = [
-        pathlib.Path("/Users/zhoubot/qemu/build-tci/qemu-system-linx64"),
         pathlib.Path("/Users/zhoubot/qemu/build/qemu-system-linx64"),
+        pathlib.Path("/Users/zhoubot/qemu/build-tci/qemu-system-linx64"),
     ]
     qemu_default = next((p for p in qemu_default_candidates if p.exists()), qemu_default_candidates[0])
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
