@@ -7,3 +7,7 @@ UTS_MACHINE := linx64
 # Avoid generating .eh_frame sections.
 KBUILD_CFLAGS += -fno-asynchronous-unwind-tables -fno-unwind-tables
 
+# Bring-up: LinxISA does not support LLVM auto-vectorization yet. Disable both
+# loop and SLP vectorizers to avoid generating large vector IR (e.g. v1024i32)
+# that the backend cannot lower.
+KBUILD_CFLAGS += -fno-vectorize -fno-slp-vectorize

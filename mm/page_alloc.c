@@ -3871,14 +3871,30 @@ retry:
 			set_bit(ZONE_BELOW_HIGH, &zone->flags);
 
 check_alloc_wmark:
-		mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
-		if (!zone_watermark_fast(zone, order, mark,
-				       ac->highest_zoneidx, alloc_flags,
-				       gfp_mask)) {
-			int ret;
+			mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
+			if (!zone_watermark_fast(zone, order, mark,
+					       ac->highest_zoneidx, alloc_flags,
+					       gfp_mask)) {
+#ifdef CONFIG_LINX
+				if (unlikely(order == 0 && current && current->pid == 0)) {
+					static int printed_wmark;
 
-			if (cond_accept_memory(zone, order, alloc_flags))
-				goto try_this_zone;
+					if (printed_wmark++ < 8) {
+						long free_pages = zone_page_state(zone, NR_FREE_PAGES);
+						long unusable = __zone_watermark_unusable_free(zone, order, alloc_flags);
+
+						pr_emerg("LinxISA: wmark fail zone=%s mark=%lu free=%ld unusable=%ld eff=%ld reserve=%ld flags=%#x gfp=%#x\n",
+							 zone->name, mark, free_pages,
+							 unusable, free_pages - unusable,
+							 zone->lowmem_reserve[ac->highest_zoneidx],
+							 alloc_flags, gfp_mask);
+					}
+				}
+#endif
+				int ret;
+
+				if (cond_accept_memory(zone, order, alloc_flags))
+					goto try_this_zone;
 
 			/*
 			 * Watermark failed for this zone, but see if we can
@@ -3916,10 +3932,10 @@ check_alloc_wmark:
 		}
 
 try_this_zone:
-		page = rmqueue(zonelist_zone(ac->preferred_zoneref), zone, order,
-				gfp_mask, alloc_flags, ac->migratetype);
-		if (page) {
-			prep_new_page(page, order, gfp_mask, alloc_flags);
+			page = rmqueue(zonelist_zone(ac->preferred_zoneref), zone, order,
+					gfp_mask, alloc_flags, ac->migratetype);
+			if (page) {
+				prep_new_page(page, order, gfp_mask, alloc_flags);
 
 			/*
 			 * If this is a high-order atomic allocation then check
@@ -3928,12 +3944,36 @@ try_this_zone:
 			if (unlikely(alloc_flags & ALLOC_HIGHATOMIC))
 				reserve_highatomic_pageblock(page, order, zone);
 
-			return page;
-		} else {
-			if (cond_accept_memory(zone, order, alloc_flags))
-				goto try_this_zone;
+				return page;
+			} else {
+#ifdef CONFIG_LINX
+				if (unlikely(!page && order == 0 && current && current->pid == 0)) {
+					static int printed_rmqueue;
 
-			/* Try again if zone has deferred pages */
+					if (printed_rmqueue++ < 8) {
+						const unsigned int dbg_orders[] = { 0, 1, 2, 3, MAX_PAGE_ORDER };
+						unsigned int oi;
+
+						pr_emerg("LinxISA: rmqueue returned NULL zone=%s order=%u migratetype=%d alloc_flags=%#x gfp=%#x\n",
+							 zone->name, order, ac->migratetype,
+							 alloc_flags, gfp_mask);
+						if (ac->migratetype < MIGRATE_TYPES) {
+							for (oi = 0; oi < ARRAY_SIZE(dbg_orders); oi++) {
+								unsigned int o = dbg_orders[oi];
+								struct free_area *area = &zone->free_area[o];
+
+								pr_emerg("LinxISA: rmqueue dbg order%u nr_free=%lu empty_req=%d\n",
+									 o, area->nr_free,
+									 list_empty(&area->free_list[ac->migratetype]));
+							}
+						}
+					}
+				}
+#endif
+				if (cond_accept_memory(zone, order, alloc_flags))
+					goto try_this_zone;
+
+				/* Try again if zone has deferred pages */
 			if (deferred_pages_enabled()) {
 				if (_deferred_grow_zone(zone, order))
 					goto try_this_zone;
@@ -5189,6 +5229,9 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	unsigned int alloc_flags = ALLOC_WMARK_LOW;
 	gfp_t alloc_gfp; /* The gfp_t that was actually used for allocation */
 	struct alloc_context ac = { };
+#ifdef CONFIG_LINX
+	gfp_t linx_orig_gfp = gfp;
+#endif
 
 	/*
 	 * There are several places where we assume that the order value is sane
@@ -5234,6 +5277,55 @@ struct page *__alloc_frozen_pages_noprof(gfp_t gfp, unsigned int order,
 	page = __alloc_pages_slowpath(alloc_gfp, order, &ac);
 
 out:
+#ifdef CONFIG_LINX
+	if (unlikely(!page && order == 0 && current && current->pid == 0)) {
+		static int printed;
+		struct zone *zone = NULL;
+
+		if (printed++ < 8) {
+			if (ac.preferred_zoneref)
+				zone = zonelist_zone(ac.preferred_zoneref);
+
+			pr_emerg("LinxISA: __alloc_frozen_pages failed pid0 orig_gfp=%#x gfp=%#x alloc_gfp=%#x order=%u nid=%d flags=%#x allowed=%#x free=%lu\n",
+				 linx_orig_gfp, gfp, alloc_gfp, order,
+				 preferred_nid, alloc_flags, gfp_allowed_mask,
+				 nr_free_pages());
+			if (zone) {
+				const unsigned int dbg_orders[] = { 0, 1, 2, 3, MAX_PAGE_ORDER };
+				unsigned int oi;
+
+				pr_emerg("LinxISA: zone=%s free=%lu wmark(min/low/high)=%lu/%lu/%lu lowmem_reserve[0]=%lu\n",
+					 zone->name,
+					 zone_page_state(zone, NR_FREE_PAGES),
+					 wmark_pages(zone, WMARK_MIN),
+					 wmark_pages(zone, WMARK_LOW),
+					 wmark_pages(zone, WMARK_HIGH),
+					 zone->lowmem_reserve[0]);
+				pr_emerg("LinxISA: alloc_context highest_zoneidx=%d migratetype=%d\n",
+					 ac.highest_zoneidx, ac.migratetype);
+				pr_emerg("LinxISA: highatomic reserved=%lu free_highatomic=%lu\n",
+					 zone->nr_reserved_highatomic,
+					 READ_ONCE(zone->nr_free_highatomic));
+				pr_emerg("LinxISA: free_area nr_free order0=%lu order1=%lu order2=%lu order3=%lu\n",
+					 zone->free_area[0].nr_free,
+					 zone->free_area[1].nr_free,
+					 zone->free_area[2].nr_free,
+					 zone->free_area[3].nr_free);
+				for (oi = 0; oi < ARRAY_SIZE(dbg_orders); oi++) {
+					unsigned int o = dbg_orders[oi];
+					struct free_area *area = &zone->free_area[o];
+
+					pr_emerg("LinxISA: free_area order%u nr_free=%lu empty(U/M/R/HA)=%d/%d/%d/%d\n",
+						 o, area->nr_free,
+						 list_empty(&area->free_list[MIGRATE_UNMOVABLE]),
+						 list_empty(&area->free_list[MIGRATE_MOVABLE]),
+						 list_empty(&area->free_list[MIGRATE_RECLAIMABLE]),
+						 list_empty(&area->free_list[MIGRATE_HIGHATOMIC]));
+				}
+			}
+		}
+	}
+#endif
 	if (memcg_kmem_online() && (gfp & __GFP_ACCOUNT) && page &&
 	    unlikely(__memcg_kmem_charge_page(page, gfp, order) != 0)) {
 		free_frozen_pages(page, order);

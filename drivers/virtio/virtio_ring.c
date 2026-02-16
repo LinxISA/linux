@@ -269,6 +269,14 @@ static bool virtqueue_use_indirect(const struct vring_virtqueue *vq,
 
 static bool vring_use_map_api(const struct virtio_device *vdev)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * Linx v0.2 bring-up currently relies on DMA API cache maintenance for
+	 * virtio descriptor visibility (non-coherent CPU/device interactions).
+	 */
+	return true;
+#endif
+
 	if (!virtio_has_dma_quirk(vdev))
 		return true;
 

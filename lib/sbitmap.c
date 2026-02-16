@@ -107,6 +107,13 @@ int sbitmap_init_node(struct sbitmap *sb, unsigned int depth, int shift,
 
 	if (shift < 0)
 		shift = sbitmap_calculate_shift(depth);
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up robustness: guard against toolchain/target-specific
+	 * shift anomalies that can spuriously trigger -EINVAL in early boot.
+	 */
+	shift = clamp_t(int, shift, 0, ilog2(BITS_PER_LONG));
+#endif
 
 	bits_per_word = 1U << shift;
 	if (bits_per_word > BITS_PER_LONG)

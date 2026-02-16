@@ -30,6 +30,14 @@
 #define ELF_HWCAP		(0)
 #define ELF_PLATFORM		(NULL)
 
+#ifdef CONFIG_MMU
+/*
+ * Base address for PIE/ET_DYN programs with an interpreter (PT_INTERP).
+ * Keep it well above the low-address kernel image during bring-up.
+ */
+#define ELF_ET_DYN_BASE		0x40000000UL
+#endif
+
 /*
  * FDPIC loader ABI: pass the loadmap/dynamic addresses in a1/a2/a3, matching
  * the existing Linx scalar ABI register naming in Documentation/linxisa/abi.md.

@@ -7,6 +7,7 @@ if LINX
 
 config LINX_VIRT_UART_MARKERS
 	bool "Verbose virt UART marker output"
+	depends on LINX_DEBUG
 	default n
 	help
 	  Enable extremely low-level bring-up instrumentation which writes

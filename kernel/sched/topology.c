@@ -1246,7 +1246,7 @@ build_sched_groups(struct sched_domain *sd, int cpu)
 
 	cpumask_clear(covered);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_emerg("LinxISA: build_sched_groups cpu=%d span=%*pbl span_weight=%u first_cpu=%d\n",
 		 cpu, cpumask_pr_args(span), cpumask_weight(span), cpumask_first(span));
 #endif
@@ -1269,12 +1269,12 @@ build_sched_groups(struct sched_domain *sd, int cpu)
 	}
 
 	if (unlikely(!last)) {
-#ifdef CONFIG_LINX
-		pr_emerg("LinxISA: build_sched_groups produced no groups cpu=%d span=%*pbl\n",
-			 cpu, cpumask_pr_args(span));
+#ifdef CONFIG_LINX_DEBUG
+			pr_emerg("LinxISA: build_sched_groups produced no groups cpu=%d span=%*pbl\n",
+				 cpu, cpumask_pr_args(span));
 #endif
-		return -EINVAL;
-	}
+			return -EINVAL;
+		}
 	last->next = first;
 	sd->groups = first;
 
@@ -2391,9 +2391,10 @@ static void __sdt_free(const struct cpumask *cpu_map)
 			sgc = sdd->sgc ? *per_cpu_ptr(sdd->sgc, j) : NULL;
 
 #ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 			pr_emerg("LinxISA: __sdt_free tl=%s cpu=%d sd=%px sds=%px sg=%px sgc=%px\n",
 				 tl->name ?: "?", j, sd, sds, sg, sgc);
-
+#endif
 			if ((void *)sds == (void *)sd)
 				sds = NULL;
 			if ((void *)sg == (void *)sd || (void *)sg == (void *)sds)

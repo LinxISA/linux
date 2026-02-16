@@ -60,6 +60,11 @@ static struct console linx_virt_console = {
 
 static void __init linx_register_console(void)
 {
+	/*
+	 * LinxISA bring-up: prefer the virt UART for the kernel console even if
+	 * the device tree provides a different default.
+	 */
+	(void)add_preferred_console("ttyLINX", 0, NULL);
 	register_console(&linx_virt_console);
 }
 
@@ -145,6 +150,14 @@ void __init setup_arch(char **cmdline_p)
 	linx_virt_uart_putc('i');
 	unflatten_device_tree();
 	linx_virt_uart_putc('j');
+
+	/*
+	 * Initialize the Linx paging/MMU and the buddy allocator data structures.
+	 *
+	 * Must run before core mm initialization (mm_core_init -> memblock_free_all)
+	 * so that zones, struct page metadata, and the direct map are ready.
+	 */
+	paging_init();
 
 	linx_virt_uart_putc('\n');
 }

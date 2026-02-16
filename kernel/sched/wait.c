@@ -143,6 +143,13 @@ static int __wake_up_common_lock(struct wait_queue_head *wq_head, unsigned int m
 int __wake_up(struct wait_queue_head *wq_head, unsigned int mode,
 	      int nr_exclusive, void *key)
 {
+	unsigned long wq = (unsigned long)wq_head;
+
+	if (unlikely(!wq_head || wq < PAGE_SIZE || (wq & (sizeof(unsigned long) - 1)))) {
+		pr_alert("linx: __wake_up(bad wq_head=%px) ra=%pS\n",
+			 wq_head, __builtin_return_address(0));
+		return 0;
+	}
 	return __wake_up_common_lock(wq_head, mode, nr_exclusive, 0, key);
 }
 EXPORT_SYMBOL(__wake_up);

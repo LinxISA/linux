@@ -81,6 +81,9 @@
 #include <asm/irq_regs.h>
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #define CREATE_TRACE_POINTS
 #include <linux/sched/rseq_api.h>
@@ -5369,6 +5372,27 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	switch_mm_cid(rq, prev, next);
 
 	prepare_lock_switch(rq, next, rf);
+
+#ifdef CONFIG_LINX
+	do {
+		static int dbg_left = 16;
+
+		if (dbg_left <= 0)
+			break;
+		dbg_left--;
+		linx_debug_uart_puts("\n[linx switch] prev=");
+		linx_debug_uart_puthex_ulong((unsigned long)prev);
+		linx_debug_uart_puts(" next=");
+		linx_debug_uart_puthex_ulong((unsigned long)next);
+		linx_debug_uart_puts(" nsp=");
+		linx_debug_uart_puthex_ulong(next->thread.sp);
+		linx_debug_uart_puts(" nra=");
+		linx_debug_uart_puthex_ulong(next->thread.ra);
+		if (!next->thread.sp || !next->thread.ra)
+			linx_debug_uart_puts(" ZERO");
+		linx_debug_uart_puts("\n");
+	} while (0);
+#endif
 
 	/* Here we just switch the register state and the stack. */
 	switch_to(prev, next, prev);

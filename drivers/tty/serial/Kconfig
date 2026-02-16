@@ -18,6 +18,24 @@ source "drivers/tty/serial/8250/Kconfig"
 
 comment "Non-8250 serial port support"
 
+config SERIAL_LINX_VIRT_UART
+	tristate "LinxISA QEMU virt UART support"
+	depends on LINX || COMPILE_TEST
+	select SERIAL_CORE
+	help
+	  Support for the simple UART device provided by the LinxISA QEMU "virt"
+	  machine. The device exposes a single DATA register and a STATUS register
+	  with TX_READY/RX_READY bits, and is described in DT with:
+	    compatible = "linx,virt-uart"
+
+config SERIAL_LINX_VIRT_UART_CONSOLE
+	bool "Support for console on LinxISA virt UART"
+	depends on SERIAL_LINX_VIRT_UART=y
+	select SERIAL_CORE_CONSOLE
+	help
+	  Say Y here to use the LinxISA QEMU virt UART as the system console
+	  (e.g. pass "console=ttyS0" on the kernel command line).
+
 config SERIAL_AMBA_PL010
 	tristate "ARM AMBA PL010 serial port support"
 	depends on ARM_AMBA || COMPILE_TEST

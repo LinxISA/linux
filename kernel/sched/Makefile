@@ -24,7 +24,7 @@ endif
 
 ifdef CONFIG_LINX
 # Bring-up workaround: avoid scheduler miscompiles under optimization.
-CFLAGS_core.o += -O0
+CFLAGS_core.o += -Og
 endif
 
 # Branch profiling isn't noinstr-safe

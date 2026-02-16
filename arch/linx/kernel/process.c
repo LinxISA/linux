@@ -10,6 +10,7 @@
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/switch_to.h>
+#include <asm/debug_uart.h>
 
 unsigned long __get_wchan(struct task_struct *p)
 {
@@ -25,7 +26,7 @@ asmlinkage void __noreturn linx_ret_from_fork(struct task_struct *prev)
 	void *fn_arg;
 	int ret = 0;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: ret_from_fork enter pid=%d prev=%px fn=%px arg=%px\n",
 	       current->pid, prev,
 	       (void *)current->thread.kthread_fn,
@@ -34,7 +35,7 @@ asmlinkage void __noreturn linx_ret_from_fork(struct task_struct *prev)
 
 	schedule_tail(prev);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: ret_from_fork after schedule_tail pid=%d\n", current->pid);
 #endif
 
@@ -80,6 +81,29 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	p->thread.ra = (unsigned long)linx_ret_from_fork;
 	p->thread.sp = (unsigned long)regs;
 	memset(p->thread.s, 0, sizeof(p->thread.s));
+
+	/*
+	 * Early bring-up probe: log a few copy_thread products so we can
+	 * correlate scheduler next-task pointers with thread context setup.
+	 */
+	do {
+		static int dbg_left = 8;
+
+		if (dbg_left <= 0)
+			break;
+		dbg_left--;
+		linx_debug_uart_puts("\n[linx copy_thread] p=");
+		linx_debug_uart_puthex_ulong((unsigned long)p);
+		linx_debug_uart_puts(" ra=");
+		linx_debug_uart_puthex_ulong(p->thread.ra);
+		linx_debug_uart_puts(" sp=");
+		linx_debug_uart_puthex_ulong(p->thread.sp);
+		linx_debug_uart_puts(" fn=");
+		linx_debug_uart_puthex_ulong((unsigned long)args->fn);
+		linx_debug_uart_puts(" idle=");
+		linx_debug_uart_puthex_ulong((unsigned long)args->idle);
+		linx_debug_uart_puts("\n");
+	} while (0);
 
 	return 0;
 }

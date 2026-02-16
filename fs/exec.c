@@ -72,6 +72,9 @@
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #include <trace/events/task.h>
 #include "internal.h"
@@ -1691,32 +1694,35 @@ static int search_binary_handler(struct linux_binprm *bprm)
 	struct linux_binfmt *fmt;
 	int retval;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('p');
+#endif
 	retval = prepare_binprm(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('P');
+#endif
 	if (retval < 0)
 		return retval;
 
 	retval = security_bprm_check(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('C');
+#endif
 	if (retval)
 		return retval;
 
-#if defined(CONFIG_LINX) && defined(CONFIG_BINFMT_ELF_FDPIC)
-	/*
-	 * LinxISA bring-up: the global binfmt list has been observed to get
-	 * corrupted during early boot. Avoid list traversal and call the only
-	 * required handler directly for now.
-	 */
-	retval = load_elf_fdpic_binary(bprm);
-	pr_err("LinxISA binfmt: load_elf_fdpic_binary(%pd2) -> %d\n",
-	       bprm->file ? bprm->file->f_path.dentry : NULL, retval);
-	return retval;
-#endif
-
 	read_lock(&binfmt_lock);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('L');
+#endif
 #ifdef CONFIG_LINX
 	pr_err("LinxISA binfmt: formats head next=%px prev=%px\n",
 	       formats.next, formats.prev);
 #endif
 	list_for_each_entry(fmt, &formats, lh) {
+#ifdef CONFIG_LINX
+		linx_debug_uart_putc('i');
+#endif
 		if (!try_module_get(fmt->module))
 			continue;
 		read_unlock(&binfmt_lock);
@@ -1728,10 +1734,23 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			retval = -ENOEXEC;
 		} else {
 #ifdef CONFIG_LINX
+			linx_debug_uart_putc('b');
+			linx_debug_uart_putc('[');
+			linx_debug_uart_puthex_ulong((unsigned long)fmt->load_binary);
+			linx_debug_uart_putc(']');
+#endif
+#ifdef CONFIG_LINX
 			pr_err("LinxISA binfmt: try fmt=%px load_binary=%px\n", fmt,
 			       fmt->load_binary);
 #endif
 			retval = fmt->load_binary(bprm);
+#ifdef CONFIG_LINX
+			pr_err("LinxISA binfmt: done fmt=%px load_binary=%px ret=%d\n",
+			       fmt, fmt->load_binary, retval);
+#endif
+#ifdef CONFIG_LINX
+			linx_debug_uart_putc('o');
+#endif
 		}
 		read_lock(&binfmt_lock);
 		put_binfmt(fmt);
@@ -1751,6 +1770,9 @@ static int exec_binprm(struct linux_binprm *bprm)
 	pid_t old_pid, old_vpid;
 	int ret, depth;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('H');
+#endif
 	/* Need to fetch pid before load_binary changes it */
 	old_pid = current->pid;
 	rcu_read_lock();
@@ -1758,16 +1780,22 @@ static int exec_binprm(struct linux_binprm *bprm)
 	rcu_read_unlock();
 
 	/* This allows 4 levels of binfmt rewrites before failing hard. */
-	for (depth = 0;; depth++) {
-		struct file *exec;
-		if (depth > 5)
-			return -ELOOP;
+		for (depth = 0;; depth++) {
+			struct file *exec;
+			if (depth > 5)
+				return -ELOOP;
 
-		ret = search_binary_handler(bprm);
-		if (ret < 0)
-			return ret;
-		if (!bprm->interpreter)
-			break;
+#ifdef CONFIG_LINX
+			linx_debug_uart_putc('h');
+#endif
+			ret = search_binary_handler(bprm);
+#ifdef CONFIG_LINX
+			linx_debug_uart_putc('r');
+#endif
+			if (ret < 0)
+				return ret;
+			if (!bprm->interpreter)
+				break;
 
 		exec = bprm->file;
 		bprm->file = bprm->interpreter;
@@ -1795,7 +1823,13 @@ static int bprm_execve(struct linux_binprm *bprm)
 {
 	int retval;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('1');
+#endif
 	retval = prepare_bprm_creds(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('2');
+#endif
 	if (retval)
 		return retval;
 
@@ -1812,10 +1846,19 @@ static int bprm_execve(struct linux_binprm *bprm)
 
 	/* Set the unchanging part of bprm->cred */
 	retval = security_bprm_creds_for_exec(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('3');
+#endif
 	if (retval || bprm->is_check)
 		goto out;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('4');
+#endif
 	retval = exec_binprm(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('5');
+#endif
 	if (retval < 0)
 		goto out;
 
@@ -1938,15 +1981,24 @@ int kernel_execve(const char *kernel_filename,
 	int fd = AT_FDCWD;
 	int retval;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('E');
+#endif
 	/* It is non-sense for kernel threads to call execve */
 	if (WARN_ON_ONCE(current->flags & PF_KTHREAD))
 		return -EINVAL;
 
 	filename = getname_kernel(kernel_filename);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('n');
+#endif
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
 
 	bprm = alloc_bprm(fd, filename, 0);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('b');
+#endif
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
 		goto out_ret;
@@ -1965,23 +2017,41 @@ int kernel_execve(const char *kernel_filename,
 	bprm->envc = retval;
 
 	retval = bprm_stack_limits(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('s');
+#endif
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_string_kernel(bprm->filename, bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('f');
+#endif
 	if (retval < 0)
 		goto out_free;
 	bprm->exec = bprm->p;
 
 	retval = copy_strings_kernel(bprm->envc, envp, bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('v');
+#endif
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('a');
+#endif
 	if (retval < 0)
 		goto out_free;
 
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('X');
+#endif
 	retval = bprm_execve(bprm);
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('R');
+#endif
 out_free:
 	free_bprm(bprm);
 out_ret:

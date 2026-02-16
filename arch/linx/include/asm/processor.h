@@ -2,16 +2,27 @@
 #ifndef _ASM_LINX_PROCESSOR_H
 #define _ASM_LINX_PROCESSOR_H
 
+#include <linux/const.h>
+
 #include <asm/page.h>
 #include <asm/thread_info.h>
 #include <asm/ptrace.h>
 #include <asm/ssr.h>
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #define STACK_ALIGN 16
 
 #ifdef CONFIG_MMU
-/* Bring-up currently targets NOMMU; fill in once VM layout exists. */
-#define TASK_SIZE	0UL
+/*
+ * v0.2 bring-up profile: 48-bit canonical VA, user space in the low half
+ * (VA[47]=0). Keep kernel mappings at low addresses for now, but place user
+ * mappings and stacks far from the kernel image by using the default mmap base
+ * near TASK_SIZE/3.
+ */
+#define TASK_SIZE	(UL(1) << 47)
+#define TASK_UNMAPPED_BASE	PAGE_ALIGN(TASK_SIZE / 3)
 #else
 /*
  * NOMMU: user mappings are allocated from available RAM and returned as
@@ -80,6 +91,16 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 	ecstate |= LINX_CSTATE_I_BIT;
 	ecstate = (ecstate & ~LINX_CSTATE_ACR_MASK) | LINX_CSTATE_ACR_USER;
 	regs->ecstate = ecstate;
+
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('J');
+	linx_debug_uart_puthex_ulong(pc);
+	linx_debug_uart_putc('j');
+	linx_debug_uart_puthex_ulong(sp);
+	linx_debug_uart_putc('e');
+	linx_debug_uart_puthex_ulong(regs->ecstate);
+	linx_debug_uart_putc('\n');
+#endif
 }
 
 #define cpu_relax()	barrier()

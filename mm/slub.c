@@ -49,11 +49,17 @@
 #include <linux/debugfs.h>
 #include <trace/events/kmem.h>
 
+#include "internal.h"
+
 #ifdef CONFIG_LINX
 #include <asm/debug_uart.h>
-#endif
 
-#include "internal.h"
+static __always_inline bool linx_slub_watch_ptr(const void *p)
+{
+	(void)p;
+	return false;
+}
+#endif
 
 /*
  * Lock order:
@@ -3310,6 +3316,8 @@ static __always_inline void unaccount_slab(struct slab *slab, int order,
 			    -(PAGE_SIZE << order));
 }
 
+static struct kmem_cache *kmem_cache_node;
+
 static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 {
 	bool allow_spin = gfpflags_allow_spinning(flags);
@@ -3339,6 +3347,15 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 	slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
 	if (unlikely(!slab)) {
 #ifdef CONFIG_LINX
+		if (s == kmem_cache_node) {
+			static int printed_kmn;
+
+			if (printed_kmn++ < 8)
+				pr_emerg("SLUB: alloc_slab_page failed for kmem_cache_node order=%u flags=%#x alloc_gfp=%#x allowed=%#x node=%d allow_spin=%d free=%lu\n",
+					 oo_order(oo), flags, alloc_gfp,
+					 gfp_allowed_mask, node, allow_spin,
+					 nr_free_pages());
+		}
 		if (is_kmalloc_cache(s)) {
 			static int printed;
 
@@ -3357,6 +3374,15 @@ static struct slab *allocate_slab(struct kmem_cache *s, gfp_t flags, int node)
 		slab = alloc_slab_page(alloc_gfp, node, oo, allow_spin);
 		if (unlikely(!slab)) {
 #ifdef CONFIG_LINX
+			if (s == kmem_cache_node) {
+				static int printed_kmn2;
+
+				if (printed_kmn2++ < 8)
+					pr_emerg("SLUB: alloc_slab_page fallback failed for kmem_cache_node order=%u flags=%#x alloc_gfp=%#x allowed=%#x node=%d allow_spin=%d free=%lu\n",
+						 oo_order(oo), flags, alloc_gfp,
+						 gfp_allowed_mask, node, allow_spin,
+						 nr_free_pages());
+			}
 			if (is_kmalloc_cache(s)) {
 				static int printed2;
 
@@ -4949,14 +4975,6 @@ static __always_inline void *__slab_alloc_node(struct kmem_cache *s,
 	void *object;
 
 redo:
-#ifdef CONFIG_LINX
-		if (orig_size == 56 && current->pid == 1) {
-			barrier();
-			linx_debug_uart_putc('1');
-			barrier();
-		}
-#endif
-
 	/*
 	 * Must read kmem_cache cpu data via this cpu ptr. Preemption is
 	 * enabled. We may switch back and forth between cpus while
@@ -4991,14 +5009,6 @@ redo:
 
 	object = c->freelist;
 	slab = c->slab;
-
-#ifdef CONFIG_LINX
-		if (orig_size == 56 && current->pid == 1) {
-			barrier();
-			linx_debug_uart_putc('2');
-			barrier();
-		}
-#endif
 
 #ifdef CONFIG_NUMA
 	if (static_branch_unlikely(&strict_numa) &&
@@ -5045,32 +5055,10 @@ redo:
 		 * against code executing on this cpu *not* from access by
 		 * other cpus.
 		 */
-#ifdef CONFIG_LINX
-			if (orig_size == 56 && current->pid == 1) {
-				barrier();
-				linx_debug_uart_putc('F');
-				barrier();
-			}
-#endif
 			if (unlikely(!__update_cpu_freelist_fast(s, object, next_object, tid))) {
-#ifdef CONFIG_LINX
-				if (orig_size == 56 && current->pid == 1) {
-					static int linx_cmpxchg_fails;
-
-					if (linx_cmpxchg_fails++ < 20)
-						linx_debug_uart_putc('X');
-				}
-#endif
 				note_cmpxchg_failure("slab_alloc", s, tid);
 				goto redo;
 			}
-#ifdef CONFIG_LINX
-			if (orig_size == 56 && current->pid == 1) {
-				barrier();
-				linx_debug_uart_putc('f');
-				barrier();
-			}
-#endif
 			prefetch_freepointer(s, next_object);
 			stat(s, ALLOC_FASTPATH);
 	}
@@ -5078,31 +5066,9 @@ redo:
 	goto out;
 
 slow_path:
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1) {
-		barrier();
-		linx_debug_uart_putc('S');
-		barrier();
-	}
-#endif
 	object = __slab_alloc(s, gfpflags, node, addr, c, orig_size);
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1) {
-		barrier();
-		linx_debug_uart_putc('s');
-		barrier();
-	}
-#endif
 
 out:
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1) {
-		barrier();
-		linx_debug_uart_putc('3');
-		barrier();
-	}
-#endif
-
 #ifdef CONFIG_LINX
 	{
 		void *watch = READ_ONCE(linx_slub_alloc_watch_ptr);
@@ -5507,60 +5473,24 @@ static __fastpath_inline void *slab_alloc_node(struct kmem_cache *s, struct list
 	void *object;
 	bool init = false;
 
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1) {
-		static int once;
-
-		if (!once) {
-			once = 1;
-			linx_debug_uart_puts("\nKM56:");
-		}
-		linx_debug_uart_putc('a');
-	}
-#endif
-
 	s = slab_pre_alloc_hook(s, gfpflags);
 	if (unlikely(!s))
 		return NULL;
-
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('b');
-#endif
 
 	object = kfence_alloc(s, orig_size, gfpflags);
 	if (unlikely(object))
 		goto out;
 
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('c');
-#endif
-
 	if (s->cpu_sheaves)
 		object = alloc_from_pcs(s, gfpflags, node);
 
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('d');
-#endif
-
 	if (!object)
 		object = __slab_alloc_node(s, gfpflags, node, addr, orig_size);
-
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('e');
-#endif
 
 	maybe_wipe_obj_freeptr(s, object);
 	init = slab_want_init_on_alloc(gfpflags, s);
 
 out:
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('f');
-#endif
 	/*
 	 * When init equals 'true', like for kzalloc() family, only
 	 * @orig_size bytes might be zeroed instead of s->object_size
@@ -5568,11 +5498,6 @@ out:
 	 * object is set to NULL
 	 */
 	slab_post_alloc_hook(s, lru, gfpflags, 1, &object, init, orig_size);
-
-#ifdef CONFIG_LINX
-	if (orig_size == 56 && current->pid == 1)
-		linx_debug_uart_putc('g');
-#endif
 
 	return object;
 }
@@ -6048,7 +5973,23 @@ EXPORT_SYMBOL_GPL(kmalloc_nolock_noprof);
 void *__kmalloc_node_track_caller_noprof(DECL_BUCKET_PARAMS(size, b), gfp_t flags,
 					 int node, unsigned long caller)
 {
-	return __do_kmalloc_node(size, PASS_BUCKET_PARAM(b), flags, node, caller);
+	void *ret = __do_kmalloc_node(size, PASS_BUCKET_PARAM(b), flags, node, caller);
+
+#ifdef CONFIG_LINX
+	if (linx_slub_watch_ptr(ret)) {
+		linx_debug_uart_putc('k');
+		linx_debug_uart_puthex_ulong((unsigned long)ret);
+		linx_debug_uart_putc('c');
+		linx_debug_uart_puthex_ulong(caller);
+		linx_debug_uart_putc('s');
+		linx_debug_uart_puthex_ulong(size);
+		linx_debug_uart_putc('\n');
+		pr_err("linx: kmalloc suspicious ret=%px size=%zu flags=0x%x node=%d caller=%pS (0x%lx)\n",
+		       ret, size, flags, node, (void *)caller, caller);
+	}
+#endif
+
+	return ret;
 
 }
 EXPORT_SYMBOL(__kmalloc_node_track_caller_noprof);
@@ -7341,6 +7282,64 @@ __do_krealloc(const void *p, size_t new_size, unsigned long align, gfp_t flags, 
 alloc_new:
 	ret = kmalloc_node_track_caller_noprof(new_size, flags, nid, _RET_IP_);
 	if (ret && p) {
+#ifdef CONFIG_LINX
+		if (linx_slub_watch_ptr(p) || linx_slub_watch_ptr(ret)) {
+			static bool linx_once;
+			unsigned long linx_ra = 0;
+			unsigned long linx_sp = 0;
+			unsigned long linx_sp0 = 0;
+			unsigned long linx_sp1 = 0;
+			unsigned long linx_sp2 = 0;
+			unsigned long linx_sp3 = 0;
+			unsigned long linx_sp43 = 0;
+			unsigned long linx_sp44 = 0;
+			unsigned long *linx_sp_ptr;
+
+			asm volatile("c.movr ra, ->%0" : "=r"(linx_ra));
+			asm volatile("c.movr sp, ->%0" : "=r"(linx_sp));
+			linx_sp_ptr = (unsigned long *)linx_sp;
+			linx_sp0 = linx_sp_ptr[0];
+			linx_sp1 = linx_sp_ptr[1];
+			linx_sp2 = linx_sp_ptr[2];
+			linx_sp3 = linx_sp_ptr[3];
+			linx_sp43 = linx_sp_ptr[43];
+			linx_sp44 = linx_sp_ptr[44];
+			linx_debug_uart_putc('R');
+			linx_debug_uart_puthex_ulong((unsigned long)p);
+			linx_debug_uart_putc('r');
+			linx_debug_uart_puthex_ulong((unsigned long)ret);
+			linx_debug_uart_putc('c');
+			linx_debug_uart_puthex_ulong((unsigned long)__builtin_return_address(0));
+			linx_debug_uart_putc('q');
+			linx_debug_uart_puthex_ulong(linx_ra);
+			linx_debug_uart_putc('S');
+			linx_debug_uart_puthex_ulong(linx_sp);
+			linx_debug_uart_putc('Q');
+			linx_debug_uart_puthex_ulong(linx_sp0);
+			linx_debug_uart_putc('W');
+			linx_debug_uart_puthex_ulong(linx_sp1);
+			linx_debug_uart_putc('E');
+			linx_debug_uart_puthex_ulong(linx_sp2);
+			linx_debug_uart_putc('F');
+			linx_debug_uart_puthex_ulong(linx_sp3);
+			linx_debug_uart_putc('G');
+			linx_debug_uart_puthex_ulong(linx_sp43);
+			linx_debug_uart_putc('H');
+			linx_debug_uart_puthex_ulong(linx_sp44);
+			linx_debug_uart_putc('n');
+			linx_debug_uart_puthex_ulong(new_size);
+			linx_debug_uart_putc('o');
+			linx_debug_uart_puthex_ulong(orig_size ?: ks);
+			linx_debug_uart_putc('\n');
+			pr_err("linx: krealloc suspicious p=%px ret=%px new=%zu ks=%zu orig=%d flags=0x%x nid=%d caller=%pS\n",
+			       p, ret, new_size, ks, orig_size, flags, nid,
+			       __builtin_return_address(0));
+			if (!linx_once) {
+				linx_once = true;
+				dump_stack();
+			}
+		}
+#endif
 		/* Disable KASAN checks as the object's redzone is accessed. */
 		kasan_disable_current();
 		memcpy(ret, kasan_reset_tag(p), orig_size ?: ks);

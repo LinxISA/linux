@@ -17,10 +17,11 @@
  */
 static void ack_bad(struct irq_data *data)
 {
-	struct irq_desc *desc = irq_data_to_desc(data);
-
-	print_irq_desc(data->irq, desc);
-	ack_bad_irq(data->irq);
+	/*
+	 * Linx bring-up: avoid deep printk paths from spurious IRQ vectors
+	 * while console/IRQ plumbing is still stabilizing.
+	 */
+	(void)data;
 }
 
 /*

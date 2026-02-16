@@ -2864,7 +2864,6 @@ int kern_path(const char *name, unsigned int flags, struct path *path)
 
 	putname(filename);
 	return ret;
-
 }
 EXPORT_SYMBOL(kern_path);
 

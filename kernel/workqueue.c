@@ -59,7 +59,7 @@
 
 #include "workqueue_internal.h"
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 static void linx_wq_dbg_worker(const char *tag, struct worker *worker);
 void linx_memcpy_watch_set(void *lo, void *hi, const char *tag);
 void linx_memcpy_watch_clear(void);
@@ -1068,7 +1068,7 @@ static void worker_enter_idle(struct worker *worker)
 {
 	struct worker_pool *pool = worker->pool;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (unlikely((worker->flags & WORKER_IDLE) ||
 		     (!list_empty(&worker->entry) &&
 		      (worker->hentry.next || worker->hentry.pprev))))
@@ -1108,7 +1108,7 @@ static void worker_leave_idle(struct worker *worker)
 {
 	struct worker_pool *pool = worker->pool;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (unlikely(!(worker->flags & WORKER_IDLE)))
 		linx_wq_dbg_worker("worker_leave_idle bad", worker);
 #endif
@@ -2687,7 +2687,7 @@ static struct worker *alloc_worker(int node)
 
 	worker = kzalloc_node(sizeof(*worker), GFP_KERNEL, node);
 	if (worker) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 		linx_slub_debug_dump_obj(worker, "alloc_worker:after_kzalloc_node");
 #endif
 		INIT_LIST_HEAD(&worker->entry);
@@ -2822,8 +2822,8 @@ static struct worker *create_worker(struct worker_pool *pool)
 {
 	struct worker *worker;
 	int id;
+#ifdef CONFIG_LINX_DEBUG
 	static int linx_create_dbg;
-#ifdef CONFIG_LINX
 	int linx_dbg_id;
 #endif
 
@@ -2841,7 +2841,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 		goto fail;
 	}
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	linx_dbg_id = linx_create_dbg++;
 	if (linx_dbg_id < 16)
 		linx_wq_dbg_worker("create_worker after alloc_worker", worker);
@@ -2857,7 +2857,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 
 	worker->id = id;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (linx_dbg_id < 16)
 		linx_wq_dbg_worker("create_worker after worker->id", worker);
 #endif
@@ -2867,25 +2867,25 @@ static struct worker *create_worker(struct worker_pool *pool)
 		struct task_struct *task;
 
 		format_worker_id(id_buf, sizeof(id_buf), worker, pool);
-#ifdef CONFIG_LINX
-		linx_memcpy_watch_set(worker, (char *)worker + sizeof(*worker),
-				      "create_worker:kthread_create");
-		linx_slub_alloc_watch_set(worker, "create_worker:kthread_create");
+#ifdef CONFIG_LINX_DEBUG
+	linx_memcpy_watch_set(worker, (char *)worker + sizeof(*worker),
+			      "create_worker:kthread_create");
+	linx_slub_alloc_watch_set(worker, "create_worker:kthread_create");
 #endif
 		task = kthread_create_on_node(worker_thread, worker,
 					      pool->node, "%s", id_buf);
-#ifdef CONFIG_LINX
-		linx_slub_alloc_watch_clear();
-		linx_memcpy_watch_clear();
+#ifdef CONFIG_LINX_DEBUG
+	linx_slub_alloc_watch_clear();
+	linx_memcpy_watch_clear();
 #endif
-#ifdef CONFIG_LINX
-		if (linx_dbg_id < 16)
-			linx_wq_dbg_worker("create_worker after kthread_create (pre-store)", worker);
+#ifdef CONFIG_LINX_DEBUG
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker after kthread_create (pre-store)", worker);
 #endif
 		worker->task = task;
-#ifdef CONFIG_LINX
-		if (linx_dbg_id < 16)
-			linx_wq_dbg_worker("create_worker after kthread_create (post-store)", worker);
+#ifdef CONFIG_LINX_DEBUG
+	if (linx_dbg_id < 16)
+		linx_wq_dbg_worker("create_worker after kthread_create (post-store)", worker);
 #endif
 		if (IS_ERR(worker->task)) {
 			if (PTR_ERR(worker->task) == -EINTR) {
@@ -2905,7 +2905,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 	/* successful, attach the worker to the pool */
 	worker_attach_to_pool(worker, pool);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (linx_dbg_id < 16)
 		linx_wq_dbg_worker("create_worker after attach", worker);
 #endif
@@ -2914,7 +2914,7 @@ static struct worker *create_worker(struct worker_pool *pool)
 	raw_spin_lock_irq(&pool->lock);
 
 	worker->pool->nr_workers++;
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (linx_dbg_id < 16)
 		linx_wq_dbg_worker("create_worker before enter_idle", worker);
 #endif
@@ -3240,7 +3240,7 @@ static bool manage_workers(struct worker *worker)
 	return true;
 }
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 static void linx_wq_dbg_worker(const char *tag, struct worker *worker)
 {
 	if (!worker) {
@@ -3310,11 +3310,13 @@ __acquires(&pool->lock)
 	worker->current_func = work->func;
 #ifdef CONFIG_LINX
 	if (unlikely(!worker->current_func)) {
+#ifdef CONFIG_LINX_DEBUG
 		static int warned;
 
 		if (warned++ < 32)
 			pr_err("LinxISA: process_one_work: NULL work->func (work=%px)\n",
 			       work);
+#endif
 		worker->current_func = linx_workqueue_null_workfn;
 	}
 #endif
@@ -3536,7 +3538,7 @@ recheck:
 	 * preparing to process a work or actually processing it.
 	 * Make sure nobody diddled with it while I was sleeping.
 	 */
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (unlikely(!list_empty(&worker->scheduled)))
 		linx_wq_dbg_worker("worker_thread scheduled!=empty", worker);
 #endif
@@ -8036,11 +8038,11 @@ static void __init wq_cpu_intensive_thresh_init(void)
 	unsigned long thresh;
 	unsigned long bogo;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: wq_cpu_intensive_thresh_init: creating pwq_release_worker\n");
 #endif
 	pwq_release_worker = kthread_run_worker(0, "pool_workqueue_release");
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: wq_cpu_intensive_thresh_init: pwq_release_worker=%px\n",
 	       pwq_release_worker);
 #endif
@@ -8092,17 +8094,17 @@ void __init workqueue_init(void)
 	struct worker_pool *pool;
 	int cpu, bkt;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init start\n");
 #endif
 	wq_cpu_intensive_thresh_init();
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init after thresh init\n");
 #endif
 
 	mutex_lock(&wq_pool_mutex);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init got wq_pool_mutex\n");
 #endif
 
@@ -8125,7 +8127,7 @@ void __init workqueue_init(void)
 
 	mutex_unlock(&wq_pool_mutex);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init pools fixed\n");
 #endif
 
@@ -8139,7 +8141,7 @@ void __init workqueue_init(void)
 		for_each_bh_worker_pool(pool, cpu)
 			BUG_ON(!create_worker(pool));
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init BH workers created\n");
 #endif
 
@@ -8150,14 +8152,14 @@ void __init workqueue_init(void)
 		}
 	}
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init per-cpu workers created\n");
 #endif
 
 	hash_for_each(unbound_pool_hash, bkt, pool, hash_node)
 		BUG_ON(!create_worker(pool));
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("Linx dbg: workqueue_init unbound workers created\n");
 #endif
 

@@ -6,7 +6,7 @@
 #include <asm/page.h>
 #include <linux/compiler.h>
 
-#define THREAD_SHIFT 14
+#define THREAD_SHIFT 17
 #define THREAD_SIZE (_AC(1, UL) << THREAD_SHIFT)
 #define THREAD_SIZE_ORDER (THREAD_SHIFT - PAGE_SHIFT)
 

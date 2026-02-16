@@ -31,7 +31,11 @@ quick-start scripts.
 3. Define and iterate the LinxISA ABI docs in `Documentation/linxisa/abi.md`.
 4. Add `arch/linx/` incrementally until `vmlinux` boots on QEMU `virt`.
 
-For the detailed milestone checklist, see `/Users/zhoubot/qemu/docs/linxisa/bringup-plan.md`.
+For the detailed milestone checklist (including the gap-to-“full Linux”
+checklist), see the canonical bring-up plan:
+`/Users/zhoubot/linux/Documentation/linxisa/bringup-plan.md`.
+It is mirrored into the QEMU repo at `/Users/zhoubot/qemu/docs/linxisa/bringup-plan.md`
+and can be synced via `cd /Users/zhoubot/linux && tools/linxisa/sync-docs.sh`.
 
 For the current boot status, known issues, and next steps, see
 `Documentation/linxisa/bringup-status.md`.
@@ -54,8 +58,7 @@ cd /Users/zhoubot/linux/tools/linxisa/initramfs
 You should land at a `# ` prompt from the bring-up initramfs `/init`. Try
 `help`, `ls /`, `probe /init`, `cat /no-such`.
 
-Smoke test (kills QEMU after a timeout because the guest currently halts
-without triggering a QEMU shutdown request):
+Smoke test:
 
 ```bash
 cd /Users/zhoubot/linux

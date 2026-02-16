@@ -621,7 +621,7 @@ EXPORT_SYMBOL(memset64);
  * You should not use this function to access IO space, use memcpy_toio()
  * or memcpy_fromio() instead.
  */
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 void *linx_memcpy_watch_lo;
 void *linx_memcpy_watch_hi;
 const char *linx_memcpy_watch_tag;
@@ -639,11 +639,11 @@ void linx_memcpy_watch_clear(void)
 	WRITE_ONCE(linx_memcpy_watch_hi, NULL);
 	WRITE_ONCE(linx_memcpy_watch_tag, NULL);
 }
-#endif /* CONFIG_LINX */
+#endif /* CONFIG_LINX_DEBUG */
 
 void *memcpy(void *dest, const void *src, size_t count)
 {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	/*
 	 * Save the initial return address as early as possible. This is the
 	 * callsite that entered memcpy(). The function becomes non-leaf once we
@@ -708,7 +708,7 @@ void *memcpy(void *dest, const void *src, size_t count)
 			panic("LinxISA: memcpy watch hit");
 		}
 	}
-#endif /* CONFIG_LINX */
+#endif /* CONFIG_LINX_DEBUG */
 
 	char *tmp = dest;
 	const char *s = src;

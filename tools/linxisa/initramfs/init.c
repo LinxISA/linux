@@ -59,6 +59,8 @@ static inline slong sys_write(slong fd, const void *buf, ulong count)
 		"c.movr %3, ->a2\n"
 		"addi zero, 64, ->a7\n"
 		"acrc 1\n"
+		"c.bstop\n"
+		"C.BSTART\n"
 		"c.movr a0, ->%0\n"
 		: "=r"(ret)
 		: "r"(fd), "r"(buf), "r"(count)

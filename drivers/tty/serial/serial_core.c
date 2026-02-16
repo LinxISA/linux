@@ -32,6 +32,10 @@
 #include <linux/irq.h>
 #include <linux/uaccess.h>
 
+#ifdef CONFIG_LINX
+#include <asm/debug_uart.h>
+#endif
+
 #include "serial_base.h"
 
 /*
@@ -317,6 +321,17 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 	retval = uart_alloc_xmit_buf(&state->port);
 	if (retval)
 		return retval;
+
+#ifdef CONFIG_LINX
+	linx_debug_uart_putc('P');
+	linx_debug_uart_puthex_ulong((unsigned long)uport);
+	linx_debug_uart_putc('O');
+	linx_debug_uart_puthex_ulong((unsigned long)uport->ops);
+	linx_debug_uart_putc('S');
+	linx_debug_uart_puthex_ulong((unsigned long)(uport->ops ?
+				      uport->ops->startup : NULL));
+	linx_debug_uart_putc('\n');
+#endif
 
 	retval = uport->ops->startup(uport);
 	if (retval == 0) {

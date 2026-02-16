@@ -67,7 +67,38 @@ print_mtime() {
 	local my_mtime="0"
 
 	if [ -e "$1" ]; then
-		my_mtime=$(find "$1" -printf "%T@\n" | sort -r | head -n 1)
+		# GNU find supports -printf; BSD/macOS find does not. Fall back to
+		# python for host portability (required for LinxISA bring-up on macOS).
+		if find "$1" -maxdepth 0 -printf "" >/dev/null 2>&1; then
+			my_mtime=$(find "$1" -printf "%T@\n" | sort -r | head -n 1)
+		else
+			my_mtime=$(python3 - "$1" << 'PY'
+import os
+import sys
+
+path = sys.argv[1]
+latest = 0.0
+
+def consider(p: str) -> None:
+    global latest
+    try:
+        st = os.lstat(p)
+    except OSError:
+        return
+    latest = max(latest, float(st.st_mtime))
+
+if os.path.isdir(path):
+    for root, dirs, files in os.walk(path, followlinks=False):
+        consider(root)
+        for fn in files:
+            consider(os.path.join(root, fn))
+else:
+    consider(path)
+
+print(f"{latest:.6f}")
+PY
+			)
+		fi
 	fi
 
 	echo "# Last modified: ${my_mtime}" >> $cpio_list
@@ -148,7 +179,33 @@ dir_filelist() {
 	header "$1"
 
 	srcdir=$(echo "$1" | sed -e 's://*:/:g')
-	dirlist=$(find "${srcdir}" -printf "%p %m %U %G\n" | LC_ALL=C sort)
+	if find "${srcdir}" -maxdepth 0 -printf "" >/dev/null 2>&1; then
+		dirlist=$(find "${srcdir}" -printf "%p %m %U %G\n" | LC_ALL=C sort)
+	else
+		# Portable fallback for BSD/macOS find (no -printf).
+		dirlist=$(
+			python3 - "${srcdir}" << 'PY'
+import os
+import sys
+
+src = sys.argv[1]
+
+def emit(p: str) -> None:
+    st = os.lstat(p)
+    mode = st.st_mode & 0o7777
+    print(f"{p} {mode:o} {st.st_uid} {st.st_gid}")
+
+if os.path.isdir(src):
+    for root, dirs, files in os.walk(src, followlinks=False):
+        emit(root)
+        for fn in files:
+            emit(os.path.join(root, fn))
+else:
+    emit(src)
+PY
+		)
+		dirlist=$(echo "${dirlist}" | LC_ALL=C sort)
+	fi
 
 	# If $dirlist is only one line, then the directory is empty
 	if [  "$(echo "${dirlist}" | wc -l)" -gt 1 ]; then
