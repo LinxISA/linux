@@ -47,8 +47,18 @@ void asm_offsets(void)
 	DEFINE(PT_REGS_EBARG_BPC_TGT, offsetof(struct pt_regs, ebarg_bpc_tgt));
 	DEFINE(PT_REGS_EBARG_TPC, offsetof(struct pt_regs, ebarg_tpc));
 	DEFINE(PT_REGS_EBARG_LRA, offsetof(struct pt_regs, ebarg_lra));
+	DEFINE(PT_REGS_EBARG_TQ0, offsetof(struct pt_regs, ebarg_tq[0]));
+	DEFINE(PT_REGS_EBARG_TQ1, offsetof(struct pt_regs, ebarg_tq[1]));
+	DEFINE(PT_REGS_EBARG_TQ2, offsetof(struct pt_regs, ebarg_tq[2]));
+	DEFINE(PT_REGS_EBARG_TQ3, offsetof(struct pt_regs, ebarg_tq[3]));
+	DEFINE(PT_REGS_EBARG_UQ0, offsetof(struct pt_regs, ebarg_uq[0]));
+	DEFINE(PT_REGS_EBARG_UQ1, offsetof(struct pt_regs, ebarg_uq[1]));
+	DEFINE(PT_REGS_EBARG_UQ2, offsetof(struct pt_regs, ebarg_uq[2]));
+	DEFINE(PT_REGS_EBARG_UQ3, offsetof(struct pt_regs, ebarg_uq[3]));
 	DEFINE(PT_REGS_EBARG_LB, offsetof(struct pt_regs, ebarg_lb));
 	DEFINE(PT_REGS_EBARG_LC, offsetof(struct pt_regs, ebarg_lc));
+	DEFINE(PT_REGS_EBARG_EXT_PTR, offsetof(struct pt_regs, ebarg_ext_ptr));
+	DEFINE(PT_REGS_EBARG_EXT_META, offsetof(struct pt_regs, ebarg_ext_meta));
 
 	DEFINE(TASK_THREAD_RA, offsetof(struct task_struct, thread.ra));
 	DEFINE(TASK_THREAD_SP, offsetof(struct task_struct, thread.sp));

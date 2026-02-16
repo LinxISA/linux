@@ -13,6 +13,8 @@
 #include <linux/sched.h>
 #include <linux/signal.h>
 #include <linux/syscalls.h>
+#include <linux/uaccess.h>
+#include <linux/uio.h>
 #include <linux/unistd.h>
 
 #include <asm/irq_regs.h>
@@ -72,6 +74,42 @@ static inline u32 linx_trapno_cause(u64 trapno)
 	return (u32)((trapno >> LINX_TRAPNO_CAUSE_SHIFT) & LINX_TRAPNO_CAUSE_MASK);
 }
 
+static void linx_debug_dump_writev(unsigned long fd, unsigned long iov_addr,
+				       unsigned long iovcnt)
+{
+	struct iovec iov[8];
+	unsigned long nvec = iovcnt > 8 ? 8 : iovcnt;
+	unsigned long i;
+
+	if (!nvec)
+		return;
+	if (copy_from_user(iov, (const void __user *)iov_addr,
+			   nvec * sizeof(struct iovec)))
+		return;
+
+	for (i = 0; i < nvec; i++) {
+		char msg[97];
+		size_t take = iov[i].iov_len;
+		size_t j;
+
+		if (!take)
+			continue;
+		if (take > sizeof(msg) - 1)
+			take = sizeof(msg) - 1;
+
+		if (copy_from_user(msg, iov[i].iov_base, take))
+			continue;
+		msg[take] = '\0';
+		for (j = 0; j < take; j++) {
+			if (msg[j] < 0x20 || msg[j] > 0x7e)
+				msg[j] = '.';
+		}
+
+		pr_err("linx: writev fd=%lu iov[%lu] len=%zu text=\"%s\"\n",
+		       fd, i, (size_t)iov[i].iov_len, msg);
+	}
+}
+
 static bool linx_try_handle_page_fault(struct pt_regs *regs, unsigned long addr,
 					       bool is_write, bool is_instruction)
 {
@@ -79,6 +117,7 @@ static bool linx_try_handle_page_fault(struct pt_regs *regs, unsigned long addr,
 	struct vm_area_struct *vma;
 	vm_fault_t fault;
 	unsigned int flags = FAULT_FLAG_DEFAULT;
+	static int pf_debug_count;
 
 	if (!mm)
 		return false;
@@ -95,6 +134,11 @@ retry:
 
 	vma = find_vma(mm, addr);
 	if (!vma) {
+		if (pf_debug_count < 64) {
+			pr_err("linx: pf miss addr=0x%lx write=%d insn=%d flags=0x%x pc=0x%lx\n",
+			       addr, is_write, is_instruction, flags, regs->regs[PTR_PC]);
+			pf_debug_count++;
+		}
 		mmap_read_unlock(mm);
 		return false;
 	}
@@ -130,6 +174,12 @@ retry:
 	}
 
 	fault = handle_mm_fault(vma, addr, flags, regs);
+	if (pf_debug_count < 64) {
+		pr_err("linx: pf addr=0x%lx write=%d insn=%d vma=[0x%lx,0x%lx) vm_flags=0x%lx fault=0x%x pc=0x%lx\n",
+		       addr, is_write, is_instruction, vma->vm_start, vma->vm_end,
+		       vma->vm_flags, fault, regs->regs[PTR_PC]);
+		pf_debug_count++;
+	}
 	if (fault_signal_pending(fault, regs))
 		return true;
 
@@ -186,7 +236,7 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 	const u32 cause = linx_trapno_cause(trapno);
 	const u64 pending = linx_ssr_read_ipending_acr1();
 
-	if (trap_debug_count < 8) {
+	if (trap_debug_count < 64) {
 		linx_debug_uart_puts("\n[linx trap] n=");
 		linx_debug_uart_puthex_ulong((unsigned long)trapnum);
 		linx_debug_uart_puts(" c=");
@@ -261,6 +311,7 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			return;
 		}
 		if (user_mode(regs)) {
+			static unsigned int writev_debug_count;
 			const unsigned long nr = regs->regs[PTR_R9];
 			const unsigned long arg0 = regs->regs[PTR_R2];
 			const unsigned long arg1 = regs->regs[PTR_R3];
@@ -278,6 +329,10 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 				linx_debug_uart_puts(" pc=");
 				linx_debug_uart_puthex_ulong(regs->regs[PTR_PC]);
 				linx_debug_uart_puts("\n");
+			}
+			if (nr == __NR_writev && writev_debug_count < 64) {
+				linx_debug_dump_writev(arg0, arg1, arg2);
+				writev_debug_count++;
 			}
 
 			/*
@@ -306,12 +361,21 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 
 	if (!is_async && (trapnum == LINX_TRAPNUM_DATA_ALIGN_FAULT ||
 			  trapnum == LINX_TRAPNUM_DATA_PAGE_FAULT)) {
+		static unsigned int user_data_fault_dump_count;
 		if (trapnum == LINX_TRAPNUM_DATA_PAGE_FAULT) {
 			const bool is_write = (cause & 0xfu) == 1u;
 			if (linx_try_handle_page_fault(regs, regs->traparg0, is_write, false))
 				return;
 		}
 		if (user_mode(regs)) {
+			if (user_data_fault_dump_count < 4) {
+				unsigned int i;
+				for (i = 0; i < NUM_PTRACE_REG; i++)
+					pr_err("linx: regs[%u]=0x%lx\n", i, regs->regs[i]);
+				user_data_fault_dump_count++;
+			}
+			pr_err("linx: user data fault -> SIGSEGV trapnum=%u cause=0x%x addr=0x%lx pc=0x%lx\n",
+			       trapnum, cause, regs->traparg0, regs->regs[PTR_PC]);
 			force_sig_fault(SIGSEGV, SEGV_MAPERR,
 					(void __user *)regs->traparg0);
 			return;
@@ -329,6 +393,8 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 				if (linx_try_handle_page_fault(regs, regs->traparg0, false, true))
 					return;
 			}
+			pr_err("linx: user inst fault -> SIGILL trapnum=%u cause=0x%x traparg0=0x%lx pc=0x%lx\n",
+			       trapnum, cause, regs->traparg0, regs->regs[PTR_PC]);
 			force_sig_fault(SIGILL, ILL_ILLOPC,
 					(void __user *)regs->regs[PTR_PC]);
 			return;
@@ -340,6 +406,8 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 
 	if (!is_async && trapnum == LINX_TRAPNUM_BLOCK_TRAP) {
 		if (user_mode(regs)) {
+			pr_err("linx: user block trap -> SIGILL cause=0x%x traparg0=0x%lx pc=0x%lx\n",
+			       cause, regs->traparg0, regs->regs[PTR_PC]);
 			force_sig_fault(SIGILL, ILL_ILLOPC,
 					(void __user *)regs->regs[PTR_PC]);
 			return;
@@ -354,6 +422,8 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			  trapnum == LINX_TRAPNUM_SW_BREAKPOINT)) {
 		if (user_mode(regs)) {
 			int code = (trapnum == LINX_TRAPNUM_SW_BREAKPOINT) ? TRAP_BRKPT : TRAP_HWBKPT;
+			pr_err("linx: user debug trap -> SIGTRAP trapnum=%u cause=0x%x traparg0=0x%lx pc=0x%lx\n",
+			       trapnum, cause, regs->traparg0, regs->regs[PTR_PC]);
 			force_sig_fault(SIGTRAP, code, (void __user *)regs->traparg0);
 			return;
 		}

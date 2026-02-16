@@ -28,8 +28,12 @@ struct pt_regs {
 	unsigned long ebarg_bpc_tgt;
 	unsigned long ebarg_tpc;
 	unsigned long ebarg_lra;
+	unsigned long ebarg_tq[4];
+	unsigned long ebarg_uq[4];
 	unsigned long ebarg_lb;
 	unsigned long ebarg_lc;
+	unsigned long ebarg_ext_ptr;
+	unsigned long ebarg_ext_meta;
 };
 
 /*
