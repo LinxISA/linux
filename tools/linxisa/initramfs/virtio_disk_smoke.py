@@ -32,6 +32,7 @@ def main() -> int:
     )
     timeout_s = int(os.environ.get("TIMEOUT", "90"))
     disk_mb = int(os.environ.get("DISK_MB", "64"))
+    debug_log_lines = int(os.environ.get("DEBUG_LOG_LINES", "240"))
 
     script = os.environ.get(
         "SCRIPT",
@@ -130,6 +131,15 @@ def main() -> int:
     text = out.decode("utf-8", errors="replace")
     lines = text.splitlines()
 
+    def emit_debug_log() -> None:
+        if debug_log_lines <= 0:
+            body = text
+        else:
+            body = "\n".join(lines[-debug_log_lines:])
+        sys.stderr.write(body)
+        if not body.endswith("\n"):
+            sys.stderr.write("\n")
+
     want = [
         "cmds:",
         "# ls /dev",
@@ -145,15 +155,13 @@ def main() -> int:
         sys.stderr.write("qemu: %s\n" % qemu)
         sys.stderr.write("cmd: %s\n" % " ".join(cmd))
         sys.stderr.write("\n")
-        sys.stderr.write("\n".join(text.splitlines()[-240:]))
-        sys.stderr.write("\n")
+        emit_debug_log()
         sys.stderr.flush()
         return 2
 
     if not any(line.strip() == "vda" for line in lines):
         sys.stderr.write("error: virtio disk smoke failed; '/sys/block' did not enumerate vda\n")
-        sys.stderr.write("\n".join(text.splitlines()[-240:]))
-        sys.stderr.write("\n")
+        emit_debug_log()
         sys.stderr.flush()
         return 2
 
@@ -189,8 +197,7 @@ def main() -> int:
         or "ffffffffffffffff" in probe_blob
     ):
         sys.stderr.write("error: virtio disk smoke failed; '/sys/block/vda/dev' probe did not return valid data\n")
-        sys.stderr.write("\n".join(text.splitlines()[-240:]))
-        sys.stderr.write("\n")
+        emit_debug_log()
         sys.stderr.flush()
         return 2
 

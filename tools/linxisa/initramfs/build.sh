@@ -66,6 +66,7 @@ slink /bin/sh /bin/busybox 0755 0 0
 slink /bin/echo /bin/busybox 0755 0 0
 slink /bin/cat /bin/busybox 0755 0 0
 slink /bin/ls /bin/busybox 0755 0 0
+slink /bin/put /bin/busybox 0755 0 0
 slink /bin/getdents64_probe /bin/busybox 0755 0 0
 slink /bin/sigill_test /bin/busybox 0755 0 0
 slink /bin/sigsegv_test /bin/busybox 0755 0 0
