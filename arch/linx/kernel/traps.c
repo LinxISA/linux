@@ -14,7 +14,6 @@
 #include <linux/signal.h>
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
-#include <linux/uio.h>
 #include <linux/unistd.h>
 
 #include <asm/irq_regs.h>
@@ -74,44 +73,8 @@ static inline u32 linx_trapno_cause(u64 trapno)
 	return (u32)((trapno >> LINX_TRAPNO_CAUSE_SHIFT) & LINX_TRAPNO_CAUSE_MASK);
 }
 
-static void linx_debug_dump_writev(unsigned long fd, unsigned long iov_addr,
-				       unsigned long iovcnt)
-{
-	struct iovec iov[8];
-	unsigned long nvec = iovcnt > 8 ? 8 : iovcnt;
-	unsigned long i;
-
-	if (!nvec)
-		return;
-	if (copy_from_user(iov, (const void __user *)iov_addr,
-			   nvec * sizeof(struct iovec)))
-		return;
-
-	for (i = 0; i < nvec; i++) {
-		char msg[97];
-		size_t take = iov[i].iov_len;
-		size_t j;
-
-		if (!take)
-			continue;
-		if (take > sizeof(msg) - 1)
-			take = sizeof(msg) - 1;
-
-		if (copy_from_user(msg, iov[i].iov_base, take))
-			continue;
-		msg[take] = '\0';
-		for (j = 0; j < take; j++) {
-			if (msg[j] < 0x20 || msg[j] > 0x7e)
-				msg[j] = '.';
-		}
-
-		pr_err("linx: writev fd=%lu iov[%lu] len=%zu text=\"%s\"\n",
-		       fd, i, (size_t)iov[i].iov_len, msg);
-	}
-}
-
 static bool linx_try_handle_page_fault(struct pt_regs *regs, unsigned long addr,
-					       bool is_write, bool is_instruction)
+				       bool is_write, bool is_instruction)
 {
 	struct mm_struct *mm = current->mm ? current->mm : current->active_mm;
 	struct vm_area_struct *vma;
@@ -311,7 +274,6 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			return;
 		}
 		if (user_mode(regs)) {
-			static unsigned int writev_debug_count;
 			const unsigned long nr = regs->regs[PTR_R9];
 			const unsigned long arg0 = regs->regs[PTR_R2];
 			const unsigned long arg1 = regs->regs[PTR_R3];
@@ -330,11 +292,6 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 				linx_debug_uart_puthex_ulong(regs->regs[PTR_PC]);
 				linx_debug_uart_puts("\n");
 			}
-			if (nr == __NR_writev && writev_debug_count < 64) {
-				linx_debug_dump_writev(arg0, arg1, arg2);
-				writev_debug_count++;
-			}
-
 			/*
 			 * Trap entry arrives with CSTATE.I masked by hardware.
 			 * Linux syscalls must run with normal interrupt/preemption

@@ -75,6 +75,13 @@ static inline void start_thread(struct pt_regs *regs, unsigned long pc,
 	memset(regs, 0, sizeof(*regs));
 	regs->regs[PTR_PC] = pc;
 	regs->regs[PTR_R1] = sp;
+	/*
+	 * ACRE restore uses the branch context (BPC_CUR/BPC_TGT). Seed these
+	 * from the ELF entry so post-exec syscall return does not resume at 0.
+	 */
+	regs->ebarg_bpc_cur = pc;
+	regs->ebarg_bpc_tgt = pc;
+	regs->ebarg_tpc = pc;
 
 #ifdef CONFIG_BINFMT_ELF_FDPIC
 	/* Preserve FDPIC ABI registers set by ELF_FDPIC_PLAT_INIT(). */
