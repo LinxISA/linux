@@ -42,6 +42,7 @@ enum {
 
 enum {
 	O_RDONLY = 0,
+	O_WRONLY = 1,
 	O_RDWR = 2,
 	O_DIRECTORY = 00200000,
 	O_CLOEXEC = 02000000,
@@ -357,6 +358,11 @@ static int name_is_probe(const char *s)
 	       s[4] == 'e' && s[5] == 0;
 }
 
+static int name_is_put(const char *s)
+{
+	return s[0] == 'p' && s[1] == 'u' && s[2] == 't' && s[3] == 0;
+}
+
 static int name_is_getdents64_probe(const char *s)
 {
 	return s[0] == 'g' && s[1] == 'e' && s[2] == 't' && s[3] == 'd' &&
@@ -471,6 +477,7 @@ static int applet_help(int argc, char **argv)
 	write_ch('h'); write_ch('e'); write_ch('l'); write_ch('p'); write_ch(' ');
 	write_ch('f'); write_ch('d'); write_ch('0'); write_ch(' ');
 	write_ch('p'); write_ch('r'); write_ch('o'); write_ch('b'); write_ch('e'); write_ch(' ');
+	write_ch('p'); write_ch('u'); write_ch('t'); write_ch(' ');
 	write_ch('g'); write_ch('e'); write_ch('t'); write_ch('d'); write_ch('e'); write_ch('n'); write_ch('t'); write_ch('s');
 	write_ch('6'); write_ch('4'); write_ch('_');
 	write_ch('p'); write_ch('r'); write_ch('o'); write_ch('b'); write_ch('e'); write_ch(' ');
@@ -633,6 +640,28 @@ static int applet_probe(int argc, char **argv)
 	write_nl();
 
 	return 0;
+}
+
+static int applet_put(int argc, char **argv)
+{
+	char abs[256];
+	const char *path;
+	ulong len;
+	int fd;
+	int n;
+
+	if (argc < 3)
+		return -1;
+
+	path = make_abs_path(argv[1], abs, sizeof(abs));
+	fd = sys_openat(AT_FDCWD, path, O_WRONLY | O_CLOEXEC, 0);
+	if (is_errno(fd))
+		return fd;
+
+	len = c_strlen(argv[2]);
+	n = sys_write(fd, argv[2], len);
+	(void)sys_close(fd);
+	return n;
 }
 
 static unsigned short load_u16le(const unsigned char *p)
@@ -968,6 +997,8 @@ static void shell_loop(void)
 						rc = applet_ls(argc, argv);
 					else if (name_is_probe(cmd))
 						rc = applet_probe(argc, argv);
+					else if (name_is_put(cmd))
+						rc = applet_put(argc, argv);
 					else if (name_is_getdents64_probe(cmd))
 						rc = applet_getdents64_probe(argc, argv);
 					else if (name_is_sigill_test(cmd))
@@ -1026,6 +1057,8 @@ static __attribute__((noreturn)) void run_applet(const char *name, int argc,
 		sys_exit_group(applet_ls(argc, argv));
 	if (name_is_probe(name))
 		sys_exit_group(applet_probe(argc, argv));
+	if (name_is_put(name))
+		sys_exit_group(applet_put(argc, argv));
 	if (name_is_getdents64_probe(name))
 		sys_exit_group(applet_getdents64_probe(argc, argv));
 	if (name_is_sigill_test(name))

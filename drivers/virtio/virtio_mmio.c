@@ -84,6 +84,8 @@ struct virtio_mmio_device {
 	struct platform_device *pdev;
 
 	void __iomem *base;
+	resource_size_t ioaddr;
+	resource_size_t iosize;
 	unsigned long version;
 };
 
@@ -570,6 +572,7 @@ static void virtio_mmio_release_dev(struct device *_d)
 static int virtio_mmio_probe(struct platform_device *pdev)
 {
 	struct virtio_mmio_device *vm_dev;
+	struct resource *res;
 	unsigned long magic;
 	int rc;
 
@@ -582,10 +585,23 @@ static int virtio_mmio_probe(struct platform_device *pdev)
 	vm_dev->vdev.config = &virtio_mmio_config_ops;
 	vm_dev->pdev = pdev;
 
-	vm_dev->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(vm_dev->base)) {
-		rc = PTR_ERR(vm_dev->base);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		rc = -EINVAL;
 		goto free_vm_dev;
+	}
+
+	vm_dev->ioaddr = res->start;
+	vm_dev->iosize = resource_size(res);
+	if (!request_mem_region(vm_dev->ioaddr, vm_dev->iosize, dev_name(&pdev->dev))) {
+		rc = -EBUSY;
+		goto free_vm_dev;
+	}
+
+	vm_dev->base = ioremap(vm_dev->ioaddr, vm_dev->iosize);
+	if (!vm_dev->base) {
+		rc = -ENOMEM;
+		goto release_region;
 	}
 
 	/* Check magic value */
@@ -638,11 +654,16 @@ static int virtio_mmio_probe(struct platform_device *pdev)
 	platform_set_drvdata(pdev, vm_dev);
 
 	rc = register_virtio_device(&vm_dev->vdev);
-	if (rc)
+	if (rc) {
+		iounmap(vm_dev->base);
+		release_mem_region(vm_dev->ioaddr, vm_dev->iosize);
 		put_device(&vm_dev->vdev.dev);
+	}
 
 	return rc;
 
+release_region:
+	release_mem_region(vm_dev->ioaddr, vm_dev->iosize);
 free_vm_dev:
 	kfree(vm_dev);
 	return rc;
@@ -651,7 +672,13 @@ free_vm_dev:
 static void virtio_mmio_remove(struct platform_device *pdev)
 {
 	struct virtio_mmio_device *vm_dev = platform_get_drvdata(pdev);
+	void __iomem *base = vm_dev->base;
+	resource_size_t ioaddr = vm_dev->ioaddr;
+	resource_size_t iosize = vm_dev->iosize;
+
 	unregister_virtio_device(&vm_dev->vdev);
+	iounmap(base);
+	release_mem_region(ioaddr, iosize);
 }
 
 
@@ -720,7 +747,6 @@ static int vm_cmdline_set(const char *device,
 	pdev = platform_device_register_resndata(&vm_cmdline_parent,
 			"virtio-mmio", vm_cmdline_id++,
 			resources, ARRAY_SIZE(resources), NULL, 0);
-
 	return PTR_ERR_OR_ZERO(pdev);
 }
 

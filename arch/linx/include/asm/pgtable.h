@@ -32,6 +32,14 @@
 #define PAGE_COPY_EXEC	__pgprot(LINX_PGPROT_USER_BASE | LINX_PTE_R | LINX_PTE_X)
 #define PAGE_SHARED_EXEC __pgprot(LINX_PGPROT_USER_BASE | LINX_PTE_R | LINX_PTE_W | LINX_PTE_X)
 
+/*
+ * Generic ioremap() asks the architecture to provide raw PTE bits for MMIO
+ * mappings via _PAGE_IOREMAP.
+ */
+#define _PAGE_IOREMAP \
+	(LINX_PTE_AF | LINX_PTE_R | LINX_PTE_W | \
+	 ((unsigned long)LINX_MAIR_ATTR_DEVICE << LINX_PTE_ATTRIDX_SHIFT))
+
 #define PTE_SHIFT	PAGE_SHIFT
 #define PMD_SHIFT	(PAGE_SHIFT + 9)
 #define PUD_SHIFT	(PMD_SHIFT + 9)
