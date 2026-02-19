@@ -15,6 +15,23 @@ For the current Linux bring-up on `qemu-system-linx64`, use **linx64**.
 The `arch/linx/` port in this tree is configured as a 64-bit kernel
 (`CONFIG_64BIT=y`).
 
+## `/proc/cpuinfo` ISA reporting (Linx v0.3)
+
+The Linx Linux bring-up port reports ISA identity in two fields:
+
+- `isa`: profile name (currently `linx64`)
+- `isa_extensions`: enabled extension tokens in canonical order
+
+Current static bring-up output:
+
+- `isa : linx64`
+- `isa_extensions : lnx-s32 lnx-s64 lnx-c lnx-f lnx-a lnx-sys lnx-v lnx-m`
+
+`isa_extensions` ordering is fixed to:
+`lnx-s32`, `lnx-s64`, `lnx-c`, `lnx-f`, `lnx-a`, `lnx-sys`, `lnx-v`, `lnx-m`.
+This is declarative for now (no runtime HWCAP/hwprobe feature probing in this
+phase).
+
 ## Scalar register ABI (R0..R23)
 
 The scalar GPR file has 24 architectural registers.

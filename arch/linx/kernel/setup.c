@@ -19,6 +19,9 @@ extern phys_addr_t linx_dtb_early_pa;
 extern char _stext[], _etext[], _edata[], _end[];
 
 #define LINX_VIRT_UART_BASE 0x10000000UL
+#define LINX_CPUINFO_ISA_PROFILE "linx64"
+#define LINX_CPUINFO_ISA_EXTENSIONS                                           \
+	"lnx-s32 lnx-s64 lnx-c lnx-f lnx-a lnx-sys lnx-v lnx-m"
 
 static inline void linx_virt_uart_putc(char c)
 {
@@ -166,7 +169,8 @@ static int show_cpuinfo(struct seq_file *m, void *v)
 {
 	(void)v;
 	seq_puts(m, "processor\t: 0\n");
-	seq_puts(m, "isa\t\t: LinxISA\n");
+	seq_printf(m, "isa\t\t: %s\n", LINX_CPUINFO_ISA_PROFILE);
+	seq_printf(m, "isa_extensions\t: %s\n", LINX_CPUINFO_ISA_EXTENSIONS);
 	seq_puts(m, "\n");
 	return 0;
 }
