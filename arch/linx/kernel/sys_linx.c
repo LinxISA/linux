@@ -22,4 +22,18 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 	return ksys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
 }
 
+SYSCALL_DEFINE3(mprotect, unsigned long, start, size_t, len,
+		unsigned long, prot)
+{
+	(void)start;
+	(void)len;
+	(void)prot;
+	/*
+	 * Linx Linux bring-up currently runs without an MMU. Userspace (musl)
+	 * expects mprotect(2) to exist for PIE/FDPIC startup even when memory
+	 * permissions are effectively not enforced. Treat it as a no-op.
+	 */
+	return 0;
+}
+
 /* Signal support is implemented in arch/linx/kernel/signal.c. */

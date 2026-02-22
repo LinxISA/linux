@@ -14,6 +14,7 @@ OUT_DIR="${OUT_DIR:-$O/linx-initramfs}"
 BUSYBOX_BIN="$OUT_DIR/busybox"
 CPIO_LIST="$OUT_DIR/initramfs.list"
 CPIO_OUT="$OUT_DIR/initramfs.cpio"
+LINX_PERF_BUILD="${LINX_PERF_BUILD:-0}"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -29,6 +30,12 @@ export PATH="$LLVM_BUILD/bin:$PATH"
 
 mkdir -p "$OUT_DIR"
 
+if [[ "$LINX_PERF_BUILD" == "1" || "$LINX_PERF_BUILD" == "true" || "$LINX_PERF_BUILD" == "yes" ]]; then
+  OPT_FLAGS=(-O3 -falign-functions=32 -falign-loops=16)
+else
+  OPT_FLAGS=(-Oz)
+fi
+
 echo "[1/3] Ensuring usr/gen_init_cpio exists (O=$O) ..."
 if [[ ! -x "$GEN_INIT_CPIO" ]]; then
   mkdir -p "$(dirname "$GEN_INIT_CPIO")"
@@ -38,7 +45,7 @@ fi
 
 echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, static PIE ET_DYN) ..."
 "$CLANG" -target linx64-unknown-linux-gnu \
-  -Oz -ffreestanding -fno-builtin -fpie -fpic \
+  "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fpie -fpic \
   -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
   -nostdlib -static -fuse-ld=lld -Wl,-pie -Wl,-e,_start \
   -Wl,--build-id=none \

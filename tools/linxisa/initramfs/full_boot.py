@@ -2,6 +2,7 @@
 import os
 import pathlib
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -26,6 +27,7 @@ def main() -> int:
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0")
+    qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
 
     script = os.environ.get(
@@ -66,6 +68,7 @@ def main() -> int:
         "-append",
         append,
     ]
+    cmd.extend(qemu_extra_args)
 
     proc = subprocess.Popen(
         cmd,

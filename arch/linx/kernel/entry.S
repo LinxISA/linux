@@ -175,15 +175,13 @@ linx_trap_vector:
 
 .Llinx_after_notify:
 	/*
-	 * If do_notify_resume() modified pt_regs->pc (e.g. signal delivery),
-	 * return with RRAT_DEFAULT and update EBARG to the new PC. Otherwise,
-	 * return with RRAT_RESTORE to preserve BSTATE for normal syscall/trap return.
+	 * Always return via the explicit RRAT_DEFAULT path.
+	 *
+	 * Nested traps (e.g. IRQ while servicing a userspace syscall) can clobber
+	 * hardware restore state. Re-seeding ECSTATE/EBARG from pt_regs keeps
+	 * return-to-user deterministic and avoids resuming user PC in kernel ACR.
 	 */
-	C.BSTART COND, .Llinx_return_default
-	c.movr sp, ->x3
-	ldi [x3, PT_REGS_PC], ->x0
-	hl.ssrget SSR_EBARG_TPC_ACR1, ->x1
-	c.setc.ne x0, x1
+	C.BSTART DIRECT, .Llinx_return_default
 	C.BSTOP
 
 .Llinx_return_restore:
@@ -218,8 +216,10 @@ linx_trap_vector:
 
 .Llinx_return_default:
 	C.BSTART.STD
-	/* Update EBARG resume PC to pt_regs->pc, then return via ACRE RRAT_DEFAULT (0). */
+	/* Re-seed ECSTATE/EBARG from pt_regs, then return via ACRE RRAT_DEFAULT (0). */
 	c.movr sp, ->x3
+	ldi [x3, PT_REGS_ECSTATE], ->x1
+	hl.ssrset x1, SSR_ECSTATE_ACR1
 	ldi [x3, PT_REGS_PC], ->x0
 	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
 	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
@@ -302,4 +302,3 @@ linx_enter_user:
 	ldi [sp, PT_REGS_R23], ->x3
 	ldi [sp, PT_REGS_R1],  ->sp
 	acre 0
-
