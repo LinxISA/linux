@@ -63,6 +63,11 @@ enum {
 	LINX_SCT_SYS		= 1,
 };
 
+#define LINX_TRAP_DEBUG_LIMIT 0u
+#define LINX_SYSCALL_DEBUG_LIMIT 0u
+#define LINX_DEBUG_MIRROR_USER_WRITE 0u
+#define LINX_ENABLE_TIMER_IRQ 0u
+
 static inline u8 linx_trapno_trapnum(u64 trapno)
 {
 	return (u8)(trapno & LINX_TRAPNO_TRAPNUM_MASK);
@@ -188,6 +193,30 @@ static void linx_handle_syscall(struct pt_regs *regs)
 	}
 }
 
+static void linx_debug_mirror_user_write(unsigned long fd, unsigned long buf_addr,
+					 unsigned long len)
+{
+	char buf[128];
+	size_t to_copy;
+	size_t i;
+	const char __user *ubuf = (const char __user *)buf_addr;
+
+	if (!(fd == 1 || fd == 2))
+		return;
+	if (!len)
+		return;
+
+	to_copy = len;
+	if (to_copy > sizeof(buf))
+		to_copy = sizeof(buf);
+
+	if (copy_from_user(buf, ubuf, to_copy))
+		return;
+
+	for (i = 0; i < to_copy; i++)
+		linx_debug_uart_putc(buf[i]);
+}
+
 asmlinkage void linx_do_trap(struct pt_regs *regs)
 {
 	static unsigned int trap_debug_count;
@@ -199,7 +228,7 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 	const u32 cause = linx_trapno_cause(trapno);
 	const u64 pending = linx_ssr_read_ipending_acr1();
 
-	if (trap_debug_count < 64) {
+	if (trap_debug_count < LINX_TRAP_DEBUG_LIMIT) {
 		linx_debug_uart_puts("\n[linx trap] n=");
 		linx_debug_uart_puthex_ulong((unsigned long)trapnum);
 		linx_debug_uart_puts(" c=");
@@ -238,14 +267,11 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 		}
 
 		if (irq_id == 0) {
-			/*
-			 * Linx bring-up runtime gate:
-			 * keep timer IRQs masked to avoid scheduler tick paths
-			 * while trap/MMU return semantics are being stabilized.
-			 */
-			linx_ssr_write_eoiei_acr1(irq_id);
-			set_irq_regs(old_regs);
-			return;
+			if (LINX_ENABLE_TIMER_IRQ) {
+				irq_enter();
+				linx_timer_handle_irq();
+				irq_exit();
+			}
 		} else {
 			irq_enter();
 			generic_handle_irq((unsigned int)irq_id);
@@ -279,9 +305,9 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			const unsigned long arg1 = regs->regs[PTR_R3];
 			const unsigned long arg2 = regs->regs[PTR_R4];
 
-			if (syscall_debug_count < 24) {
-				linx_debug_uart_puts("\n[linx sys] nr=");
-				linx_debug_uart_puthex_ulong(nr);
+				if (syscall_debug_count < LINX_SYSCALL_DEBUG_LIMIT) {
+					linx_debug_uart_puts("\n[linx sys] nr=");
+					linx_debug_uart_puthex_ulong(nr);
 				linx_debug_uart_puts(" a0=");
 				linx_debug_uart_puthex_ulong(arg0);
 				linx_debug_uart_puts(" a1=");
@@ -290,10 +316,12 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 				linx_debug_uart_puthex_ulong(arg2);
 				linx_debug_uart_puts(" pc=");
 				linx_debug_uart_puthex_ulong(regs->regs[PTR_PC]);
-				linx_debug_uart_puts("\n");
-			}
-			/*
-			 * Trap entry arrives with CSTATE.I masked by hardware.
+					linx_debug_uart_puts("\n");
+				}
+				if (LINX_DEBUG_MIRROR_USER_WRITE && nr == __NR_write && arg2 <= 4096)
+					linx_debug_mirror_user_write(arg0, arg1, arg2);
+				/*
+				 * Trap entry arrives with CSTATE.I masked by hardware.
 			 * Linux syscalls must run with normal interrupt/preemption
 			 * behavior, otherwise blocking paths (e.g. procfs or
 			 * block I/O waits) can stall indefinitely.
@@ -302,7 +330,7 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			linx_handle_syscall(regs);
 			local_irq_disable();
 
-			if (syscall_debug_count < 24) {
+				if (syscall_debug_count < LINX_SYSCALL_DEBUG_LIMIT) {
 				linx_debug_uart_puts("[linx sys] ret=");
 				linx_debug_uart_puthex_ulong(regs->regs[PTR_R2]);
 				linx_debug_uart_puts("\n");

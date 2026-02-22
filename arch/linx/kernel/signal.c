@@ -6,6 +6,7 @@
 #include <linux/resume_user_mode.h>
 #include <linux/signal.h>
 #include <linux/syscalls.h>
+#include <linux/unistd.h>
 #include <linux/uaccess.h>
 
 #include <asm/ptrace.h>
@@ -127,14 +128,67 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 	signal_setup_done(ret, ksig, 0);
 }
 
-static void linx_do_signal(struct pt_regs *regs)
+static void linx_do_signal_or_restart(struct pt_regs *regs)
 {
+	unsigned long continue_addr = 0;
+	unsigned long restart_addr = 0;
+	long retval = 0;
 	struct ksignal ksig;
+	const bool in_syscall = regs->orig_a0 != (unsigned long)-1;
+
+	/*
+	 * Mirror Linux arch restart handling:
+	 * - syscall return PC in pt_regs already points to the post-ACRC slot.
+	 * - ACRC is a 4-byte instruction in the current Linx userspace ABI.
+	 */
+	if (in_syscall) {
+		continue_addr = regs->regs[PTR_PC];
+		restart_addr = continue_addr - 4;
+		retval = (long)regs->regs[PTR_R2];
+
+		switch (retval) {
+		case -ERESTARTNOHAND:
+		case -ERESTARTSYS:
+		case -ERESTARTNOINTR:
+		case -ERESTART_RESTARTBLOCK:
+			regs->regs[PTR_R2] = regs->orig_a0;
+			regs->regs[PTR_PC] = restart_addr;
+			break;
+		default:
+			break;
+		}
+
+		/* Exit path consumed syscall context from this trap frame. */
+		regs->orig_a0 = (unsigned long)-1;
+	}
 
 	if (get_signal(&ksig)) {
+		/*
+		 * If restart was prepared but this signal should interrupt it,
+		 * roll back to the post-syscall PC and report EINTR.
+		 */
+		if (in_syscall &&
+		    regs->regs[PTR_PC] == restart_addr &&
+		    (retval == -ERESTARTNOHAND ||
+		     retval == -ERESTART_RESTARTBLOCK ||
+		     (retval == -ERESTARTSYS &&
+		      !(ksig.ka.sa.sa_flags & SA_RESTART)))) {
+			regs->regs[PTR_R2] = (unsigned long)-EINTR;
+			regs->regs[PTR_PC] = continue_addr;
+		}
+
 		handle_signal(&ksig, regs);
 		return;
 	}
+
+	/*
+	 * restart_block syscall switch for the RESTARTBLOCK class.
+	 * This keeps semantics aligned with generic Linux expectations.
+	 */
+	if (in_syscall &&
+	    regs->regs[PTR_PC] == restart_addr &&
+	    retval == -ERESTART_RESTARTBLOCK)
+		regs->regs[PTR_R9] = __NR_restart_syscall;
 
 	restore_saved_sigmask();
 }
@@ -144,13 +198,12 @@ asmlinkage void do_notify_resume(struct pt_regs *regs)
 	if (!user_mode(regs))
 		return;
 
-	if (test_thread_flag(TIF_SIGPENDING) ||
-	    test_thread_flag(TIF_NOTIFY_SIGNAL)) {
-		linx_do_signal(regs);
-		return;
-	}
-
 	if (test_thread_flag(TIF_NOTIFY_RESUME))
 		resume_user_mode_work(regs);
-}
 
+	/*
+	 * Always run signal/restart arbitration on user-return:
+	 * restart errno fixups must run even when no pending signal flags are set.
+	 */
+	linx_do_signal_or_restart(regs);
+}

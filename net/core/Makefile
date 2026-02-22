@@ -48,3 +48,9 @@ obj-$(CONFIG_NET_TEST) += net_test.o
 obj-$(CONFIG_NET_DEVMEM) += devmem.o
 obj-$(CONFIG_DEBUG_NET) += lock_debug.o
 obj-$(CONFIG_FAIL_SKB_REALLOC) += skb_fault_injection.o
+
+ifdef CONFIG_LINX
+# LinxISA bring-up: dev_index_reserve()/xarray paths have shown fragile codegen.
+# Build the core netdev logic with debug-friendly optimizations until backend fixes land.
+CFLAGS_dev.o += -Og
+endif
