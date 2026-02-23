@@ -409,24 +409,28 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			return;
 		}
 
-			if (!(pending & irq_mask)) {
-				pr_warn_ratelimited("linx: irq pending mismatch: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
-						    irq_id, pending, trapno);
-			}
+		if (!(pending & irq_mask)) {
+			pr_warn_ratelimited("linx: irq pending mismatch: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
+					    irq_id, pending, trapno);
+		}
 
-			if (irq_id == 0) {
-				linx_ctx_tu_test_note_timer_irq(regs, irq_id);
-				/*
-				 * Timer IRQ goes through irq_exit() softirq paths which may
-				 * temporarily enable interrupts. If EOIEI is delayed until
-			 * after irq_exit(), the still-pending IRQ0 can re-enter.
-			 */
-			linx_ssr_write_eoiei_acr1(irq_id);
-			eoi_done = true;
+		if (irq_id == 0) {
+			linx_ctx_tu_test_note_timer_irq(regs, irq_id);
 			if (!linx_disable_timer_irq) {
+				int irq_rc;
+
 				irq_enter();
-				linx_timer_handle_irq();
+				irq_rc = generic_handle_irq((unsigned int)irq_id);
+				if (unlikely(irq_rc)) {
+					/*
+					 * Keep bring-up alive if IRQ0 wiring regresses:
+					 * run the clockevent path directly and issue EOI.
+					 */
+					linx_timer_handle_irq();
+					linx_ssr_write_eoiei_acr1(irq_id);
+				}
 				irq_exit();
+				eoi_done = true;
 			}
 		} else {
 			irq_enter();

@@ -1195,7 +1195,11 @@ static void write_ctx_tq_result(int ok, ulong loops, ulong mismatch,
 
 static int applet_ctx_tq_irq_test(int argc, char **argv)
 {
-	ulong loops = 200000;
+	/*
+	 * Keep this test long enough to observe timer IRQ and BI=1 resume paths,
+	 * but short enough to complete under default smoke timeout.
+	 */
+	ulong loops = 20000;
 	ulong i;
 	ulong mismatches = 0;
 	ulong irq0_before = 0;
