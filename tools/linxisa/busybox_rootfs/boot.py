@@ -6,9 +6,10 @@ import select
 import subprocess
 import sys
 import time
+from typing import Optional
 
 
-def _irq0_count(text: str) -> int | None:
+def _irq0_count(text: str) -> Optional[int]:
     # Typical /proc/interrupts row: "  0:       123   ...".
     m = re.search(r"(?m)^\s*0:\s+(\d+)\b", text)
     if not m:
