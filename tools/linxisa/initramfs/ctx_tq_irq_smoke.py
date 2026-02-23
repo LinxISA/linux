@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 import os
 import pathlib
+import re
 import select
 import subprocess
 import sys
 import time
+
+
+def is_true(v: str) -> bool:
+    return v.lower() in {"1", "true", "yes", "y"}
 
 
 def main() -> int:
@@ -26,23 +31,24 @@ def main() -> int:
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0 panic=-1")
-    disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
-    if disable_timer_irq and "linx_disable_timer_irq=" not in append:
-        append = f"{append} linx_disable_timer_irq=1".strip()
-    timeout_s = int(os.environ.get("TIMEOUT", "60"))
+    if is_true(os.environ.get("LINX_DISABLE_TIMER_IRQ", "")):
+        sys.stderr.write(
+            "error: ctx_tq_irq_smoke requires LINX_DISABLE_TIMER_IRQ=0 (timer IRQ must be enabled)\n"
+        )
+        return 2
+    if "linx_disable_timer_irq=1" in append:
+        sys.stderr.write(
+            "error: ctx_tq_irq_smoke requires timer IRQ enabled; APPEND contains linx_disable_timer_irq=1\n"
+        )
+        return 2
+    if "linx_ctx_tu_test=" not in append:
+        append = f"{append} linx_ctx_tu_test=1".strip()
+    timeout_s = int(os.environ.get("TIMEOUT", "120"))
 
     script = os.environ.get(
         "SCRIPT",
         "help\n"
-        "ls /\n"
-        "ls /proc\n"
-        "ls /sys\n"
-        "getdents64_probe /proc\n"
-        "getdents64_probe /sys\n"
-        "probe /init\n"
-        "cat /no-such\n"
-        "sigill_test\n"
-        "sigsegv_test\n"
+        "ctx_tq_irq_test\n"
         "poweroff\n",
     )
 
@@ -124,53 +130,50 @@ def main() -> int:
 
     text = out.decode("utf-8", errors="replace")
 
-    # Minimal invariants: interactive initramfs + applets work.
     want = [
         "cmds:",
-        "# ls /",
-        "dev",
-        "# cat /no-such",
-        "E:",
-        "dents_ok=0000000000000001",
-        "sigill: ok",
-        "sigsegv: ok",
+        "# ctx_tq_irq_test",
     ]
     missing = [w for w in want if w not in text]
     if missing:
-        sys.stderr.write("error: smoke check failed; missing: %s\n" % ", ".join(missing))
-        sys.stderr.write("kernel: %s\n" % kernel)
-        sys.stderr.write("initrd: %s\n" % initrd)
-        sys.stderr.write("qemu: %s\n" % qemu)
+        sys.stderr.write("error: ctx_tq_irq_smoke failed; missing: %s\n" % ", ".join(missing))
         sys.stderr.write("cmd: %s\n" % " ".join(cmd))
+        sys.stderr.write("\n".join(text.splitlines()[-240:]))
         sys.stderr.write("\n")
-        sys.stderr.write("\n".join(text.splitlines()[-200:]))
+        return 2
+
+    m = re.search(r"ctx_tq_irq_test:\s+ok\b[^\n]*irq0_delta=([0-9a-fA-F]+)", text)
+    if not m:
+        sys.stderr.write("error: ctx_tq_irq_smoke failed; no passing ctx_tq marker\n")
+        sys.stderr.write("cmd: %s\n" % " ".join(cmd))
+        sys.stderr.write("\n".join(text.splitlines()[-240:]))
         sys.stderr.write("\n")
-        sys.stderr.flush()
+        return 2
+
+    irq0_delta = int(m.group(1), 16)
+    if irq0_delta <= 0:
+        sys.stderr.write("error: ctx_tq_irq_smoke failed; irq0_delta <= 0\n")
+        sys.stderr.write("cmd: %s\n" % " ".join(cmd))
+        sys.stderr.write("\n".join(text.splitlines()[-240:]))
+        sys.stderr.write("\n")
         return 2
 
     if timed_out:
-        # The guest may halt without triggering a QEMU shutdown request.
         sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
         sys.stderr.flush()
 
-    # Print a focused excerpt for human inspection.
     keep = []
     for ln in text.splitlines():
         s = ln.strip()
         if (
             s.startswith("#")
             or s.startswith("cmds:")
-            or s.startswith("n1=")
-            or s.startswith("dents_ok=")
-            or s.startswith("sigill:")
-            or s.startswith("sigsegv:")
-            or s.startswith("E:")
-            or s.startswith("reboot:")
+            or s.startswith("ctx_tq_irq_test:")
+            or "Kernel panic" in s
+            or "panic:" in s
         ):
             keep.append(ln)
-        elif s in {"bin", "dev", "etc", "init", "proc", "run", "sbin", "sys", "tmp"}:
-            keep.append(ln)
-    sys.stdout.write("\n".join(keep[-200:]) + "\n")
+    sys.stdout.write("\n".join(keep[-240:]) + "\n")
     sys.stdout.flush()
 
     return 0

@@ -1,17 +1,29 @@
 #!/usr/bin/env python3
 import os
 import pathlib
+import re
 import select
 import subprocess
 import sys
 import time
 
 
+def _irq0_count(text: str) -> int | None:
+    # Typical /proc/interrupts row: "  0:       123   ...".
+    m = re.search(r"(?m)^\s*0:\s+(\d+)\b", text)
+    if not m:
+        return None
+    try:
+        return int(m.group(1), 10)
+    except ValueError:
+        return None
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     super_root = linux_root.parents[1]
-
     o_dir = pathlib.Path(os.environ.get("O", str(linux_root / "build-linx-fixed")))
+
     qemu_default_candidates = [
         super_root / "emulator" / "qemu" / "build" / "qemu-system-linx64",
     ]
@@ -19,35 +31,31 @@ def main() -> int:
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
 
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
-    initrd = pathlib.Path(
-        os.environ.get("INITRD", str(o_dir / "linx-initramfs" / "initramfs.cpio"))
-    )
-
+    rootfs = pathlib.Path(os.environ.get("ROOTFS_IMG", str(o_dir / "linx-busybox-rootfs" / "rootfs.ext4")))
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
-    append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0 panic=-1")
+    timeout_s = int(os.environ.get("TIMEOUT", "120"))
+    append = os.environ.get(
+        "APPEND",
+        "lpj=1000000 loglevel=1 console=ttyS0 root=/dev/vda rw init=/sbin/init "
+        "virtio_mmio.device=0x200@0x30001000:1",
+    )
     disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
-    timeout_s = int(os.environ.get("TIMEOUT", "60"))
 
     script = os.environ.get(
         "SCRIPT",
         "help\n"
         "ls /\n"
-        "ls /proc\n"
-        "ls /sys\n"
-        "getdents64_probe /proc\n"
-        "getdents64_probe /sys\n"
-        "probe /init\n"
-        "cat /no-such\n"
-        "sigill_test\n"
-        "sigsegv_test\n"
+        "ls /sbin\n"
+        "cat /proc/interrupts\n"
+        "cat /proc/interrupts\n"
         "poweroff\n",
     )
 
     if os.environ.get("SKIP_BUILD", "") not in {"1", "true", "yes"}:
-        build_sh = pathlib.Path(__file__).with_name("build.sh")
+        build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
         subprocess.run([str(build_sh)], check=True)
 
     cmd = [
@@ -63,8 +71,10 @@ def main() -> int:
         smp,
         "-kernel",
         str(kernel),
-        "-initrd",
-        str(initrd),
+        "-drive",
+        f"if=none,id=vd0,file={rootfs},format=raw",
+        "-device",
+        "virtio-blk-device,drive=vd0",
         "-append",
         append,
     ]
@@ -96,7 +106,6 @@ def main() -> int:
             if not chunk:
                 break
             out_chunks.append(chunk)
-
             joined = b"".join(out_chunks[-8:])
             if not prompt_seen and (b"\n# " in joined or joined.endswith(prompt)):
                 prompt_seen = True
@@ -124,55 +133,49 @@ def main() -> int:
 
     text = out.decode("utf-8", errors="replace")
 
-    # Minimal invariants: interactive initramfs + applets work.
     want = [
         "cmds:",
         "# ls /",
-        "dev",
-        "# cat /no-such",
-        "E:",
-        "dents_ok=0000000000000001",
-        "sigill: ok",
-        "sigsegv: ok",
+        "# ls /sbin",
+        "init",
+        "# cat /proc/interrupts",
     ]
     missing = [w for w in want if w not in text]
     if missing:
-        sys.stderr.write("error: smoke check failed; missing: %s\n" % ", ".join(missing))
+        sys.stderr.write("error: busybox rootfs boot failed; missing: %s\n" % ", ".join(missing))
         sys.stderr.write("kernel: %s\n" % kernel)
-        sys.stderr.write("initrd: %s\n" % initrd)
+        sys.stderr.write("rootfs: %s\n" % rootfs)
         sys.stderr.write("qemu: %s\n" % qemu)
-        sys.stderr.write("cmd: %s\n" % " ".join(cmd))
+        sys.stderr.write("cmd: %s\n\n" % " ".join(cmd))
+        sys.stderr.write("\n".join(text.splitlines()[-240:]))
         sys.stderr.write("\n")
-        sys.stderr.write("\n".join(text.splitlines()[-200:]))
-        sys.stderr.write("\n")
-        sys.stderr.flush()
+        return 2
+
+    irq_counts = [_irq0_count(block) for block in text.split("# cat /proc/interrupts")]
+    irq_counts = [v for v in irq_counts if v is not None]
+    if not disable_timer_irq and len(irq_counts) >= 2 and irq_counts[-1] < irq_counts[-2]:
+        sys.stderr.write(
+            "error: timer IRQ count regressed: %d -> %d\n" % (irq_counts[-2], irq_counts[-1])
+        )
         return 2
 
     if timed_out:
-        # The guest may halt without triggering a QEMU shutdown request.
         sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
         sys.stderr.flush()
 
-    # Print a focused excerpt for human inspection.
     keep = []
     for ln in text.splitlines():
         s = ln.strip()
         if (
             s.startswith("#")
             or s.startswith("cmds:")
-            or s.startswith("n1=")
-            or s.startswith("dents_ok=")
-            or s.startswith("sigill:")
-            or s.startswith("sigsegv:")
-            or s.startswith("E:")
             or s.startswith("reboot:")
+            or s.startswith("Power down")
+            or s in {"bin", "dev", "etc", "proc", "run", "sbin", "sys", "tmp", "init", "poweroff"}
         ):
             keep.append(ln)
-        elif s in {"bin", "dev", "etc", "init", "proc", "run", "sbin", "sys", "tmp"}:
-            keep.append(ln)
-    sys.stdout.write("\n".join(keep[-200:]) + "\n")
+    sys.stdout.write("\n".join(keep[-240:]) + "\n")
     sys.stdout.flush()
-
     return 0
 
 

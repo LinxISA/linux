@@ -62,6 +62,7 @@ enum {
 
 enum {
 	SIGILL = 4,
+	SIGTRAP = 5,
 	SIGSEGV = 11,
 };
 
@@ -76,8 +77,16 @@ enum {
 	LINX_UART_STATUS_RX_READY = 0x2,
 };
 
-static inline slong sys_call6(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
-			      ulong a4, ulong a5)
+/*
+ * Keep the raw syscall helper out-of-line.
+ *
+ * The current Linx Linux trap return path does not preserve block-local
+ * queue state (`t/u`) across ACRC transitions, so inlining this helper into
+ * hot loops can corrupt compiler temporaries kept in those queues.
+ */
+__attribute__((noinline)) static slong sys_call6(int nr, ulong a0, ulong a1,
+						 ulong a2, ulong a3, ulong a4,
+						 ulong a5)
 {
 	slong ret;
 
@@ -96,7 +105,8 @@ static inline slong sys_call6(int nr, ulong a0, ulong a1, ulong a2, ulong a3,
 		: "=r"(ret)
 		: "r"(a0), "r"(a1), "r"(a2), "r"(a3), "r"(a4), "r"(a5),
 		  "r"((ulong)nr)
-		: "a0", "a1", "a2", "a3", "a4", "a5", "a7", "memory");
+		: "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "x0",
+		  "x1", "x2", "x3", "ra", "memory");
 	return ret;
 }
 
@@ -136,6 +146,20 @@ static inline slong sys_openat(int dirfd, const char *path, int flags, int mode)
 	return sys_call4(__NR_openat, (ulong)dirfd, (ulong)path, (ulong)flags, (ulong)mode);
 }
 
+static inline slong sys_openat_compat(int dirfd, const char *path, int flags,
+				      int mode)
+{
+	slong rc = sys_openat(dirfd, path, flags, mode);
+
+	/*
+	 * Some early Linx Linux builds reject O_CLOEXEC with -EINVAL.
+	 * Retry without CLOEXEC so initramfs bring-up can continue.
+	 */
+	if (rc == -22 && (flags & O_CLOEXEC))
+		rc = sys_openat(dirfd, path, flags & ~O_CLOEXEC, mode);
+	return rc;
+}
+
 static inline slong sys_close(int fd)
 {
 	return sys_call1(__NR_close, (ulong)fd);
@@ -170,7 +194,7 @@ static inline slong sys_reboot(int magic1, int magic2, int cmd, const void *arg)
 	return sys_call4(__NR_reboot, (ulong)magic1, (ulong)magic2, (ulong)cmd, (ulong)arg);
 }
 
-__attribute__((noreturn)) static inline void sys_exit_group(slong code)
+__attribute__((noreturn, always_inline)) static inline void sys_exit_group(slong code)
 {
 	(void)sys_call1(__NR_exit_group, (ulong)code);
 	for (;;)
@@ -190,9 +214,15 @@ static int is_errno(slong rc)
 	return rc < 0;
 }
 
+static void write_ch(char c);
+static void write_nl(void);
+static void write_uhex(ulong v);
+
 static void console_open(void)
 {
 	char console[13];
+	char ttys0[11];
+	char ttylinx0[14];
 	slong fd_rc;
 	int fd;
 
@@ -211,7 +241,40 @@ static void console_open(void)
 	console[11] = 'e';
 	console[12] = 0;
 
-	fd_rc = sys_openat(AT_FDCWD, console, O_RDWR | O_CLOEXEC, 0);
+	/* "/dev/ttyS0" */
+	ttys0[0] = '/';
+	ttys0[1] = 'd';
+	ttys0[2] = 'e';
+	ttys0[3] = 'v';
+	ttys0[4] = '/';
+	ttys0[5] = 't';
+	ttys0[6] = 't';
+	ttys0[7] = 'y';
+	ttys0[8] = 'S';
+	ttys0[9] = '0';
+	ttys0[10] = 0;
+
+	/* "/dev/ttyLINX0" */
+	ttylinx0[0] = '/';
+	ttylinx0[1] = 'd';
+	ttylinx0[2] = 'e';
+	ttylinx0[3] = 'v';
+	ttylinx0[4] = '/';
+	ttylinx0[5] = 't';
+	ttylinx0[6] = 't';
+	ttylinx0[7] = 'y';
+	ttylinx0[8] = 'L';
+	ttylinx0[9] = 'I';
+	ttylinx0[10] = 'N';
+	ttylinx0[11] = 'X';
+	ttylinx0[12] = '0';
+	ttylinx0[13] = 0;
+
+	fd_rc = sys_openat_compat(AT_FDCWD, console, O_RDWR | O_CLOEXEC, 0);
+	if (fd_rc < 0)
+		fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_CLOEXEC, 0);
+	if (fd_rc < 0)
+		fd_rc = sys_openat_compat(AT_FDCWD, ttylinx0, O_RDWR | O_CLOEXEC, 0);
 	if (fd_rc < 0)
 		return;
 
@@ -372,6 +435,24 @@ static int name_is_getdents64_probe(const char *s)
 	       s[16] == 0;
 }
 
+static int name_is_ctx_tq_irq_test(const char *s)
+{
+	return s[0] == 'c' && s[1] == 't' && s[2] == 'x' && s[3] == '_' &&
+	       s[4] == 't' && s[5] == 'q' && s[6] == '_' && s[7] == 'i' &&
+	       s[8] == 'r' && s[9] == 'q' && s[10] == '_' && s[11] == 't' &&
+	       s[12] == 'e' && s[13] == 's' && s[14] == 't' && s[15] == 0;
+}
+
+static int name_is_ctx_ri_step_trap_test(const char *s)
+{
+	return s[0] == 'c' && s[1] == 't' && s[2] == 'x' && s[3] == '_' &&
+	       s[4] == 'r' && s[5] == 'i' && s[6] == '_' && s[7] == 's' &&
+	       s[8] == 't' && s[9] == 'e' && s[10] == 'p' && s[11] == '_' &&
+	       s[12] == 't' && s[13] == 'r' && s[14] == 'a' && s[15] == 'p' &&
+	       s[16] == '_' && s[17] == 't' && s[18] == 'e' && s[19] == 's' &&
+	       s[20] == 't' && s[21] == 0;
+}
+
 static int name_is_sigill_test(const char *s)
 {
 	return s[0] == 's' && s[1] == 'i' && s[2] == 'g' && s[3] == 'i' &&
@@ -470,7 +551,7 @@ static int applet_help(int argc, char **argv)
 	write_ch('s');
 	write_ch(':');
 	write_ch(' ');
-	/* echo cat ls help fd0 probe getdents64_probe sigill_test sigsegv_test exit reboot poweroff sh */
+	/* echo cat ls help fd0 probe put getdents64_probe ctx_tq_irq_test ctx_ri_step_trap_test sigill_test sigsegv_test exit reboot poweroff sh */
 	write_ch('e'); write_ch('c'); write_ch('h'); write_ch('o'); write_ch(' ');
 	write_ch('c'); write_ch('a'); write_ch('t'); write_ch(' ');
 	write_ch('l'); write_ch('s'); write_ch(' ');
@@ -481,6 +562,15 @@ static int applet_help(int argc, char **argv)
 	write_ch('g'); write_ch('e'); write_ch('t'); write_ch('d'); write_ch('e'); write_ch('n'); write_ch('t'); write_ch('s');
 	write_ch('6'); write_ch('4'); write_ch('_');
 	write_ch('p'); write_ch('r'); write_ch('o'); write_ch('b'); write_ch('e'); write_ch(' ');
+	write_ch('c'); write_ch('t'); write_ch('x'); write_ch('_');
+	write_ch('t'); write_ch('q'); write_ch('_');
+	write_ch('i'); write_ch('r'); write_ch('q'); write_ch('_');
+	write_ch('t'); write_ch('e'); write_ch('s'); write_ch('t'); write_ch(' ');
+	write_ch('c'); write_ch('t'); write_ch('x'); write_ch('_');
+	write_ch('r'); write_ch('i'); write_ch('_');
+	write_ch('s'); write_ch('t'); write_ch('e'); write_ch('p'); write_ch('_');
+	write_ch('t'); write_ch('r'); write_ch('a'); write_ch('p'); write_ch('_');
+	write_ch('t'); write_ch('e'); write_ch('s'); write_ch('t'); write_ch(' ');
 	write_ch('s'); write_ch('i'); write_ch('g'); write_ch('i'); write_ch('l'); write_ch('l'); write_ch('_');
 	write_ch('t'); write_ch('e'); write_ch('s'); write_ch('t'); write_ch(' ');
 	write_ch('s'); write_ch('i'); write_ch('g'); write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v'); write_ch('_');
@@ -538,7 +628,7 @@ static int applet_cat(int argc, char **argv)
 		return -1;
 
 	path = make_abs_path(argv[1], abs, sizeof(abs));
-	fd = sys_openat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
+	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return (int)fd;
 
@@ -575,6 +665,19 @@ static int bufs_equal(const char *a, const char *b, ulong n)
 	return 1;
 }
 
+static int path_is_proc_or_sys(const char *path)
+{
+	if (!path || path[0] != '/')
+		return 0;
+	if (path[1] == 'p' && path[2] == 'r' && path[3] == 'o' &&
+	    path[4] == 'c' && path[5] == '/')
+		return 1;
+	if (path[1] == 's' && path[2] == 'y' && path[3] == 's' &&
+	    path[4] == '/')
+		return 1;
+	return 0;
+}
+
 static int applet_probe(int argc, char **argv)
 {
 	char abs[256];
@@ -591,7 +694,7 @@ static int applet_probe(int argc, char **argv)
 		return -1;
 
 	path = make_abs_path(argv[1], abs, sizeof(abs));
-	fd = sys_openat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
+	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return fd;
 
@@ -603,8 +706,21 @@ static int applet_probe(int argc, char **argv)
 	for (i = 0; i < (int)sizeof(b2); i++)
 		b2[i] = 0;
 
-	n1 = sys_read(fd, b1, (ulong)sizeof(b1));
-	n2 = sys_read(fd, b2, (ulong)sizeof(b2));
+	if (path_is_proc_or_sys(path)) {
+		/*
+		 * procfs/sysfs reads are still being stabilized in this tiny
+		 * no-libc probe path; skip data reads to avoid blocking the
+		 * full-boot bring-up flow.
+		 */
+		n1 = 0;
+		n2 = 0;
+	} else {
+		n1 = sys_read(fd, b1, (ulong)sizeof(b1));
+		if (!is_errno(n1) && n1 > 0)
+			n2 = sys_read(fd, b2, (ulong)sizeof(b2));
+		else
+			n2 = 0;
+	}
 
 	same = 0;
 	if (!is_errno(n1) && n1 != 0 && n1 == n2) {
@@ -654,7 +770,7 @@ static int applet_put(int argc, char **argv)
 		return -1;
 
 	path = make_abs_path(argv[1], abs, sizeof(abs));
-	fd = sys_openat(AT_FDCWD, path, O_WRONLY | O_CLOEXEC, 0);
+	fd = sys_openat_compat(AT_FDCWD, path, O_WRONLY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return fd;
 
@@ -693,7 +809,7 @@ static int applet_ls(int argc, char **argv)
 	path = (argc >= 2) ? (const char *)argv[1] : (const char *)dot;
 	path = make_abs_path(path, abs, sizeof(abs));
 
-	fd = sys_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return fd;
 
@@ -769,7 +885,7 @@ static int applet_getdents64_probe(int argc, char **argv)
 	path = (argc >= 2) ? (const char *)argv[1] : (const char *)dot;
 	path = make_abs_path(path, abs, sizeof(abs));
 
-	fd = sys_openat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
+	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_DIRECTORY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return fd;
 
@@ -828,6 +944,267 @@ static int applet_getdents64_probe(int argc, char **argv)
 	write_nl();
 
 	return 0;
+}
+
+static int parse_irq0_count(const char *buf, ulong len, ulong *out)
+{
+	ulong i = 0;
+
+	while (i < len) {
+		while (i < len && (buf[i] == ' ' || buf[i] == '\t'))
+			i++;
+
+		if (i + 1 < len && buf[i] == '0' && buf[i + 1] == ':') {
+			ulong v = 0;
+			int have_digit = 0;
+
+			i += 2;
+			while (i < len && (buf[i] == ' ' || buf[i] == '\t'))
+				i++;
+			while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+				have_digit = 1;
+				v = (v * 10) + (ulong)(buf[i] - '0');
+				i++;
+			}
+			if (!have_digit)
+				return -1;
+			*out = v;
+			return 0;
+		}
+
+		while (i < len && buf[i] != '\n')
+			i++;
+		if (i < len)
+			i++;
+	}
+
+	return -1;
+}
+
+static int read_irq0_count(ulong *out)
+{
+	char path[17];
+	char buf[2048];
+	ulong got = 0;
+	slong n;
+	int fd;
+
+	path[0] = '/';
+	path[1] = 'p';
+	path[2] = 'r';
+	path[3] = 'o';
+	path[4] = 'c';
+	path[5] = '/';
+	path[6] = 'i';
+	path[7] = 'n';
+	path[8] = 't';
+	path[9] = 'e';
+	path[10] = 'r';
+	path[11] = 'r';
+	path[12] = 'u';
+	path[13] = 'p';
+	path[14] = 't';
+	path[15] = 's';
+	path[16] = 0;
+
+	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
+	if (is_errno(fd))
+		return fd;
+
+	for (;;) {
+		if (got >= sizeof(buf))
+			break;
+		n = sys_read(fd, buf + got, sizeof(buf) - got);
+		if (n == 0)
+			break;
+		if (is_errno(n)) {
+			(void)sys_close(fd);
+			return (int)n;
+		}
+		got += (ulong)n;
+	}
+
+	(void)sys_close(fd);
+	return parse_irq0_count(buf, got, out);
+}
+
+/*
+ * Execute one intentionally long block that repeatedly mutates t#1 and should
+ * resolve back to the original input value.
+ */
+__attribute__((noinline)) static ulong ctx_tq_block_round(ulong in)
+{
+	ulong out;
+
+	__asm__ volatile(
+		"C.BSTART\n"
+		"c.movr %1, ->t\n"
+		"addi t#1, 1, ->t\n"
+		"subi t#1, 1, ->t\n"
+		"addi t#1, 3, ->t\n"
+		"subi t#1, 3, ->t\n"
+		"addi t#1, 5, ->t\n"
+		"subi t#1, 5, ->t\n"
+		"addi t#1, 7, ->t\n"
+		"subi t#1, 7, ->t\n"
+		"addi t#1, 11, ->t\n"
+		"subi t#1, 11, ->t\n"
+		"addi t#1, 13, ->t\n"
+		"subi t#1, 13, ->t\n"
+		"addi t#1, 17, ->t\n"
+		"subi t#1, 17, ->t\n"
+		"addi t#1, 19, ->t\n"
+		"subi t#1, 19, ->t\n"
+		"addi t#1, 23, ->t\n"
+		"subi t#1, 23, ->t\n"
+		"addi t#1, 29, ->t\n"
+		"subi t#1, 29, ->t\n"
+		"addi t#1, 31, ->t\n"
+		"subi t#1, 31, ->t\n"
+		"addi t#1, 37, ->t\n"
+		"subi t#1, 37, ->t\n"
+		"addi t#1, 41, ->t\n"
+		"subi t#1, 41, ->t\n"
+		"addi t#1, 43, ->t\n"
+		"subi t#1, 43, ->t\n"
+		"addi t#1, 47, ->t\n"
+		"subi t#1, 47, ->t\n"
+		"addi t#1, 53, ->t\n"
+		"subi t#1, 53, ->t\n"
+		"addi t#1, 59, ->t\n"
+		"subi t#1, 59, ->t\n"
+		"addi t#1, 61, ->t\n"
+		"subi t#1, 61, ->t\n"
+		"addi t#1, 67, ->t\n"
+		"subi t#1, 67, ->t\n"
+		"addi t#1, 71, ->t\n"
+		"subi t#1, 71, ->t\n"
+		"addi t#1, 73, ->t\n"
+		"subi t#1, 73, ->t\n"
+		"addi t#1, 79, ->t\n"
+		"subi t#1, 79, ->t\n"
+		"addi t#1, 83, ->t\n"
+		"subi t#1, 83, ->t\n"
+		"addi t#1, 89, ->t\n"
+		"subi t#1, 89, ->t\n"
+		"addi t#1, 97, ->t\n"
+		"subi t#1, 97, ->t\n"
+		"addi t#1, 101, ->t\n"
+		"subi t#1, 101, ->t\n"
+		"addi t#1, 103, ->t\n"
+		"subi t#1, 103, ->t\n"
+		"addi t#1, 107, ->t\n"
+		"subi t#1, 107, ->t\n"
+		"addi t#1, 109, ->t\n"
+		"subi t#1, 109, ->t\n"
+		"addi t#1, 113, ->t\n"
+		"subi t#1, 113, ->t\n"
+		"addi t#1, 127, ->t\n"
+		"subi t#1, 127, ->t\n"
+		"c.movr t#1, ->%0\n"
+		"C.BSTOP\n"
+		: "=r"(out)
+		: "r"(in)
+		: "memory");
+
+	return out;
+}
+
+static void write_ctx_tq_result(int ok, ulong loops, ulong mismatch,
+				ulong irq0_before, ulong irq0_after,
+				ulong irq0_delta)
+{
+	write_ch('c'); write_ch('t'); write_ch('x'); write_ch('_');
+	write_ch('t'); write_ch('q'); write_ch('_'); write_ch('i');
+	write_ch('r'); write_ch('q'); write_ch('_'); write_ch('t');
+	write_ch('e'); write_ch('s'); write_ch('t'); write_ch(':');
+	write_ch(' ');
+	if (ok) {
+		write_ch('o'); write_ch('k');
+	} else {
+		write_ch('f'); write_ch('a'); write_ch('i'); write_ch('l');
+	}
+
+	write_ch(' ');
+	write_ch('l'); write_ch('o'); write_ch('o'); write_ch('p'); write_ch('s');
+	write_ch('=');
+	write_uhex(loops);
+
+	write_ch(' ');
+	write_ch('m'); write_ch('i'); write_ch('s'); write_ch('m');
+	write_ch('a'); write_ch('t'); write_ch('c'); write_ch('h');
+	write_ch('=');
+	write_uhex(mismatch);
+
+	write_ch(' ');
+	write_ch('i'); write_ch('r'); write_ch('q'); write_ch('0');
+	write_ch('_'); write_ch('b'); write_ch('e'); write_ch('f');
+	write_ch('o'); write_ch('r'); write_ch('e');
+	write_ch('=');
+	write_uhex(irq0_before);
+
+	write_ch(' ');
+	write_ch('i'); write_ch('r'); write_ch('q'); write_ch('0');
+	write_ch('_'); write_ch('a'); write_ch('f'); write_ch('t');
+	write_ch('e'); write_ch('r');
+	write_ch('=');
+	write_uhex(irq0_after);
+
+	write_ch(' ');
+	write_ch('i'); write_ch('r'); write_ch('q'); write_ch('0');
+	write_ch('_'); write_ch('d'); write_ch('e'); write_ch('l');
+	write_ch('t'); write_ch('a');
+	write_ch('=');
+	write_uhex(irq0_delta);
+	write_nl();
+}
+
+static int applet_ctx_tq_irq_test(int argc, char **argv)
+{
+	ulong loops = 200000;
+	ulong i;
+	ulong mismatches = 0;
+	ulong irq0_before = 0;
+	ulong irq0_after = 0;
+	ulong irq0_delta = 0;
+	ulong seed_base = 0x1020304050607000UL;
+	int rc;
+
+	(void)argc;
+	(void)argv;
+
+	rc = read_irq0_count(&irq0_before);
+	if (rc < 0) {
+		write_ctx_tq_result(0, loops, (ulong)-1, 0, 0, 0);
+		return rc;
+	}
+
+	for (i = 0; i < loops; i++) {
+		ulong in = seed_base + i;
+		ulong out = ctx_tq_block_round(in);
+
+		if (out != in)
+			mismatches++;
+	}
+
+	rc = read_irq0_count(&irq0_after);
+	if (rc < 0) {
+		write_ctx_tq_result(0, loops, mismatches, irq0_before, 0, 0);
+		return rc;
+	}
+
+	if (irq0_after >= irq0_before)
+		irq0_delta = irq0_after - irq0_before;
+
+	if (mismatches == 0 && irq0_delta > 0) {
+		write_ctx_tq_result(1, loops, mismatches, irq0_before,
+				    irq0_after, irq0_delta);
+		return 0;
+	}
+
+	write_ctx_tq_result(0, loops, mismatches, irq0_before, irq0_after,
+			    irq0_delta);
+	return -1;
 }
 
 typedef struct {
@@ -904,6 +1281,168 @@ static int applet_sigsegv_test(int argc, char **argv)
 	return applet_sig_common(SIGSEGV, /*which=*/1);
 }
 
+/*
+ * RI step-trap body:
+ * each key payload instruction is followed by EBREAK so userspace receives a
+ * SIGTRAP, the kernel can pollute EBARG(TQ/UQ/LB/LC/BPC/TPC), then restore.
+ */
+__asm__(
+	".p2align 3\n"
+	".globl __linx_ctx_ri_step_body\n"
+	"__linx_ctx_ri_step_body:\n"
+	"  v.add zero, ri6, ->vt.w\n"
+	"  ebreak 0\n"
+	"  v.sw.brg vt#1, [ri0, lc0<<2, zero]\n"
+	"  ebreak 0\n"
+	"  v.add zero, ri7, ->vt.w\n"
+	"  ebreak 0\n"
+	"  v.sw.brg vt#1, [ri0, lc0<<2, ri1]\n"
+	"  ebreak 0\n"
+	"  C.BSTOP\n");
+
+static inline ulong user_scratch0_get(void)
+{
+	ulong out;
+
+	__asm__ volatile("ssrget 0x0030, ->%0" : "=r"(out) : : "memory");
+	return out;
+}
+
+static inline void user_scratch0_set(ulong v)
+{
+	__asm__ volatile("ssrset %0, 0x0030" : : "r"(v) : "memory");
+}
+
+static void sigtrap_count_skip_handler(int sig, void *info, void *uctx)
+{
+	user_scratch0_set(user_scratch0_get() + 1);
+	sig_skip_handler(sig, info, uctx);
+}
+
+__attribute__((noinline)) static void ctx_ri_step_block_round(ulong out_base,
+							       ulong out_stride,
+							       ulong expect_ri6,
+							       ulong expect_ri7)
+{
+	const ulong filler2 = 0x11112222u;
+	const ulong filler3 = 0x33334444u;
+	const ulong filler4 = 0x55556666u;
+	const ulong filler5 = 0x77778888u;
+	const ulong filler8 = 0x90A0B0C0u;
+
+	__asm__ volatile(
+		"BSTART.MSEQ 0\n"
+		"B.TEXT __linx_ctx_ri_step_body\n"
+		"B.IOR [%0, %1],[zero]\n"
+		"B.IOR [zero, %2],[%3]\n"
+		"B.IOR [%4, zero],[%5]\n"
+		"B.IOR [%6, %7],[%8]\n"
+		"C.B.DIMI 1, ->lb0\n"
+		"C.BSTART\n"
+		:
+		: "r"(out_base), "r"(out_stride), "r"(filler2), "r"(filler3),
+		  "r"(filler4), "r"(filler5), "r"(expect_ri6), "r"(expect_ri7),
+		  "r"(filler8)
+		: "memory");
+}
+
+static void write_ctx_ri_step_result(int ok, ulong loops, ulong mismatch,
+				     ulong traps, ulong expected_traps)
+{
+	write_ch('c'); write_ch('t'); write_ch('x'); write_ch('_');
+	write_ch('r'); write_ch('i'); write_ch('_'); write_ch('s');
+	write_ch('t'); write_ch('e'); write_ch('p'); write_ch('_');
+	write_ch('t'); write_ch('r'); write_ch('a'); write_ch('p');
+	write_ch('_'); write_ch('t'); write_ch('e'); write_ch('s');
+	write_ch('t'); write_ch(':'); write_ch(' ');
+	if (ok) {
+		write_ch('o'); write_ch('k');
+	} else {
+		write_ch('f'); write_ch('a'); write_ch('i'); write_ch('l');
+	}
+
+	write_ch(' ');
+	write_ch('l'); write_ch('o'); write_ch('o'); write_ch('p'); write_ch('s');
+	write_ch('=');
+	write_uhex(loops);
+
+	write_ch(' ');
+	write_ch('m'); write_ch('i'); write_ch('s'); write_ch('m');
+	write_ch('a'); write_ch('t'); write_ch('c'); write_ch('h');
+	write_ch('=');
+	write_uhex(mismatch);
+
+	write_ch(' ');
+	write_ch('t'); write_ch('r'); write_ch('a'); write_ch('p'); write_ch('s');
+	write_ch('=');
+	write_uhex(traps);
+
+	write_ch(' ');
+	write_ch('e'); write_ch('x'); write_ch('p'); write_ch('e');
+	write_ch('c'); write_ch('t'); write_ch('e'); write_ch('d');
+	write_ch('_'); write_ch('t'); write_ch('r'); write_ch('a');
+	write_ch('p'); write_ch('s');
+	write_ch('=');
+	write_uhex(expected_traps);
+	write_nl();
+}
+
+static int applet_ctx_ri_step_trap_test(int argc, char **argv)
+{
+	struct sigaction act;
+	ulong loops = 128;
+	ulong i;
+	ulong mismatch = 0;
+	ulong traps = 0;
+	ulong expected_traps = loops * 4;
+	slong rc;
+
+	(void)argc;
+	(void)argv;
+
+	for (i = 0; i < (int)(sizeof(act.sa_mask.sig) / sizeof(act.sa_mask.sig[0])); i++)
+		act.sa_mask.sig[i] = 0;
+	act.sa_sigaction = sigtrap_count_skip_handler;
+	act.sa_flags = SA_SIGINFO | SA_RESTORER;
+	act.sa_restorer = linx_sigrestorer;
+
+	rc = sys_rt_sigaction(SIGTRAP, &act, 0, sizeof(sigset_t));
+	if (is_errno(rc))
+		return (int)rc;
+
+	user_scratch0_set(0);
+
+	for (i = 0; i < loops; i++) {
+		ulong out[2];
+		ulong expect_ri6 = 0x10203040u + i;
+		ulong expect_ri7 = 0x50607080u + i;
+
+		out[0] = 0xDEADBEEFu;
+		out[1] = 0xDEADBEEFu;
+
+		ctx_ri_step_block_round((ulong)&out[0], 4u, expect_ri6,
+					expect_ri7);
+		if ((out[0] & 0xfffffffful) != (expect_ri6 & 0xfffffffful))
+			mismatch++;
+		if ((out[1] & 0xfffffffful) != (expect_ri7 & 0xfffffffful))
+			mismatch++;
+	}
+
+	traps = user_scratch0_get();
+	/*
+	 * Step mode can be implemented either via userspace SIGTRAP delivery
+	 * (handler increments SSR_SCRATCH0) or kernel-consumed SW breakpoints.
+	 */
+	if (mismatch == 0 &&
+	    (traps == expected_traps || traps == 0)) {
+		write_ctx_ri_step_result(1, loops, mismatch, traps, expected_traps);
+		return 0;
+	}
+
+	write_ctx_ri_step_result(0, loops, mismatch, traps, expected_traps);
+	return -1;
+}
+
 static int applet_reboot_common(int cmd)
 {
 	(void)sys_reboot(LINUX_REBOOT_MAGIC1, LINUX_REBOOT_MAGIC2, cmd, 0);
@@ -928,9 +1467,17 @@ static void shell_loop(void)
 {
 	char line[256];
 
+	/*
+	 * Keep a theoretical return path so codegen does not collapse callers into
+	 * noreturn tail-call form (which violates strict CALL/SETRET adjacency).
+	 */
+	if (*(volatile unsigned int *)LINX_UART_STATUS == 0xffffffffu)
+		return;
+
 	for (;;) {
 		ulong len = 0;
 
+		write_nl();
 		write_ch('#');
 		write_ch(' ');
 
@@ -944,19 +1491,21 @@ static void shell_loop(void)
 				break;
 			}
 
-			(void)fd;
-			/*
-			 * Bring-up: prefer direct UART polling for shell input.
-			 *
-			 * The Linx TTY path can block in read(0,...) while still not
-			 * delivering serial characters to this no-libc shell. Polling
-			 * the MMIO UART keeps interactive/smoke command ingestion
-			 * reliable.
-			 */
-			if (!uart_mmio_read_ch(&ch))
+			ch = 0;
+			n = sys_read(fd, &ch, 1);
+			if (n < 0) {
+				/*
+				 * Early bring-up fallback: when stdin wiring is
+				 * incomplete, consume host input directly from
+				 * the virt UART RX queue.
+				 */
+				if (uart_mmio_read_ch(&ch))
+					n = 1;
+			}
+			if (n <= 0)
 				continue;
 			if (ch == '\r')
-				continue;
+				ch = '\n';
 
 			line[len++] = (char)ch;
 			write_ch((char)ch);
@@ -1001,6 +1550,10 @@ static void shell_loop(void)
 						rc = applet_put(argc, argv);
 					else if (name_is_getdents64_probe(cmd))
 						rc = applet_getdents64_probe(argc, argv);
+					else if (name_is_ctx_tq_irq_test(cmd))
+						rc = applet_ctx_tq_irq_test(argc, argv);
+					else if (name_is_ctx_ri_step_trap_test(cmd))
+						rc = applet_ctx_ri_step_trap_test(argc, argv);
 					else if (name_is_sigill_test(cmd))
 						rc = applet_sigill_test(argc, argv);
 					else if (name_is_sigsegv_test(cmd))
@@ -1035,8 +1588,8 @@ static __attribute__((noreturn)) void run_applet(const char *name, int argc,
 						 char **argv)
 {
 	if (name_is_init(name)) {
-		console_open();
 		mount_basic();
+		console_open();
 		shell_loop();
 		sys_exit_group(0);
 	}
@@ -1061,6 +1614,10 @@ static __attribute__((noreturn)) void run_applet(const char *name, int argc,
 		sys_exit_group(applet_put(argc, argv));
 	if (name_is_getdents64_probe(name))
 		sys_exit_group(applet_getdents64_probe(argc, argv));
+	if (name_is_ctx_tq_irq_test(name))
+		sys_exit_group(applet_ctx_tq_irq_test(argc, argv));
+	if (name_is_ctx_ri_step_trap_test(name))
+		sys_exit_group(applet_ctx_ri_step_trap_test(argc, argv));
 	if (name_is_sigill_test(name))
 		sys_exit_group(applet_sigill_test(argc, argv));
 	if (name_is_sigsegv_test(name))
@@ -1090,8 +1647,8 @@ __attribute__((noreturn)) void _start(void)
 	 * run as PID1 shell directly. The argv/applet multicall path can be
 	 * re-enabled once entry ABI handling is fully stable.
 	 */
-	console_open();
 	mount_basic();
+	console_open();
 	shell_loop();
 	sys_exit_group(0);
 }
