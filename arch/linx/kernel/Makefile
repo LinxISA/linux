@@ -17,5 +17,6 @@ obj-y += signal.o
 obj-y += irq.o
 obj-y += time.o
 obj-y += traps.o
+obj-y += ebarg_selftest.o
 obj-y += syscall_table.o
 obj-y += sys_linx.o

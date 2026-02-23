@@ -5,6 +5,7 @@
 #include <linux/interrupt.h>
 
 #include <asm/irqflags.h>
+#include <asm/ssr.h>
 
 enum {
 	LINX_NR_VIRT_IRQS = 64,
@@ -22,7 +23,8 @@ static void linx_irq_unmask(struct irq_data *d)
 
 static void linx_irq_eoi(struct irq_data *d)
 {
-	(void)d;
+	/* QEMU models EOIEI as an SSR write on the managing ACR bank. */
+	linx_ssr_write_eoiei_acr1((u64)d->hwirq);
 }
 
 static struct irq_chip linx_irq_chip = {

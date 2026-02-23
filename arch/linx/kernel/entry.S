@@ -269,14 +269,51 @@ linx_trap_vector:
 
 .Llinx_return_default:
 	C.BSTART.STD
-	/* Debug fallback: explicit RRAT_DEFAULT path (not default return). */
+	/*
+	 * Debug fallback: explicit RRAT_DEFAULT path.
+	 * Re-seed ECSTATE/EBARG from pt_regs, then return via ACRE RRAT_DEFAULT (0).
+	 * IRQ/timer nesting can clobber restore state; restore the full EBARG group
+	 * to avoid architectural state pollution when returning to userspace.
+	 */
 	c.movr sp, ->x3
 	ldi [x3, PT_REGS_ECSTATE], ->x1
 	hl.ssrset x1, SSR_ECSTATE_ACR1
-	ldi [x3, PT_REGS_PC], ->x0
+
+	/* Restore full EBARG group from pt_regs snapshot. */
+	ldi [x3, PT_REGS_EBARG0], ->x0
+	hl.ssrset x0, SSR_EBARG0_ACR1
+	ldi [x3, PT_REGS_EBARG_BPC_CUR], ->x0
 	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
+	ldi [x3, PT_REGS_EBARG_BPC_TGT], ->x0
 	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
+	ldi [x3, PT_REGS_EBARG_TPC], ->x0
 	hl.ssrset x0, SSR_EBARG_TPC_ACR1
+	ldi [x3, PT_REGS_EBARG_LRA], ->x0
+	hl.ssrset x0, SSR_EBARG_LRA_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
+	ldi [x3, PT_REGS_EBARG_LB], ->x0
+	hl.ssrset x0, SSR_EBARG_LB_ACR1
+	ldi [x3, PT_REGS_EBARG_LC], ->x0
+	hl.ssrset x0, SSR_EBARG_LC_ACR1
+	ldi [x3, PT_REGS_EBARG_EXT_PTR], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
+	ldi [x3, PT_REGS_EBARG_EXT_META], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
 
 	ldi [x3, PT_REGS_R2],  ->a0
 	ldi [x3, PT_REGS_R3],  ->a1
@@ -321,6 +358,7 @@ linx_enter_user:
 	ldi [sp, PT_REGS_ECSTATE], ->x0
 	hl.ssrset x0, SSR_ECSTATE_ACR1
 
+	/* Seed full EBARG group for deterministic entry into user ACR. */
 	ldi [sp, PT_REGS_EBARG0], ->x0
 	hl.ssrset x0, SSR_EBARG0_ACR1
 	ldi [sp, PT_REGS_EBARG_BPC_CUR], ->x0
@@ -329,6 +367,32 @@ linx_enter_user:
 	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
 	ldi [sp, PT_REGS_EBARG_TPC], ->x0
 	hl.ssrset x0, SSR_EBARG_TPC_ACR1
+	ldi [sp, PT_REGS_EBARG_LRA], ->x0
+	hl.ssrset x0, SSR_EBARG_LRA_ACR1
+	ldi [sp, PT_REGS_EBARG_TQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
+	ldi [sp, PT_REGS_EBARG_TQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
+	ldi [sp, PT_REGS_EBARG_TQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
+	ldi [sp, PT_REGS_EBARG_TQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
+	ldi [sp, PT_REGS_EBARG_UQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
+	ldi [sp, PT_REGS_EBARG_UQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
+	ldi [sp, PT_REGS_EBARG_UQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
+	ldi [sp, PT_REGS_EBARG_UQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
+	ldi [sp, PT_REGS_EBARG_LB], ->x0
+	hl.ssrset x0, SSR_EBARG_LB_ACR1
+	ldi [sp, PT_REGS_EBARG_LC], ->x0
+	hl.ssrset x0, SSR_EBARG_LC_ACR1
+	ldi [sp, PT_REGS_EBARG_EXT_PTR], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
+	ldi [sp, PT_REGS_EBARG_EXT_META], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
 
 	/* Restore user GPRs from pt_regs and enter user ACR via ACRE. */
 	ldi [sp, PT_REGS_R2],  ->a0
