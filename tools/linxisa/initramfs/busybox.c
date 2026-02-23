@@ -981,51 +981,85 @@ static int parse_irq0_count(const char *buf, ulong len, ulong *out)
 	return -1;
 }
 
-static int read_irq0_count(ulong *out)
+static int parse_intr_total_count(const char *buf, ulong len, ulong *out)
 {
-	char path[17];
-	char buf[2048];
-	ulong got = 0;
+	ulong i = 0;
+
+	while (i < len) {
+		while (i < len && (buf[i] == ' ' || buf[i] == '\t'))
+			i++;
+
+		if (i + 4 < len &&
+		    buf[i] == 'i' && buf[i + 1] == 'n' &&
+		    buf[i + 2] == 't' && buf[i + 3] == 'r' &&
+		    (buf[i + 4] == ' ' || buf[i + 4] == '\t')) {
+			ulong v = 0;
+			int have_digit = 0;
+
+			i += 4;
+			while (i < len && (buf[i] == ' ' || buf[i] == '\t'))
+				i++;
+			while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+				have_digit = 1;
+				v = (v * 10) + (ulong)(buf[i] - '0');
+				i++;
+			}
+			if (!have_digit)
+				return -1;
+			*out = v;
+			return 0;
+		}
+
+		while (i < len && buf[i] != '\n')
+			i++;
+		if (i < len)
+			i++;
+	}
+
+	return -1;
+}
+
+static int read_proc_file(const char *path, char *buf, ulong cap, ulong *got)
+{
 	slong n;
 	int fd;
 
-	path[0] = '/';
-	path[1] = 'p';
-	path[2] = 'r';
-	path[3] = 'o';
-	path[4] = 'c';
-	path[5] = '/';
-	path[6] = 'i';
-	path[7] = 'n';
-	path[8] = 't';
-	path[9] = 'e';
-	path[10] = 'r';
-	path[11] = 'r';
-	path[12] = 'u';
-	path[13] = 'p';
-	path[14] = 't';
-	path[15] = 's';
-	path[16] = 0;
-
+	*got = 0;
 	fd = sys_openat_compat(AT_FDCWD, path, O_RDONLY | O_CLOEXEC, 0);
 	if (is_errno(fd))
 		return fd;
 
 	for (;;) {
-		if (got >= sizeof(buf))
+		if (*got >= cap)
 			break;
-		n = sys_read(fd, buf + got, sizeof(buf) - got);
+		n = sys_read(fd, buf + *got, cap - *got);
 		if (n == 0)
 			break;
 		if (is_errno(n)) {
 			(void)sys_close(fd);
 			return (int)n;
 		}
-		got += (ulong)n;
+		*got += (ulong)n;
 	}
 
 	(void)sys_close(fd);
-	return parse_irq0_count(buf, got, out);
+	return 0;
+}
+
+static int read_irq0_count(ulong *out)
+{
+	char buf[4096];
+	ulong got = 0;
+	int rc;
+
+	rc = read_proc_file("/proc/interrupts", buf, sizeof(buf), &got);
+	if (rc == 0 && parse_irq0_count(buf, got, out) == 0)
+		return 0;
+
+	rc = read_proc_file("/proc/stat", buf, sizeof(buf), &got);
+	if (rc < 0)
+		return rc;
+	return parse_intr_total_count(buf, got, out);
 }
 
 /*
@@ -1413,7 +1447,7 @@ static int applet_ctx_ri_step_trap_test(int argc, char **argv)
 	user_scratch0_set(0);
 
 	for (i = 0; i < loops; i++) {
-		ulong out[2];
+		unsigned int out[2];
 		ulong expect_ri6 = 0x10203040u + i;
 		ulong expect_ri7 = 0x50607080u + i;
 
@@ -1422,9 +1456,9 @@ static int applet_ctx_ri_step_trap_test(int argc, char **argv)
 
 		ctx_ri_step_block_round((ulong)&out[0], 4u, expect_ri6,
 					expect_ri7);
-		if ((out[0] & 0xfffffffful) != (expect_ri6 & 0xfffffffful))
+		if (((ulong)out[0] & 0xfffffffful) != (expect_ri6 & 0xfffffffful))
 			mismatch++;
-		if ((out[1] & 0xfffffffful) != (expect_ri7 & 0xfffffffful))
+		if (((ulong)out[1] & 0xfffffffful) != (expect_ri7 & 0xfffffffful))
 			mismatch++;
 	}
 
