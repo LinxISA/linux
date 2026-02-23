@@ -37,6 +37,9 @@
 
 extern void linx_timer_handle_irq(void);
 
+/* Debug/test hook: count async interrupts seen by the trap handler. */
+volatile u64 linx_async_irq_count;
+
 asmlinkage void linx_do_trap(struct pt_regs *regs);
 
 extern void * const sys_call_table[__NR_syscalls];
@@ -70,6 +73,7 @@ enum {
 #define LINX_TRAP_DEBUG_LIMIT 0u
 #define LINX_SYSCALL_DEBUG_LIMIT 0u
 #define LINX_DEBUG_MIRROR_USER_WRITE 0u
+/* merge resolved */
 #define LINX_ECSTATE_BI_BIT (1ull << 62)
 
 static bool linx_disable_timer_irq;
@@ -207,6 +211,7 @@ void linx_ctx_tu_test_poison_manager_state(void)
 	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_LB, SSR_EBARG_LB_ACR1);
 	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_LC, SSR_EBARG_LC_ACR1);
 }
+/* merge resolved: timer IRQ is controlled by linx_disable_timer_irq + TU hooks */
 
 static inline u8 linx_trapno_trapnum(u64 trapno)
 {
@@ -394,6 +399,8 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 		const u64 irq_id = regs->traparg0;
 		const u64 irq_mask = (irq_id < 64) ? (1ull << irq_id) : 0;
 		bool eoi_done = false;
+
+		linx_async_irq_count++;
 
 		if (!irq_mask) {
 			pr_err("linx: invalid irq id: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
