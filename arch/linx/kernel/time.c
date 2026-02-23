@@ -3,6 +3,7 @@
 #include <linux/clockchips.h>
 #include <linux/clocksource.h>
 #include <linux/init.h>
+#include <linux/kernel.h>
 
 #include <asm/ssr.h>
 
@@ -54,6 +55,9 @@ void linx_timer_handle_irq(void)
 	 * Called from the trap vector. The tick framework installs the actual
 	 * event handler when the clock event device is registered.
 	 */
+	if (unlikely(system_state < SYSTEM_SCHEDULING))
+		return;
+
 	if (linx_clockevent.event_handler)
 		linx_clockevent.event_handler(&linx_clockevent);
 }

@@ -167,27 +167,80 @@ linx_trap_vector:
 	C.BSTOP
 
 .Llinx_after_do_trap:
-	C.BSTART.STD
-	/* Deliver signals / resume-work before returning to user mode (no-op for kernel). */
-	BSTART CALL, do_notify_resume, ra=.Llinx_after_notify
-	c.movr sp, ->a0
+	/*
+	 * Only user-mode traps need do_notify_resume() work. Kernel-mode traps/IRQs
+	 * return directly after restoring trap metadata.
+	 */
+	C.BSTART COND, .Llinx_after_notify
+	ldi [sp, PT_REGS_ECSTATE], ->x0
+	andi x0, 15, ->x0
+	subi x0, 2, ->x0
+	c.setc.eq x0, zero
+	C.BSTOP
+
+	C.BSTART DIRECT, .Llinx_return_restore
 	C.BSTOP
 
 .Llinx_after_notify:
+	C.BSTART.STD
+	BSTART CALL, do_notify_resume, ra=.Llinx_after_notify_done
+	c.movr sp, ->a0
+	C.BSTOP
+
+.Llinx_after_notify_done:
 	/*
-	 * Always return via the explicit RRAT_DEFAULT path.
-	 *
-	 * Nested traps (e.g. IRQ while servicing a userspace syscall) can clobber
-	 * hardware restore state. Re-seeding ECSTATE/EBARG from pt_regs keeps
-	 * return-to-user deterministic and avoids resuming user PC in kernel ACR.
+	 * Return to userspace via explicit RRAT_RESTORE. We always re-seed the
+	 * manager-bank ECSTATE/EBARG snapshot from pt_regs first.
 	 */
-	C.BSTART DIRECT, .Llinx_return_default
+	C.BSTART DIRECT, .Llinx_return_restore
 	C.BSTOP
 
 .Llinx_return_restore:
 	C.BSTART.STD
 	/* Restore registers from pt_regs and return via ACRE RRAT_RESTORE (1). */
 	c.movr sp, ->x3
+
+	/* Re-seed manager-bank trap snapshot from pt_regs before ACRE. */
+	ldi [x3, PT_REGS_ECSTATE], ->x1
+	hl.ssrset x1, SSR_ECSTATE_ACR1
+
+	ldi [x3, PT_REGS_EBARG0], ->x0
+	hl.ssrset x0, SSR_EBARG0_ACR1
+	ldi [x3, PT_REGS_EBARG_BPC_CUR], ->x0
+	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
+	ldi [x3, PT_REGS_EBARG_BPC_TGT], ->x0
+	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
+	ldi [x3, PT_REGS_EBARG_TPC], ->x0
+	hl.ssrset x0, SSR_EBARG_TPC_ACR1
+	ldi [x3, PT_REGS_EBARG_LRA], ->x0
+	hl.ssrset x0, SSR_EBARG_LRA_ACR1
+
+	ldi [x3, PT_REGS_EBARG_TQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
+	ldi [x3, PT_REGS_EBARG_TQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
+
+	ldi [x3, PT_REGS_EBARG_UQ0], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ1], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ2], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
+	ldi [x3, PT_REGS_EBARG_UQ3], ->x0
+	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
+
+	ldi [x3, PT_REGS_EBARG_LB], ->x0
+	hl.ssrset x0, SSR_EBARG_LB_ACR1
+	ldi [x3, PT_REGS_EBARG_LC], ->x0
+	hl.ssrset x0, SSR_EBARG_LC_ACR1
+	ldi [x3, PT_REGS_EBARG_EXT_PTR], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
+	ldi [x3, PT_REGS_EBARG_EXT_META], ->x0
+	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
 
 	ldi [x3, PT_REGS_R2],  ->a0
 	ldi [x3, PT_REGS_R3],  ->a1
@@ -216,7 +269,7 @@ linx_trap_vector:
 
 .Llinx_return_default:
 	C.BSTART.STD
-	/* Re-seed ECSTATE/EBARG from pt_regs, then return via ACRE RRAT_DEFAULT (0). */
+	/* Debug fallback: explicit RRAT_DEFAULT path (not default return). */
 	c.movr sp, ->x3
 	ldi [x3, PT_REGS_ECSTATE], ->x1
 	hl.ssrset x1, SSR_ECSTATE_ACR1

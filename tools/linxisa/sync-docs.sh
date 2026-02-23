@@ -2,9 +2,10 @@
 set -euo pipefail
 
 LINUX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SUPER_ROOT="$(cd "${LINUX_ROOT}/../.." && pwd)"
 
 SRC="$LINUX_ROOT/Documentation/linxisa/bringup-plan.md"
-QEMU_PLAN="/Users/zhoubot/qemu/docs/linxisa/bringup-plan.md"
+QEMU_PLAN="${QEMU_PLAN:-$SUPER_ROOT/emulator/qemu/docs/linxisa/bringup-plan.md}"
 
 if [[ ! -f "$SRC" ]]; then
   echo "error: missing source plan: $SRC" >&2
@@ -35,4 +36,3 @@ fi
 echo "ok: synced:"
 echo "  $SRC"
 echo "  -> $QEMU_PLAN"
-

@@ -15,37 +15,67 @@ Current stage:
 ## Build + run (QEMU)
 
 ```bash
-cd /Users/zhoubot/linux/tools/linxisa/initramfs
+cd /Users/zhoubot/linx-isa/kernel/linux/tools/linxisa/initramfs
 ./build.sh
 
 /Users/zhoubot/qemu/build/qemu-system-linx64 \
   -nographic -monitor none -machine virt -m 512M -smp 1 \
-  -kernel /Users/zhoubot/linux/build-linx-fixed/vmlinux \
-  -initrd /Users/zhoubot/linux/build-linx-fixed/linx-initramfs/initramfs.cpio \
+  -kernel /Users/zhoubot/linx-isa/kernel/linux/build-linx-fixed/vmlinux \
+  -initrd /Users/zhoubot/linx-isa/kernel/linux/build-linx-fixed/linx-initramfs/initramfs.cpio \
   -append "lpj=1000000 loglevel=8"
 ```
 
 Once booted, you should land at a `#` prompt. Try `help`, `ls`, `cat`, `echo`.
+`help` now also lists `ctx_tq_irq_test`, which validates the `BI=1` interrupt +
+context-switch + EBARG(TQ/UQ) restore path, and `ctx_ri_step_trap_test`, which
+validates `ri + ebreak(single-step trap) + kernel EBARG pollution + resume`.
 
 ## Regression scripts
 
 Baseline smoke:
 
 ```bash
-cd /Users/zhoubot/linux
-python3 tools/linxisa/initramfs/smoke.py
+cd /Users/zhoubot/linx-isa
+python3 kernel/linux/tools/linxisa/initramfs/smoke.py
 ```
 
 Full userspace boot checks (`/proc` + `/sys` + exception applets):
 
 ```bash
-cd /Users/zhoubot/linux
-python3 tools/linxisa/initramfs/full_boot.py
+cd /Users/zhoubot/linx-isa
+python3 kernel/linux/tools/linxisa/initramfs/full_boot.py
+```
+
+Dedicated `BI=1 + context switch + t#1 restore` smoke:
+
+```bash
+cd /Users/zhoubot/linx-isa
+LINX_DISABLE_TIMER_IRQ=0 \
+QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+python3 kernel/linux/tools/linxisa/initramfs/ctx_tq_irq_smoke.py
+```
+
+Dedicated `ri + step-trap + kernel pollution + resume` smoke:
+
+```bash
+cd /Users/zhoubot/linx-isa
+LINX_DISABLE_TIMER_IRQ=1 \
+QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+python3 kernel/linux/tools/linxisa/initramfs/ctx_ri_step_trap_smoke.py
+```
+
+Negative guard (must fail fast):
+
+```bash
+cd /Users/zhoubot/linx-isa
+LINX_DISABLE_TIMER_IRQ=1 \
+QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+python3 kernel/linux/tools/linxisa/initramfs/ctx_tq_irq_smoke.py
 ```
 
 Virtio disk smoke (`virtio-mmio` transport + `virtio-blk` enumeration):
 
 ```bash
-cd /Users/zhoubot/linux
-python3 tools/linxisa/initramfs/virtio_disk_smoke.py
+cd /Users/zhoubot/linx-isa
+python3 kernel/linux/tools/linxisa/initramfs/virtio_disk_smoke.py
 ```

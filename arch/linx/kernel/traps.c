@@ -1,10 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0-only
 
 #include <linux/types.h>
+#include <linux/atomic.h>
+#include <linux/compiler.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqdesc.h>
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/printk.h>
@@ -21,6 +24,7 @@
 #include <asm/ptrace.h>
 #include <asm/ssr.h>
 #include <asm/thread_info.h>
+#include <asm/linx_ctx_tu_test.h>
 
 /*
  * Called from the EVBASE trap vector.
@@ -66,7 +70,143 @@ enum {
 #define LINX_TRAP_DEBUG_LIMIT 0u
 #define LINX_SYSCALL_DEBUG_LIMIT 0u
 #define LINX_DEBUG_MIRROR_USER_WRITE 0u
-#define LINX_ENABLE_TIMER_IRQ 0u
+#define LINX_ECSTATE_BI_BIT (1ull << 62)
+
+static bool linx_disable_timer_irq;
+static bool linx_ctx_tu_test;
+static bool linx_ctx_tu_step_test;
+static atomic_t linx_ctx_tu_pending_reason = ATOMIC_INIT(LINX_CTX_TU_PENDING_NONE);
+static atomic64_t linx_ctx_tu_step_bi_fail_count = ATOMIC64_INIT(0);
+
+enum {
+	SSR_EBARG_BPC_CUR_ACR1 = 0x1f41,
+	SSR_EBARG_BPC_TGT_ACR1 = 0x1f42,
+	SSR_EBARG_TPC_ACR1 = 0x1f43,
+	SSR_EBARG_TQ0_ACR1 = 0x1f45,
+	SSR_EBARG_TQ1_ACR1 = 0x1f46,
+	SSR_EBARG_TQ2_ACR1 = 0x1f47,
+	SSR_EBARG_TQ3_ACR1 = 0x1f48,
+	SSR_EBARG_UQ0_ACR1 = 0x1f49,
+	SSR_EBARG_UQ1_ACR1 = 0x1f4a,
+	SSR_EBARG_UQ2_ACR1 = 0x1f4b,
+	SSR_EBARG_UQ3_ACR1 = 0x1f4c,
+	SSR_EBARG_LB_ACR1 = 0x1f4d,
+	SSR_EBARG_LC_ACR1 = 0x1f4e,
+};
+
+enum {
+	LINX_CTX_TU_POISON_BPC_CUR = 0xfeed000000000111ull,
+	LINX_CTX_TU_POISON_BPC_TGT = 0xfeed000000000222ull,
+	LINX_CTX_TU_POISON_TPC = 0xfeed000000000333ull,
+	LINX_CTX_TU_POISON_TQ0 = 0x1111111111111111ull,
+	LINX_CTX_TU_POISON_TQ1 = 0x2222222222222222ull,
+	LINX_CTX_TU_POISON_TQ2 = 0x3333333333333333ull,
+	LINX_CTX_TU_POISON_TQ3 = 0x4444444444444444ull,
+	LINX_CTX_TU_POISON_UQ0 = 0x5555555555555555ull,
+	LINX_CTX_TU_POISON_UQ1 = 0x6666666666666666ull,
+	LINX_CTX_TU_POISON_UQ2 = 0x7777777777777777ull,
+	LINX_CTX_TU_POISON_UQ3 = 0x8888888888888888ull,
+	LINX_CTX_TU_POISON_LB = 0x9999999999999999ull,
+	LINX_CTX_TU_POISON_LC = 0xaaaaaaaaaaaaaaa1ull,
+};
+
+static int __init linx_disable_timer_irq_setup(char *arg)
+{
+	if (!arg)
+		linx_disable_timer_irq = true;
+	else if (arg[0] == '1' || arg[0] == 'y' || arg[0] == 'Y' ||
+		 arg[0] == 't' || arg[0] == 'T')
+		linx_disable_timer_irq = true;
+	else
+		linx_disable_timer_irq = false;
+	return 1;
+}
+early_param("linx_disable_timer_irq", linx_disable_timer_irq_setup);
+
+static int __init linx_ctx_tu_test_setup(char *arg)
+{
+	if (!arg)
+		linx_ctx_tu_test = true;
+	else if (arg[0] == '1' || arg[0] == 'y' || arg[0] == 'Y' ||
+		 arg[0] == 't' || arg[0] == 'T')
+		linx_ctx_tu_test = true;
+	else
+		linx_ctx_tu_test = false;
+	return 1;
+}
+__setup("linx_ctx_tu_test=", linx_ctx_tu_test_setup);
+
+static int __init linx_ctx_tu_step_test_setup(char *arg)
+{
+	if (!arg)
+		linx_ctx_tu_step_test = true;
+	else if (arg[0] == '1' || arg[0] == 'y' || arg[0] == 'Y' ||
+		 arg[0] == 't' || arg[0] == 'T')
+		linx_ctx_tu_step_test = true;
+	else
+		linx_ctx_tu_step_test = false;
+	return 1;
+}
+__setup("linx_ctx_tu_step_test=", linx_ctx_tu_step_test_setup);
+
+void linx_ctx_tu_test_note_timer_irq(struct pt_regs *regs, u64 irq_id)
+{
+	if (!READ_ONCE(linx_ctx_tu_test) || irq_id != 0 || !regs)
+		return;
+	if (!user_mode(regs))
+		return;
+	if (!(regs->ecstate & LINX_ECSTATE_BI_BIT))
+		return;
+	atomic_set(&linx_ctx_tu_pending_reason, LINX_CTX_TU_PENDING_TIMER_IRQ);
+}
+
+void linx_ctx_tu_test_note_step_trap(struct pt_regs *regs, u8 trapnum)
+{
+	u64 fail_count;
+
+	if (!READ_ONCE(linx_ctx_tu_step_test) || !regs)
+		return;
+	if (!user_mode(regs))
+		return;
+	if (trapnum != LINX_TRAPNUM_SW_BREAKPOINT)
+		return;
+
+	if (!(regs->ecstate & LINX_ECSTATE_BI_BIT)) {
+		fail_count = (u64)atomic64_inc_return(&linx_ctx_tu_step_bi_fail_count);
+		pr_err_ratelimited("linx_ctx_tu_step_test: BI requirement failed trapnum=%u pc=0x%lx ecstate=0x%lx fail_count=%llu\n",
+				   trapnum, regs->regs[PTR_PC], regs->ecstate,
+				   fail_count);
+	}
+
+	atomic_set(&linx_ctx_tu_pending_reason, LINX_CTX_TU_PENDING_STEP_TRAP);
+}
+
+enum linx_ctx_tu_test_pending_reason linx_ctx_tu_test_take_pending_reason(void)
+{
+	return (enum linx_ctx_tu_test_pending_reason)
+		atomic_xchg(&linx_ctx_tu_pending_reason, LINX_CTX_TU_PENDING_NONE);
+}
+
+void linx_ctx_tu_test_poison_manager_state(void)
+{
+	if (!READ_ONCE(linx_ctx_tu_test) &&
+	    !READ_ONCE(linx_ctx_tu_step_test))
+		return;
+
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_BPC_CUR, SSR_EBARG_BPC_CUR_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_BPC_TGT, SSR_EBARG_BPC_TGT_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TPC, SSR_EBARG_TPC_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TQ0, SSR_EBARG_TQ0_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TQ1, SSR_EBARG_TQ1_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TQ2, SSR_EBARG_TQ2_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TQ3, SSR_EBARG_TQ3_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_UQ0, SSR_EBARG_UQ0_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_UQ1, SSR_EBARG_UQ1_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_UQ2, SSR_EBARG_UQ2_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_UQ3, SSR_EBARG_UQ3_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_LB, SSR_EBARG_LB_ACR1);
+	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_LC, SSR_EBARG_LC_ACR1);
+}
 
 static inline u8 linx_trapno_trapnum(u64 trapno)
 {
@@ -253,6 +393,7 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 		struct pt_regs *old_regs = set_irq_regs(regs);
 		const u64 irq_id = regs->traparg0;
 		const u64 irq_mask = (irq_id < 64) ? (1ull << irq_id) : 0;
+		bool eoi_done = false;
 
 		if (!irq_mask) {
 			pr_err("linx: invalid irq id: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
@@ -261,13 +402,21 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			return;
 		}
 
-		if (!(pending & irq_mask)) {
-			pr_warn_ratelimited("linx: irq pending mismatch: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
-					    irq_id, pending, trapno);
-		}
+			if (!(pending & irq_mask)) {
+				pr_warn_ratelimited("linx: irq pending mismatch: irq_id=%llu ipending=0x%llx trapno=0x%llx\n",
+						    irq_id, pending, trapno);
+			}
 
-		if (irq_id == 0) {
-			if (LINX_ENABLE_TIMER_IRQ) {
+			if (irq_id == 0) {
+				linx_ctx_tu_test_note_timer_irq(regs, irq_id);
+				/*
+				 * Timer IRQ goes through irq_exit() softirq paths which may
+				 * temporarily enable interrupts. If EOIEI is delayed until
+			 * after irq_exit(), the still-pending IRQ0 can re-enter.
+			 */
+			linx_ssr_write_eoiei_acr1(irq_id);
+			eoi_done = true;
+			if (!linx_disable_timer_irq) {
 				irq_enter();
 				linx_timer_handle_irq();
 				irq_exit();
@@ -283,7 +432,8 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 		 * (e.g. virtio-mmio) can complete register-side deassertion
 		 * before IPENDING is cleared.
 		 */
-		linx_ssr_write_eoiei_acr1(irq_id);
+		if (!eoi_done)
+			linx_ssr_write_eoiei_acr1(irq_id);
 
 		set_irq_regs(old_regs);
 		return;
@@ -397,8 +547,13 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 					(void __user *)regs->regs[PTR_PC]);
 			return;
 		}
-		pr_err("linx: kernel block trap: cause=0x%x traparg0=0x%lx pc=0x%lx\n",
-		       cause, regs->traparg0, regs->regs[PTR_PC]);
+		pr_err("linx: kernel block trap: cause=0x%x traparg0=0x%lx pc=0x%lx sp=0x%lx ra=0x%lx ecstate=0x%lx ipending=0x%llx\n",
+		       cause, regs->traparg0, regs->regs[PTR_PC], regs->regs[PTR_R1],
+		       regs->regs[PTR_R10], regs->ecstate, pending);
+		pr_err("linx: kernel block trap ebarg: bpc_cur=0x%lx bpc_tgt=0x%lx tpc=0x%lx lra=0x%lx lb=0x%lx lc=0x%lx ext_ptr=0x%lx ext_meta=0x%lx\n",
+		       regs->ebarg_bpc_cur, regs->ebarg_bpc_tgt, regs->ebarg_tpc,
+		       regs->ebarg_lra, regs->ebarg_lb, regs->ebarg_lc,
+		       regs->ebarg_ext_ptr, regs->ebarg_ext_meta);
 		panic("linx: kernel E_BLOCK");
 	}
 
@@ -407,6 +562,21 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 			  trapnum == LINX_TRAPNUM_SW_BREAKPOINT)) {
 		if (user_mode(regs)) {
 			int code = (trapnum == LINX_TRAPNUM_SW_BREAKPOINT) ? TRAP_BRKPT : TRAP_HWBKPT;
+
+			if (trapnum == LINX_TRAPNUM_SW_BREAKPOINT &&
+			    READ_ONCE(linx_ctx_tu_step_test)) {
+				unsigned long resume_pc;
+
+				linx_ctx_tu_test_note_step_trap(regs, trapnum);
+				resume_pc = regs->traparg0 ? regs->traparg0 + 4 :
+					    regs->regs[PTR_PC] + 4;
+				regs->regs[PTR_PC] = resume_pc;
+				regs->ebarg_bpc_cur = resume_pc;
+				regs->ebarg_bpc_tgt = resume_pc;
+				regs->ebarg_tpc = resume_pc;
+				return;
+			}
+
 			pr_err("linx: user debug trap -> SIGTRAP trapnum=%u cause=0x%x traparg0=0x%lx pc=0x%lx\n",
 			       trapnum, cause, regs->traparg0, regs->regs[PTR_PC]);
 			force_sig_fault(SIGTRAP, code, (void __user *)regs->traparg0);

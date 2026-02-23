@@ -10,11 +10,11 @@ import time
 
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
+    super_root = linux_root.parents[1]
 
     o_dir = pathlib.Path(os.environ.get("O", str(linux_root / "build-linx-fixed")))
     qemu_default_candidates = [
-        pathlib.Path("/Users/zhoubot/qemu/build/qemu-system-linx64"),
-        pathlib.Path("/Users/zhoubot/qemu/build-tci/qemu-system-linx64"),
+        super_root / "emulator" / "qemu" / "build" / "qemu-system-linx64",
     ]
     qemu_default = next((p for p in qemu_default_candidates if p.exists()), qemu_default_candidates[0])
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
@@ -26,7 +26,10 @@ def main() -> int:
 
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
-    append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0")
+    append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0 panic=-1")
+    disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
+    if disable_timer_irq and "linx_disable_timer_irq=" not in append:
+        append = f"{append} linx_disable_timer_irq=1".strip()
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
 
