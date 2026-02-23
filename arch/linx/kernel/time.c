@@ -3,6 +3,7 @@
 #include <linux/clockchips.h>
 #include <linux/clocksource.h>
 #include <linux/init.h>
+#include <linux/interrupt.h>
 #include <linux/kernel.h>
 
 #include <asm/ssr.h>
@@ -49,6 +50,14 @@ static struct clock_event_device linx_clockevent = {
 
 void linx_timer_handle_irq(void);
 
+static irqreturn_t linx_timer_irq_handler(int irq, void *dev_id)
+{
+	(void)irq;
+	(void)dev_id;
+	linx_timer_handle_irq();
+	return IRQ_HANDLED;
+}
+
 void linx_timer_handle_irq(void)
 {
 	/*
@@ -64,6 +73,8 @@ void linx_timer_handle_irq(void)
 
 void __init time_init(void)
 {
+	int rc;
+
 	/* Ensure no stale timer interrupt remains armed across resets. */
 	linx_ssr_write_timecmp_acr1(0);
 
@@ -72,4 +83,9 @@ void __init time_init(void)
 	clocksource_register_hz(&linx_clocksource, 1000000000);
 	clockevents_config_and_register(&linx_clockevent, 1000000000, 1,
 					(unsigned long)-1);
+
+	rc = request_irq(0, linx_timer_irq_handler, IRQF_TIMER, "linx-timer0",
+			 &linx_clockevent);
+	if (rc)
+		pr_err("linx: failed to request timer irq0: rc=%d\n", rc);
 }
