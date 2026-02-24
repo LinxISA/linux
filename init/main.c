@@ -10,7 +10,9 @@
  *  Simplified starting of init:  Michael A. Griffith <grif@acm.org>
  */
 
+#ifdef CONFIG_LINX_DEBUG
 #define DEBUG		/* Enable initcall_debug */
+#endif
 
 #include <linux/types.h>
 #include <linux/export.h>
