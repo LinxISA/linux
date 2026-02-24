@@ -105,8 +105,8 @@ Goal: remove userspace shims (no sign-extension or “special casing” in initr
 
 ### M6.4: Remove bring-up debug noise
 
-- [ ] Remove temporary debug printing and early-boot bypasses (explicit list; current sources include `arch/linx/kernel/traps.c` and other early boot paths).
-- [ ] Boot log is “normal Linux noisy,” not debug-spew.
+- [x] Remove temporary debug printing and early-boot marker streams from default paths (`arch/linx/kernel/head.c`, `arch/linx/kernel/setup.c`, `arch/linx/include/asm/processor.h`).
+- [x] Boot log is “normal Linux noisy,” not debug-spew by default (fault/panic logs remain unchanged).
 
 ## Section C — Full Linux gap checklist (upstream-like)
 
