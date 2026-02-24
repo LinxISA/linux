@@ -22,6 +22,7 @@ extern void linx_trap_vector_acr0(void);
 extern char __bss_start[];
 extern char __bss_stop[];
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
 static inline void linx_virt_uart_putc(char c)
 {
 	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) = (unsigned char)c;
@@ -45,6 +46,7 @@ static inline void linx_virt_uart_puthex_u64(unsigned long v)
 		linx_virt_uart_putc(hexdigits[nibble]);
 	}
 }
+#endif
 
 /*
  * QEMU LinxISA `virt` enters the kernel at `_start` with:
@@ -58,7 +60,6 @@ __attribute__((section(".head.text"), used))
 asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 {
 	unsigned long new_sp;
-	unsigned int fdt_magic = 0;
 	char *p;
 
 	/*
@@ -72,17 +73,23 @@ asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 	linx_dtb_early_va = fdt;
 	linx_dtb_early_pa = (phys_addr_t)(unsigned long)fdt;
 
-	if (fdt)
-		fdt_magic = *(volatile unsigned int *)fdt;
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	{
+		unsigned int fdt_magic = 0;
 
-	linx_virt_uart_puts("\n[LinxISA] _start -> start_kernel()\n");
-	linx_virt_uart_puts("[LinxISA] hartid=");
-	linx_virt_uart_puthex_u64(hartid);
-	linx_virt_uart_puts(" fdt=");
-	linx_virt_uart_puthex_u64((unsigned long)fdt);
-	linx_virt_uart_puts(" magic=");
-	linx_virt_uart_puthex_u64(fdt_magic);
-	linx_virt_uart_puts("\n");
+		if (fdt)
+			fdt_magic = *(volatile unsigned int *)fdt;
+
+		linx_virt_uart_puts("\n[LinxISA] _start -> start_kernel()\n");
+		linx_virt_uart_puts("[LinxISA] hartid=");
+		linx_virt_uart_puthex_u64(hartid);
+		linx_virt_uart_puts(" fdt=");
+		linx_virt_uart_puthex_u64((unsigned long)fdt);
+		linx_virt_uart_puts(" magic=");
+		linx_virt_uart_puthex_u64(fdt_magic);
+		linx_virt_uart_puts("\n");
+	}
+#endif
 
 	/*
 	 * QEMU sets up a temporary stack near the end of RAM. Switch to the

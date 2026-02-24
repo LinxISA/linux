@@ -29,18 +29,6 @@ static inline void linx_virt_uart_putc(char c)
 		(unsigned char)c;
 }
 
-static inline void linx_virt_uart_puthex_u64(unsigned long v)
-{
-	static const char hexdigits[] = "0123456789abcdef";
-	int i;
-
-	for (i = (int)(sizeof(v) * 2) - 1; i >= 0; i--) {
-		unsigned int nibble = (v >> (i * 4)) & 0xf;
-
-		linx_virt_uart_putc(hexdigits[nibble]);
-	}
-}
-
 static void linx_virt_console_write(struct console *con, const char *s,
 				    unsigned int count)
 {
@@ -73,23 +61,18 @@ static void __init linx_register_console(void)
 
 static void __init parse_dtb(void)
 {
-	linx_virt_uart_putc('D');
 	if (!linx_dtb_early_va) {
-		linx_virt_uart_putc('0');
 		goto no_dtb;
 	}
 
-	linx_virt_uart_putc('1');
 	if (early_init_dt_scan(linx_dtb_early_va, linx_dtb_early_pa)) {
 		const char *name = of_flat_dt_get_machine_name();
 
-		linx_virt_uart_putc('T');
 		if (name)
 			pr_info("Machine model: %s\n", name);
 		return;
 	}
 
-	linx_virt_uart_putc('F');
 no_dtb:
 	pr_err("No DTB passed to the kernel\n");
 }
@@ -103,11 +86,8 @@ void __init setup_arch(char **cmdline_p)
 	set_cpu_possible(0, true);
 	set_cpu_present(0, true);
 
-	linx_virt_uart_putc('s');
 	linx_register_console();
-	linx_virt_uart_putc('a');
 	parse_dtb();
-	linx_virt_uart_putc('b');
 
 	/*
 	 * Allow memblock to grow its region arrays. Early bring-up may reserve more
@@ -122,37 +102,15 @@ void __init setup_arch(char **cmdline_p)
 	 */
 	reserve_initrd_mem();
 
-	linx_virt_uart_putc('M');
-	linx_virt_uart_puthex_u64(memblock.memory.cnt);
-	linx_virt_uart_putc(',');
-	linx_virt_uart_puthex_u64(memblock.memory.total_size);
-	if (memblock.memory.cnt) {
-		linx_virt_uart_putc('B');
-		linx_virt_uart_puthex_u64(memblock.memory.regions[0].base);
-		linx_virt_uart_putc(',');
-		linx_virt_uart_puthex_u64(memblock.memory.regions[0].size);
-		linx_virt_uart_putc('b');
-	}
-	linx_virt_uart_putc('m');
-
-	linx_virt_uart_putc('c');
 	early_init_fdt_reserve_self();
-	linx_virt_uart_putc('d');
 	memblock_reserve(__pa(_stext), (phys_addr_t)(_end - _stext));
-	linx_virt_uart_putc('e');
 	early_init_fdt_scan_reserved_mem();
-	linx_virt_uart_putc('f');
+	setup_initial_init_mm(_stext, _etext, _edata, _end);
 
-		linx_virt_uart_putc('g');
-		setup_initial_init_mm(_stext, _etext, _edata, _end);
-		linx_virt_uart_putc('h');
+	if (cmdline_p)
+		*cmdline_p = boot_command_line;
 
-		if (cmdline_p)
-			*cmdline_p = boot_command_line;
-
-	linx_virt_uart_putc('i');
 	unflatten_device_tree();
-	linx_virt_uart_putc('j');
 
 	/*
 	 * Initialize the Linx paging/MMU and the buddy allocator data structures.
@@ -162,7 +120,6 @@ void __init setup_arch(char **cmdline_p)
 	 */
 	paging_init();
 
-	linx_virt_uart_putc('\n');
 }
 
 static int show_cpuinfo(struct seq_file *m, void *v)
