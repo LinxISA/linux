@@ -2,14 +2,23 @@
 
 #include <linux/init.h>
 #include <linux/delay.h>
+#include <linux/printk.h>
 
-#include <asm/debug_uart.h>
 #include <asm/irqflags.h>
 #include <asm/processor.h>
 #include <asm/ssr.h>
 
 /* Defined in traps.c */
 extern volatile u64 linx_async_irq_count;
+
+static bool linx_ebarg_selftest_verbose;
+
+static int __init linx_ebarg_selftest_setup(char *str)
+{
+	linx_ebarg_selftest_verbose = !str || !*str || str[0] != '0';
+	return 1;
+}
+__setup("linx_ebarg_selftest=", linx_ebarg_selftest_setup);
 
 /* ACR1 banked EBARG SSR IDs (bring-up profile). */
 #define SSR_EBARG0_ACR1         0x1f40
@@ -112,7 +121,8 @@ static int __init linx_ebarg_selftest_init(void)
 	u64 deadline;
 	size_t i;
 
-	linx_debug_uart_puts("[linx] EBARG selftest: start\n");
+	if (linx_ebarg_selftest_verbose)
+		pr_alert("[linx] EBARG selftest: start\n");
 
 	/* Program sentinel EBARG values. */
 	for (i = 0; i < n; i++)
@@ -133,7 +143,7 @@ static int __init linx_ebarg_selftest_init(void)
 	linx_ssr_write_timecmp_acr1(0);
 
 	if (linx_async_irq_count == before) {
-		linx_debug_uart_puts("[linx] EBARG selftest: FAIL (no timer irq)\n");
+		pr_alert("[linx] EBARG selftest: FAIL (no timer irq)\n");
 		return 0;
 	}
 
@@ -142,18 +152,16 @@ static int __init linx_ebarg_selftest_init(void)
 		u64 got = ebarg_read(pairs[i].id);
 
 		if (got != pairs[i].expected) {
-			linx_debug_uart_puts("[linx] EBARG selftest: FAIL id=");
-			linx_debug_uart_puthex_ulong((unsigned long)pairs[i].id);
-			linx_debug_uart_puts(" exp=");
-			linx_debug_uart_puthex_ulong((unsigned long)pairs[i].expected);
-			linx_debug_uart_puts(" got=");
-			linx_debug_uart_puthex_ulong((unsigned long)got);
-			linx_debug_uart_puts("\n");
+			pr_alert("[linx] EBARG selftest: FAIL id=0x%x exp=0x%016llx got=0x%016llx\n",
+				 pairs[i].id,
+				 (unsigned long long)pairs[i].expected,
+				 (unsigned long long)got);
 			return 0;
 		}
 	}
 
-	linx_debug_uart_puts("[linx] EBARG selftest: PASS\n");
+	if (linx_ebarg_selftest_verbose)
+		pr_alert("[linx] EBARG selftest: PASS\n");
 	return 0;
 }
 late_initcall(linx_ebarg_selftest_init);

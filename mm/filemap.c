@@ -4391,7 +4391,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct file *file = iocb->ki_filp;
 	struct inode *inode = file->f_mapping->host;
 	ssize_t ret;
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	size_t before_count = iov_iter_count(from);
 	bool dbg = file && file->f_path.dentry &&
 		   !strcmp(file->f_path.dentry->d_name.name, "init");
@@ -4399,7 +4399,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	inode_lock(inode);
 	ret = generic_write_checks(iocb, from);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (dbg)
 		pr_err("LinxISA generic_file_write_iter(%pd2): before=%zu after=%zu checks=%zd pos=%lld flags=0x%lx\n",
 		       file->f_path.dentry, before_count, iov_iter_count(from),
@@ -4411,7 +4411,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 	if (ret > 0)
 		ret = generic_write_sync(iocb, ret);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (dbg)
 		pr_err("LinxISA generic_file_write_iter(%pd2): ret=%zd final_pos=%lld remaining=%zu\n",
 		       file->f_path.dentry, ret, iocb->ki_pos, iov_iter_count(from));

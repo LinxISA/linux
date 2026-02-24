@@ -805,7 +805,7 @@ static int elf_fdpic_map_file(struct elf_fdpic_params *params,
 		return -ELIBBAD;
 
 	size_t alloc_size = struct_size(loadmap, segs, nloads);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (dbg) {
 		pr_err("LinxISA elf_fdpic: map_file(%s) phnum=%u nloads=%u flags=0x%lx alloc=%zu\n",
 		       what, params->hdr.e_phnum, nloads, params->flags, alloc_size);

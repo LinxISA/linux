@@ -12,14 +12,13 @@
 
 #include <linux/console.h>
 #include <linux/io.h>
+#include <linux/ioport.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
 #include <linux/timer.h>
 #include <linux/tty_flip.h>
-
-#include <asm/debug_uart.h>
 
 #define LINX_VUART_DATA_REG	0x0
 #define LINX_VUART_STATUS_REG	0x4
@@ -140,14 +139,6 @@ static int linx_vuart_startup(struct uart_port *port)
 {
 	struct linx_vuart_port *lport = container_of(port, struct linx_vuart_port, port);
 
-	linx_debug_uart_putc('P');
-	linx_debug_uart_puthex_ulong((unsigned long)port);
-	linx_debug_uart_putc('O');
-	linx_debug_uart_puthex_ulong((unsigned long)port->ops);
-	linx_debug_uart_putc('S');
-	linx_debug_uart_puthex_ulong((unsigned long)(port->ops ? port->ops->startup : NULL));
-	linx_debug_uart_putc('\n');
-
 	WRITE_ONCE(lport->poll_enabled, true);
 	mod_timer(&lport->poll_timer, jiffies + msecs_to_jiffies(10));
 	return 0;
@@ -234,6 +225,9 @@ static void linx_vuart_console_write(struct console *co, const char *s,
 	struct uart_port *port;
 	unsigned long flags;
 
+	if (co->index < 0 || co->index >= ARRAY_SIZE(linx_vuart_ports))
+		return;
+
 	lport = linx_vuart_ports[co->index];
 	if (!lport)
 		return;
@@ -253,6 +247,9 @@ static int __init linx_vuart_console_setup(struct console *co, char *options)
 	int bits = 8;
 	int parity = 'n';
 	int flow = 'n';
+
+	if (co->index < 0 || co->index >= ARRAY_SIZE(linx_vuart_ports))
+		return 0;
 
 	lport = linx_vuart_ports[co->index];
 	if (!lport)
@@ -280,6 +277,7 @@ static int linx_vuart_probe(struct platform_device *pdev)
 {
 	struct linx_vuart_port *lport;
 	struct resource *res;
+	resource_size_t size;
 	int id;
 	int rc;
 
@@ -296,12 +294,26 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	linx_vuart_port_inuse[id] = true;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		linx_vuart_port_inuse[id] = false;
+		return -ENODEV;
+	}
+	size = resource_size(res);
 	lport->port.mapbase = res->start;
+#ifdef CONFIG_MMU
 	lport->port.membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(lport->port.membase)) {
 		linx_vuart_port_inuse[id] = false;
 		return PTR_ERR(lport->port.membase);
 	}
+#else
+	if (!devm_request_mem_region(&pdev->dev, res->start, size,
+				     dev_name(&pdev->dev))) {
+		linx_vuart_port_inuse[id] = false;
+		return -EBUSY;
+	}
+	lport->port.membase = (void __iomem *)(unsigned long)res->start;
+#endif
 
 	lport->port.dev = &pdev->dev;
 	lport->port.iotype = UPIO_MEM;
@@ -310,29 +322,11 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	lport->port.flags = UPF_BOOT_AUTOCONF;
 	lport->port.line = id;
 
-	linx_debug_uart_putc('U');
-	linx_debug_uart_puthex_ulong((unsigned long)&lport->port);
-	linx_debug_uart_putc('O');
-	linx_debug_uart_puthex_ulong((unsigned long)lport->port.ops);
-	linx_debug_uart_putc('S');
-	linx_debug_uart_puthex_ulong((unsigned long)(lport->port.ops ?
-				      lport->port.ops->startup : NULL));
-	linx_debug_uart_putc('\n');
-
-	pr_err("linx-vuart: probe port=%px ops=%px startup=%px mapbase=0x%llx membase=%px line=%d\n",
-	       &lport->port, lport->port.ops,
-	       lport->port.ops ? lport->port.ops->startup : NULL,
-	       (unsigned long long)lport->port.mapbase,
-	       lport->port.membase, lport->port.line);
-
 	timer_setup(&lport->poll_timer, linx_vuart_poll_timer, 0);
 	lport->poll_enabled = false;
 
 	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
 	if (rc) {
-		linx_debug_uart_putc('u');
-		linx_debug_uart_puthex_ulong((unsigned long)rc);
-		linx_debug_uart_putc('\n');
 		linx_vuart_port_inuse[id] = false;
 		return rc;
 	}
@@ -346,10 +340,6 @@ static int linx_vuart_probe(struct platform_device *pdev)
 static void linx_vuart_remove(struct platform_device *pdev)
 {
 	struct linx_vuart_port *lport = platform_get_drvdata(pdev);
-
-	linx_debug_uart_putc('X');
-	linx_debug_uart_puthex_ulong((unsigned long)lport);
-	linx_debug_uart_putc('\n');
 
 	uart_remove_one_port(&linx_vuart_uart_driver, &lport->port);
 	if (lport->port.line >= 0 && lport->port.line < ARRAY_SIZE(linx_vuart_ports) &&

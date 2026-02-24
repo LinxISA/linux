@@ -4,7 +4,7 @@
 always-$(KBUILD_BUILTIN) := vmlinux.lds
 
 obj-y += delay.o
-obj-y += debug_uart.o
+obj-$(CONFIG_LINX_DEBUG) += debug_uart.o
 obj-y += entry.o
 obj-y += head.o
 obj-y += pgtable.o

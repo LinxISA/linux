@@ -102,7 +102,7 @@ void __register_binfmt(struct linux_binfmt * fmt, int insert)
 		 list_add_tail(&fmt->lh, &formats);
 	write_unlock(&binfmt_lock);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("LinxISA binfmt: register fmt=%px load_binary=%px insert=%d formats.next=%px formats.prev=%px\n",
 	       fmt, fmt ? fmt->load_binary : NULL, insert, formats.next, formats.prev);
 #endif
@@ -808,7 +808,7 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 		return ERR_PTR(-EACCES);
 
 	err = exe_file_deny_write_access(file);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	if (err && file->f_path.dentry &&
 	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
 		struct inode *inode = file_inode(file);
@@ -1715,7 +1715,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('L');
 #endif
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 	pr_err("LinxISA binfmt: formats head next=%px prev=%px\n",
 	       formats.next, formats.prev);
 #endif
@@ -1728,7 +1728,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 		read_unlock(&binfmt_lock);
 
 		if (unlikely(!fmt->load_binary)) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 			pr_err("LinxISA binfmt: fmt=%px has NULL load_binary\n", fmt);
 #endif
 			retval = -ENOEXEC;
@@ -1739,12 +1739,12 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			linx_debug_uart_puthex_ulong((unsigned long)fmt->load_binary);
 			linx_debug_uart_putc(']');
 #endif
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 			pr_err("LinxISA binfmt: try fmt=%px load_binary=%px\n", fmt,
 			       fmt->load_binary);
 #endif
 			retval = fmt->load_binary(bprm);
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_DEBUG
 			pr_err("LinxISA binfmt: done fmt=%px load_binary=%px ret=%d\n",
 			       fmt, fmt->load_binary, retval);
 #endif

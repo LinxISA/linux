@@ -105,8 +105,8 @@ Goal: remove userspace shims (no sign-extension or “special casing” in initr
 
 ### M6.4: Remove bring-up debug noise
 
-- [x] Remove temporary debug printing and early-boot marker streams from default paths (`arch/linx/kernel/head.c`, `arch/linx/kernel/setup.c`, `arch/linx/include/asm/processor.h`).
-- [x] Boot log is “normal Linux noisy,” not debug-spew by default (fault/panic logs remain unchanged).
+- [x] Gate low-level bring-up UART markers/debug dumps behind `CONFIG_LINX_DEBUG` / `CONFIG_LINX_VIRT_UART_MARKERS` (default-off) (`arch/linx/include/asm/debug_uart.h`, `arch/linx/kernel/Makefile`, `arch/linx/kernel/head.c`, `arch/linx/Kconfig.debug`).
+- [x] Gate bring-up-only `pr_err()`/marker spew behind `CONFIG_LINX_DEBUG` so default boot logs are clean (fault/panic logs remain unchanged) (`init/main.c`, `fs/exec.c`, `mm/filemap.c`, `fs/binfmt_elf_fdpic.c`).
 
 ## Section C — Full Linux gap checklist (upstream-like)
 
