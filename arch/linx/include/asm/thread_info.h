@@ -31,7 +31,9 @@ struct thread_info {
 
 static __always_inline struct thread_info *current_thread_info(void)
 {
-	unsigned long sp = (unsigned long)&sp;
+	unsigned long sp;
+
+	asm volatile("c.movr sp, ->%0" : "=r"(sp));
 
 	return (struct thread_info *)(sp & ~(THREAD_SIZE - 1));
 }

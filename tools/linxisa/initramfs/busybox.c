@@ -44,6 +44,7 @@ enum {
 	O_RDONLY = 0,
 	O_WRONLY = 1,
 	O_RDWR = 2,
+	O_NONBLOCK = 00004000,
 	O_DIRECTORY = 00200000,
 	O_CLOEXEC = 02000000,
 };
@@ -270,11 +271,18 @@ static void console_open(void)
 	ttylinx0[12] = '0';
 	ttylinx0[13] = 0;
 
-	fd_rc = sys_openat_compat(AT_FDCWD, console, O_RDWR | O_CLOEXEC, 0);
+	/*
+	 * Prefer /dev/ttyS0 for interactive bring-up.
+	 *
+	 * The arch/linx early printk console ("ttyLINX") is TX-only; /dev/console
+	 * can be write-only early if it resolves to that console. Opening the
+	 * real UART tty ensures RX polling is enabled (via linx_virt_uart).
+	 */
+	fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 	if (fd_rc < 0)
-		fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_CLOEXEC, 0);
+		fd_rc = sys_openat_compat(AT_FDCWD, ttylinx0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 	if (fd_rc < 0)
-		fd_rc = sys_openat_compat(AT_FDCWD, ttylinx0, O_RDWR | O_CLOEXEC, 0);
+		fd_rc = sys_openat_compat(AT_FDCWD, console, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 	if (fd_rc < 0)
 		return;
 
@@ -1626,8 +1634,8 @@ static __attribute__((noreturn)) void run_applet(const char *name, int argc,
 						 char **argv)
 {
 	if (name_is_init(name)) {
-		mount_basic();
 		console_open();
+		mount_basic();
 		shell_loop();
 		sys_exit_group(0);
 	}

@@ -18,10 +18,11 @@ extern phys_addr_t linx_dtb_early_pa;
 
 extern char _stext[], _etext[], _edata[], _end[];
 
-#define LINX_VIRT_UART_BASE 0x10000000UL
 #define LINX_CPUINFO_ISA_PROFILE "linx64"
 #define LINX_CPUINFO_ISA_EXTENSIONS                                           \
 	"lnx-s32 lnx-s64 lnx-c lnx-f lnx-a lnx-sys lnx-v lnx-m"
+
+#define LINX_VIRT_UART_BASE 0x10000000UL
 
 static inline void linx_virt_uart_putc(char c)
 {
@@ -86,8 +87,8 @@ void __init setup_arch(char **cmdline_p)
 	set_cpu_possible(0, true);
 	set_cpu_present(0, true);
 
-	linx_register_console();
 	parse_dtb();
+	linx_register_console();
 
 	/*
 	 * Allow memblock to grow its region arrays. Early bring-up may reserve more

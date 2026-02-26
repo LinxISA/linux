@@ -325,22 +325,54 @@ static void vm_del_vq(struct virtqueue *vq)
 	vring_del_virtqueue(vq);
 }
 
+static int vm_get_irq(struct virtio_mmio_device *vm_dev)
+{
+	int irq = platform_get_irq_optional(vm_dev->pdev, 0);
+
+	if (irq >= 0)
+		return irq;
+
+	/*
+	 * Linx bring-up fallback:
+	 * Some early DT environments expose a flat "interrupts = <N>" value
+	 * but do not provide a full OF IRQ-domain mapping path yet. If the
+	 * generic resolver fails, consume the raw first interrupt cell so
+	 * virtio-mmio can bind on static IRQ numbering.
+	 */
+	if (vm_dev->pdev->dev.of_node) {
+		u32 raw_irq;
+
+		if (!of_property_read_u32_index(vm_dev->pdev->dev.of_node,
+						"interrupts", 0, &raw_irq) &&
+		    raw_irq != 0)
+			return (int)raw_irq;
+	}
+
+	return irq;
+}
+
 static void vm_del_vqs(struct virtio_device *vdev)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
 	struct virtqueue *vq, *n;
+	int irq;
 
 	list_for_each_entry_safe(vq, n, &vdev->vqs, list)
 		vm_del_vq(vq);
 
-	free_irq(platform_get_irq(vm_dev->pdev, 0), vm_dev);
+	irq = vm_get_irq(vm_dev);
+	if (irq >= 0)
+		free_irq(irq, vm_dev);
 }
 
 static void vm_synchronize_cbs(struct virtio_device *vdev)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
+	int irq;
 
-	synchronize_irq(platform_get_irq(vm_dev->pdev, 0));
+	irq = vm_get_irq(vm_dev);
+	if (irq >= 0)
+		synchronize_irq(irq);
 }
 
 static struct virtqueue *vm_setup_vq(struct virtio_device *vdev, unsigned int index,
@@ -449,7 +481,7 @@ static int vm_find_vqs(struct virtio_device *vdev, unsigned int nvqs,
 		       struct irq_affinity *desc)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
-	int irq = platform_get_irq(vm_dev->pdev, 0);
+	int irq = vm_get_irq(vm_dev);
 	int i, err, queue_idx = 0;
 
 	if (irq < 0)
