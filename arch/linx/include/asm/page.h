@@ -29,40 +29,12 @@
 
 static inline void clear_page(void *page)
 {
-#if defined(__clang__)
-	uintptr_t p = (uintptr_t)page;
-
-	for (unsigned long i = 0; i < (PAGE_SIZE / sizeof(uint64_t)); ++i)
-		asm volatile("hl.sdi.po zero, [%0, 8], ->%0" : "+r"(p) : : "memory");
-#else
 	memset(page, 0, PAGE_SIZE);
-#endif
 }
 
 static inline void copy_page(void *to, const void *from)
 {
-#if defined(__clang__)
-	uintptr_t d = (uintptr_t)to;
-	uintptr_t s = (uintptr_t)from;
-
-	for (unsigned long i = 0; i < (PAGE_SIZE / 16u); ++i) {
-		uint64_t lo, hi;
-
-		asm volatile("hl.ldip [%2, 0], ->%0, %1"
-			     : "=&r"(lo), "=&r"(hi)
-			     : "r"(s)
-			     : "memory");
-		asm volatile("hl.sdip %0, %1, [%2, 0]"
-			     :
-			     : "r"(lo), "r"(hi), "r"(d)
-			     : "memory");
-
-		s += 16u;
-		d += 16u;
-	}
-#else
 	memcpy(to, from, PAGE_SIZE);
-#endif
 }
 
 struct page;

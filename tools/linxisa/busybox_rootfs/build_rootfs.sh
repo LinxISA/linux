@@ -7,15 +7,24 @@ INITRAMFS_DIR="$LINUX_ROOT/tools/linxisa/initramfs"
 O="${O:-$LINUX_ROOT/build-linx-fixed}"
 OUT_DIR="${OUT_DIR:-$O/linx-busybox-rootfs}"
 ROOTFS_DIR="$OUT_DIR/rootfs"
-ROOTFS_IMG="${ROOTFS_IMG:-$OUT_DIR/rootfs.ext4}"
+ROOTFS_IMG="${ROOTFS_IMG:-$OUT_DIR/rootfs.ext2}"
 ROOTFS_SIZE_MB="${ROOTFS_SIZE_MB:-64}"
 
-MKFS_EXT4="$(command -v mkfs.ext4 || true)"
+MKFS_EXT4="$(command -v mkfs.ext2 || true)"
 if [[ -z "$MKFS_EXT4" ]]; then
   MKFS_EXT4="$(command -v mke2fs || true)"
 fi
 if [[ -z "$MKFS_EXT4" ]]; then
-  echo "error: mkfs.ext4/mke2fs not found; install e2fsprogs first" >&2
+  # Homebrew installs e2fsprogs as keg-only on macOS; prefer its sbin.
+  if command -v brew >/dev/null 2>&1; then
+    BREW_E2FS="$(brew --prefix e2fsprogs 2>/dev/null || true)"
+    if [[ -n "$BREW_E2FS" && -x "$BREW_E2FS/sbin/mke2fs" ]]; then
+      MKFS_EXT4="$BREW_E2FS/sbin/mke2fs"
+    fi
+  fi
+fi
+if [[ -z "$MKFS_EXT4" ]]; then
+  echo "error: mkfs.ext2/mke2fs not found; install e2fsprogs first" >&2
   exit 2
 fi
 
@@ -54,7 +63,7 @@ mkdir -p "$(dirname "$ROOTFS_IMG")"
 rm -f "$ROOTFS_IMG"
 
 if [[ "$(basename "$MKFS_EXT4")" == "mke2fs" ]]; then
-  "$MKFS_EXT4" -q -t ext4 -d "$ROOTFS_DIR" -F "$ROOTFS_IMG" "${ROOTFS_SIZE_MB}M"
+  "$MKFS_EXT4" -q -t ext2 -d "$ROOTFS_DIR" -F "$ROOTFS_IMG" "${ROOTFS_SIZE_MB}M"
 else
   "$MKFS_EXT4" -q -d "$ROOTFS_DIR" -F "$ROOTFS_IMG" "${ROOTFS_SIZE_MB}M"
 fi

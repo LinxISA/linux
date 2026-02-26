@@ -60,14 +60,17 @@ __attribute__((section(".head.text"), used))
 asmlinkage void __noreturn _start(unsigned long hartid, void *fdt)
 {
 	unsigned long new_sp;
-	char *p;
+	volatile char *p;
+	volatile char *end;
 
 	/*
 	 * QEMU's LinxISA loader does not guarantee BSS is cleared for us.
 	 * Clear it before any subsystem touches BSS-resident state (e.g. init_net).
 	 */
-	for (p = __bss_start; p < __bss_stop; ++p)
-		*p = 0;
+	p = (volatile char *)__bss_start;
+	end = (volatile char *)__bss_stop;
+	while (p < end)
+		*p++ = 0;
 
 	linx_boot_hartid = hartid;
 	linx_dtb_early_va = fdt;

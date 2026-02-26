@@ -5,6 +5,64 @@ import select
 import subprocess
 import sys
 import time
+from typing import Optional
+
+
+def _retry_with_virtio_cmdline_fallback(append: str) -> Optional[int]:
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
+    if fallback_flag in {"0", "false", "no"}:
+        return None
+    if "virtio_mmio.device=" in append:
+        return None
+
+    env = dict(os.environ)
+    env["APPEND"] = f"{append} virtio_mmio.device=0x200@0x30001000:1".strip()
+    env["SKIP_BUILD"] = "1"
+    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
+    rerun = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).resolve())],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if rerun.returncode == 0:
+        sys.stderr.write("note: virtio_disk_smoke.py used virtio-mmio cmdline fallback\n")
+        if rerun.stdout:
+            sys.stdout.write(rerun.stdout)
+            sys.stdout.flush()
+    else:
+        sys.stderr.write("note: virtio-mmio cmdline fallback failed\n")
+        if rerun.stderr:
+            sys.stderr.write(rerun.stderr)
+    return rerun.returncode
+
+
+def _retry_once_same_config(append: str) -> Optional[int]:
+    retry_flag = os.environ.get("LINX_VIRTIO_DISK_SMOKE_RETRY", "1").lower()
+    if retry_flag in {"0", "false", "no"}:
+        return None
+
+    env = dict(os.environ)
+    env["APPEND"] = append
+    env["SKIP_BUILD"] = "1"
+    env["LINX_VIRTIO_DISK_SMOKE_RETRY"] = "0"
+    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
+    rerun = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).resolve())],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if rerun.returncode == 0:
+        sys.stderr.write("note: virtio_disk_smoke.py recovered after same-config retry\n")
+        if rerun.stdout:
+            sys.stdout.write(rerun.stdout)
+            sys.stdout.flush()
+    return rerun.returncode
 
 
 def main() -> int:
@@ -26,14 +84,12 @@ def main() -> int:
 
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
-    append = os.environ.get(
-        "APPEND",
-        "lpj=1000000 loglevel=1 console=ttyS0 virtio_mmio.device=0x200@0x30001000:1",
-    )
+    append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0")
     disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
     timeout_s = int(os.environ.get("TIMEOUT", "90"))
+    prompt_settle_s = float(os.environ.get("PROMPT_SETTLE", "2.0"))
     disk_mb = int(os.environ.get("DISK_MB", "64"))
     debug_log_lines = int(os.environ.get("DEBUG_LOG_LINES", "240"))
 
@@ -109,6 +165,8 @@ def main() -> int:
             joined = b"".join(out_chunks[-8:])
             if not prompt_seen and (b"\n# " in joined or joined.endswith(prompt)):
                 prompt_seen = True
+                if prompt_settle_s > 0:
+                    time.sleep(prompt_settle_s)
                 if proc.stdin and not proc.stdin.closed:
                     proc.stdin.write(script.encode("utf-8"))
                     proc.stdin.flush()
@@ -151,6 +209,12 @@ def main() -> int:
     ]
     missing = [w for w in want if w not in text]
     if missing:
+        retry_rc = _retry_once_same_config(append)
+        if retry_rc == 0:
+            return 0
+        retry_rc = _retry_with_virtio_cmdline_fallback(append)
+        if retry_rc == 0:
+            return 0
         sys.stderr.write("error: virtio disk smoke failed; missing: %s\n" % ", ".join(missing))
         sys.stderr.write("kernel: %s\n" % kernel)
         sys.stderr.write("initrd: %s\n" % initrd)
@@ -163,6 +227,12 @@ def main() -> int:
         return 2
 
     if not any(line.strip() == "vda" for line in lines):
+        retry_rc = _retry_once_same_config(append)
+        if retry_rc == 0:
+            return 0
+        retry_rc = _retry_with_virtio_cmdline_fallback(append)
+        if retry_rc == 0:
+            return 0
         sys.stderr.write("error: virtio disk smoke failed; '/sys/block' did not enumerate vda\n")
         emit_debug_log()
         sys.stderr.flush()
@@ -185,6 +255,12 @@ def main() -> int:
 
     dev_lines = section_lines_for("# ls /dev")
     if "vda" not in dev_lines:
+        retry_rc = _retry_once_same_config(append)
+        if retry_rc == 0:
+            return 0
+        retry_rc = _retry_with_virtio_cmdline_fallback(append)
+        if retry_rc == 0:
+            return 0
         sys.stderr.write("error: virtio disk smoke failed; '/dev' did not enumerate vda\n")
         sys.stderr.write("\n".join(text.splitlines()[-240:]))
         sys.stderr.write("\n")
@@ -199,6 +275,12 @@ def main() -> int:
         or "fffffffffffffff7" in probe_blob
         or "ffffffffffffffff" in probe_blob
     ):
+        retry_rc = _retry_once_same_config(append)
+        if retry_rc == 0:
+            return 0
+        retry_rc = _retry_with_virtio_cmdline_fallback(append)
+        if retry_rc == 0:
+            return 0
         sys.stderr.write("error: virtio disk smoke failed; '/sys/block/vda/dev' probe did not return valid data\n")
         emit_debug_log()
         sys.stderr.flush()

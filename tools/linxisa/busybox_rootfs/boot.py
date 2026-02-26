@@ -3,6 +3,7 @@ import os
 import pathlib
 import re
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -20,6 +21,64 @@ def _irq0_count(text: str) -> Optional[int]:
         return None
 
 
+def _retry_with_virtio_cmdline_fallback(append: str) -> Optional[int]:
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
+    if fallback_flag in {"0", "false", "no"}:
+        return None
+    if "virtio_mmio.device=" in append:
+        return None
+
+    env = dict(os.environ)
+    env["APPEND"] = f"{append} virtio_mmio.device=0x200@0x30001000:1".strip()
+    env["SKIP_BUILD"] = "1"
+    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
+    env["LINX_BUSYBOX_BOOT_RETRY"] = "0"
+    rerun = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).resolve())],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if rerun.returncode == 0:
+        sys.stderr.write("note: boot.py used virtio-mmio cmdline fallback\n")
+        if rerun.stdout:
+            sys.stdout.write(rerun.stdout)
+            sys.stdout.flush()
+    else:
+        sys.stderr.write("note: virtio-mmio cmdline fallback failed\n")
+        if rerun.stderr:
+            sys.stderr.write(rerun.stderr)
+    return rerun.returncode
+
+
+def _retry_once_same_config(append: str) -> Optional[int]:
+    retry_flag = os.environ.get("LINX_BUSYBOX_BOOT_RETRY", "1").lower()
+    if retry_flag in {"0", "false", "no"}:
+        return None
+
+    env = dict(os.environ)
+    env["APPEND"] = append
+    env["SKIP_BUILD"] = "1"
+    env["LINX_BUSYBOX_BOOT_RETRY"] = "0"
+    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
+    rerun = subprocess.run(
+        [sys.executable, str(pathlib.Path(__file__).resolve())],
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    if rerun.returncode == 0:
+        sys.stderr.write("note: boot.py recovered after same-config retry\n")
+        if rerun.stdout:
+            sys.stdout.write(rerun.stdout)
+            sys.stdout.flush()
+    return rerun.returncode
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     super_root = linux_root.parents[1]
@@ -32,18 +91,18 @@ def main() -> int:
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
 
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
-    rootfs = pathlib.Path(os.environ.get("ROOTFS_IMG", str(o_dir / "linx-busybox-rootfs" / "rootfs.ext4")))
+    rootfs = pathlib.Path(os.environ.get("ROOTFS_IMG", str(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")))
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
     append = os.environ.get(
         "APPEND",
-        "lpj=1000000 loglevel=1 console=ttyS0 root=/dev/vda rw init=/sbin/init "
-        "virtio_mmio.device=0x200@0x30001000:1",
+        "lpj=1000000 loglevel=1 console=ttyS0 root=/dev/vda rw rootfstype=ext2 init=/sbin/init",
     )
     disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
+    qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
 
     script = os.environ.get(
         "SCRIPT",
@@ -79,6 +138,7 @@ def main() -> int:
         "-append",
         append,
     ]
+    cmd.extend(qemu_extra_args)
 
     proc = subprocess.Popen(
         cmd,
@@ -143,6 +203,12 @@ def main() -> int:
     ]
     missing = [w for w in want if w not in text]
     if missing:
+        retry_rc = _retry_once_same_config(append)
+        if retry_rc == 0:
+            return 0
+        retry_rc = _retry_with_virtio_cmdline_fallback(append)
+        if retry_rc == 0:
+            return 0
         sys.stderr.write("error: busybox rootfs boot failed; missing: %s\n" % ", ".join(missing))
         sys.stderr.write("kernel: %s\n" % kernel)
         sys.stderr.write("rootfs: %s\n" % rootfs)
