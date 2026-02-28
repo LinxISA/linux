@@ -34,6 +34,7 @@ enum {
 	__NR_reboot = 142,
 	__NR_exit = 93,
 	__NR_exit_group = 94,
+	__NR_execve = 221,
 };
 
 enum {
@@ -193,6 +194,11 @@ static inline slong sys_rt_sigaction(int sig, const void *act, void *oact,
 static inline slong sys_reboot(int magic1, int magic2, int cmd, const void *arg)
 {
 	return sys_call4(__NR_reboot, (ulong)magic1, (ulong)magic2, (ulong)cmd, (ulong)arg);
+}
+
+static inline slong sys_execve(const char *path, char *const argv[], char *const envp[])
+{
+	return sys_call3(__NR_execve, (ulong)path, (ulong)argv, (ulong)envp);
 }
 
 __attribute__((noreturn, always_inline)) static inline void sys_exit_group(slong code)
@@ -476,6 +482,11 @@ static int name_is_sigsegv_test(const char *s)
 	       s[12] == 0;
 }
 
+static int name_is_m9p(const char *s)
+{
+	return s[0] == 'm' && s[1] == '9' && s[2] == 'p' && s[3] == 0;
+}
+
 static int name_is_help(const char *s)
 {
 	return s[0] == 'h' && s[1] == 'e' && s[2] == 'l' && s[3] == 'p' &&
@@ -545,7 +556,32 @@ static void mount_basic(void)
 	(void)sys_mount(dev_src, dev_tgt, dev_fs, 0, 0);
 	(void)sys_mount(proc_src, proc_tgt, proc_fs, 0, 0);
 	(void)sys_mount(sys_src, sys_tgt, sys_fs, 0, 0);
+
+
 }
+
+static void mount_9p_share(void)
+{
+	/* Mount host 9p share at /opt/share (best-effort). */
+	const char *src = "render-share";
+	const char *tgt = "/opt/share";
+	const char *fst = "9p";
+	/*
+	 * Use conservative msize first.
+	 * If this still fails, we can iterate further (but keep m9p non-blocking).
+	 */
+	const char *opt = "trans=virtio,version=9p2000.L,msize=8192,cache=none,access=any";
+	slong rc;
+
+	/* Print: 9p_mount=<hex> */
+	rc = sys_mount(src, tgt, fst, 0, opt);
+	write_ch('9'); write_ch('p'); write_ch('_');
+	write_ch('m'); write_ch('o'); write_ch('u'); write_ch('n'); write_ch('t');
+	write_ch('=');
+	write_uhex((ulong)rc);
+	write_nl();
+}
+
 
 static int applet_help(int argc, char **argv)
 {
@@ -589,6 +625,15 @@ static int applet_help(int argc, char **argv)
 	write_ch('s'); write_ch('h');
 	write_nl();
 
+	return 0;
+}
+
+
+static int applet_m9p(int argc, char **argv)
+{
+	(void)argc;
+	(void)argv;
+	mount_9p_share();
 	return 0;
 }
 
@@ -1594,6 +1639,8 @@ static void shell_loop(void)
 						rc = applet_probe(argc, argv);
 					else if (name_is_put(cmd))
 						rc = applet_put(argc, argv);
+					else if (name_is_m9p(cmd))
+						rc = applet_m9p(argc, argv);
 					else if (name_is_getdents64_probe(cmd))
 						rc = applet_getdents64_probe(argc, argv);
 					else if (name_is_ctx_tq_irq_test(cmd))
@@ -1658,6 +1705,8 @@ static __attribute__((noreturn)) void run_applet(const char *name, int argc,
 		sys_exit_group(applet_probe(argc, argv));
 	if (name_is_put(name))
 		sys_exit_group(applet_put(argc, argv));
+	if (name_is_m9p(name))
+		sys_exit_group(applet_m9p(argc, argv));
 	if (name_is_getdents64_probe(name))
 		sys_exit_group(applet_getdents64_probe(argc, argv));
 	if (name_is_ctx_tq_irq_test(name))
@@ -1695,6 +1744,10 @@ __attribute__((noreturn)) void _start(void)
 	 */
 	mount_basic();
 	console_open();
+	/*
+	 * Do not auto-mount 9p or exec from it in PID1.
+	 * 9p bring-up can block; keep an interactive shell first.
+	 */
 	shell_loop();
 	sys_exit_group(0);
 }
