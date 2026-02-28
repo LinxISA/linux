@@ -5,7 +5,7 @@ LINUX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 O="${O:-$LINUX_ROOT/build-linx-fixed}"
-LLVM_BUILD="${LLVM_BUILD:-/Users/zhoubot/llvm-project/build-linxisa-clang}"
+LLVM_BUILD="${LLVM_BUILD:-/home/zhoubot/linx-isa/compiler/llvm/build-linxisa-clang}"
 
 CLANG="${CLANG:-$LLVM_BUILD/bin/clang}"
 GEN_INIT_CPIO="${GEN_INIT_CPIO:-$O/usr/gen_init_cpio}"
@@ -24,7 +24,7 @@ need() {
 }
 
 need "$CLANG"
-need /usr/bin/clang
+need cc
 
 export PATH="$LLVM_BUILD/bin:$PATH"
 
@@ -39,7 +39,7 @@ fi
 echo "[1/3] Ensuring usr/gen_init_cpio exists (O=$O) ..."
 if [[ ! -x "$GEN_INIT_CPIO" ]]; then
   mkdir -p "$(dirname "$GEN_INIT_CPIO")"
-  /usr/bin/clang -O2 -Wall -Wextra -o "$GEN_INIT_CPIO" \
+  cc -O2 -Wall -Wextra -o "$GEN_INIT_CPIO" \
     "$LINUX_ROOT/usr/gen_init_cpio.c"
 fi
 
@@ -67,6 +67,8 @@ dir /tmp 1777 0 0
 dir /etc 0755 0 0
 dir /bin 0755 0 0
 dir /sbin 0755 0 0
+dir /opt 0755 0 0
+dir /opt/share 0755 0 0
 file /bin/busybox ${BUSYBOX_BIN} 0755 0 0
 file /init ${BUSYBOX_BIN} 0755 0 0
 slink /bin/sh /bin/busybox 0755 0 0
