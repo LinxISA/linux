@@ -568,15 +568,22 @@ static void mount_9p_share(void)
 	const char *fst = "9p";
 	/*
 	 * Use conservative msize first.
-	 * If this still fails, we can iterate further (but keep m9p non-blocking).
+	 * Try both 9p2000.L and 9p2000 (expected to both be acceptable).
 	 */
-	const char *opt = "trans=virtio,version=9p2000.L,msize=8192,cache=none,access=any";
+	const char *opt_l = "trans=virtio,version=9p2000.L,msize=8192,cache=none,access=any";
+	const char *opt_2 = "trans=virtio,version=9p2000,msize=8192,cache=none,access=any";
 	slong rc;
 
-	/* Print: 9p_mount=<hex> */
-	rc = sys_mount(src, tgt, fst, 0, opt);
-	write_ch('9'); write_ch('p'); write_ch('_');
-	write_ch('m'); write_ch('o'); write_ch('u'); write_ch('n'); write_ch('t');
+	/* Print: 9p_L=<hex> */
+	rc = sys_mount(src, tgt, fst, 0, opt_l);
+	write_ch('9'); write_ch('p'); write_ch('_'); write_ch('L');
+	write_ch('=');
+	write_uhex((ulong)rc);
+	write_nl();
+
+	/* Print: 9p_2=<hex> */
+	rc = sys_mount(src, tgt, fst, 0, opt_2);
+	write_ch('9'); write_ch('p'); write_ch('_'); write_ch('2');
 	write_ch('=');
 	write_uhex((ulong)rc);
 	write_nl();
