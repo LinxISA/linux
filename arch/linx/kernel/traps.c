@@ -322,9 +322,26 @@ static void linx_handle_syscall(struct pt_regs *regs)
 {
 	unsigned long nr = regs->regs[PTR_R9];
 	unsigned long arg0 = regs->regs[PTR_R2];
+	unsigned long arg1 = regs->regs[PTR_R3];
+	unsigned long arg2 = regs->regs[PTR_R4];
+	unsigned long arg3 = regs->regs[PTR_R5];
+	unsigned long arg4 = regs->regs[PTR_R6];
+	static unsigned int proc_sys_debug_left = 96;
+	static unsigned int child20_sys_debug_left = 128;
 
 	/* Preserve arg0; a0 is also the return value register. */
 	regs->orig_a0 = arg0;
+
+	if (unlikely(proc_sys_debug_left > 0) &&
+	    (nr == __NR_clone || nr == __NR_wait4 || nr == __NR_waitid ||
+	     nr == __NR_execve)) {
+		pr_err("linx: sys-enter nr=%lu a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx pc=0x%lx pid=%d\n",
+		       nr, arg0, arg1, arg2, arg3, arg4, regs->regs[PTR_PC], current->pid);
+	}
+	if (unlikely(current->pid == 20 && child20_sys_debug_left > 0)) {
+		pr_err("linx: pid20 sys-enter nr=%lu a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx pc=0x%lx\n",
+		       nr, arg0, arg1, arg2, arg3, arg4, regs->regs[PTR_PC]);
+	}
 
 	if (nr < __NR_syscalls) {
 		long ret;
@@ -333,6 +350,18 @@ static void linx_handle_syscall(struct pt_regs *regs)
 		fn = (asmlinkage long (*)(const struct pt_regs *))sys_call_table[nr];
 		ret = fn(regs);
 		regs->regs[PTR_R2] = (unsigned long)ret;
+		if (unlikely(proc_sys_debug_left > 0) &&
+		    (nr == __NR_clone || nr == __NR_wait4 || nr == __NR_waitid ||
+		     nr == __NR_execve)) {
+			pr_err("linx: sys-exit  nr=%lu ret=%ld a0=0x%lx pc=0x%lx pid=%d\n",
+			       nr, ret, regs->regs[PTR_R2], regs->regs[PTR_PC], current->pid);
+			proc_sys_debug_left--;
+		}
+		if (unlikely(current->pid == 20 && child20_sys_debug_left > 0)) {
+			pr_err("linx: pid20 sys-exit  nr=%lu ret=%ld a0=0x%lx pc=0x%lx\n",
+			       nr, ret, regs->regs[PTR_R2], regs->regs[PTR_PC]);
+			child20_sys_debug_left--;
+		}
 	} else {
 		regs->regs[PTR_R2] = (unsigned long)-ENOSYS;
 	}
