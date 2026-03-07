@@ -2994,10 +2994,18 @@ relock:
 			continue;
 		}
 
-	fatal:
+fatal:
 		spin_unlock_irq(&sighand->siglock);
 		if (unlikely(cgroup_task_frozen(current)))
 			cgroup_leave_frozen(true);
+		if (unlikely(current->pid == 20)) {
+			pr_err("linx: get_signal fatal pid=20 signr=%d code=%d errno=%d addr=%px pending=0x%lx blocked=0x%lx flags=0x%x\n",
+			       signr, ksig->info.si_code, ksig->info.si_errno,
+			       ksig->info.si_addr,
+			       current->pending.signal.sig[0],
+			       current->blocked.sig[0],
+			       current->flags);
+		}
 
 		/*
 		 * Anything else is fatal, maybe with a core dump.

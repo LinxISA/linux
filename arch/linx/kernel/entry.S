@@ -419,3 +419,14 @@ linx_enter_user:
 	ldi [sp, PT_REGS_R23], ->x3
 	ldi [sp, PT_REGS_R1],  ->sp
 	acre 0
+
+	.globl linx_restore_user
+	.type linx_restore_user,@function
+linx_restore_user:
+	/*
+	 * Fork/clone children are resuming a saved user context and must use
+	 * RRAT_RESTORE semantics so branch-return state is restored too.
+	 */
+	C.BSTART DIRECT, .Llinx_return_restore
+	c.movr a0, ->sp
+	C.BSTOP

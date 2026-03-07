@@ -2573,6 +2573,7 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	struct task_struct *p;
 	int trace = 0;
 	pid_t nr;
+	static unsigned int linx_clone_dbg_left = 32;
 
 	/*
 	 * For legacy clone() calls, CLONE_PIDFD uses the parent_tid argument
@@ -2612,6 +2613,22 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	if (IS_ERR(p))
 		return PTR_ERR(p);
 
+	if (unlikely(linx_clone_dbg_left > 0 && current->pid == 1)) {
+		struct pt_regs *cregs = task_pt_regs(p);
+
+		pr_err("linx: kernel_clone parent=%d child=%d flags=0x%llx args_exit_sig=%d p_exit_sig=%d parent_pid=%d real_parent_pid=%d tgid=%d state=0x%x exit_state=0x%x\n",
+		       current->pid, p->pid, clone_flags, args->exit_signal, p->exit_signal,
+		       p->parent ? p->parent->pid : -1,
+		       p->real_parent ? p->real_parent->pid : -1,
+		       p->tgid, p->__state, p->exit_state);
+		pr_err("linx: kernel_clone child-thread child=%d ra=0x%lx sp=0x%lx pc=0x%lx usp=0x%lx r10=0x%lx r2=0x%lx ecstate=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
+		       p->pid, p->thread.ra, p->thread.sp,
+		       cregs->regs[PTR_PC], cregs->regs[PTR_R1],
+		       cregs->regs[PTR_R10], cregs->regs[PTR_R2],
+		       cregs->ecstate, cregs->ebarg_tpc, cregs->ebarg_lra);
+		linx_clone_dbg_left--;
+	}
+
 	/*
 	 * Do this prior waking up the new thread - the thread pointer
 	 * might get invalid after that point, if the thread exits quickly.
@@ -2638,6 +2655,14 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 	}
 
 	wake_up_new_task(p);
+
+	if (unlikely(linx_clone_dbg_left > 0 && current->pid == 1)) {
+		pr_err("linx: kernel_clone wake child=%d state=0x%x exit_state=0x%x parent_pid=%d real_parent_pid=%d\n",
+		       p->pid, p->__state, p->exit_state,
+		       p->parent ? p->parent->pid : -1,
+		       p->real_parent ? p->real_parent->pid : -1);
+		linx_clone_dbg_left--;
+	}
 
 	/* forking complete and child started to run, tell ptracer */
 	if (unlikely(trace))
