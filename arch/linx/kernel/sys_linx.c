@@ -3,6 +3,8 @@
 #include <linux/errno.h>
 #include <linux/mman.h>
 #include <linux/mm.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
 #include <linux/syscalls.h>
 
 /* Not defined using SYSCALL_DEFINE0 to avoid error injection. */
@@ -16,10 +18,24 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 		unsigned long, prot, unsigned long, flags,
 		unsigned long, fd, unsigned long, offset)
 {
+	bool trace = current->pid == 1 && fd != (unsigned long) -1 &&
+		     !(flags & MAP_ANONYMOUS);
+	long ret;
+
+	if (trace)
+		pr_info("linx: mmap pid=%d addr=%#lx len=%#lx prot=%#lx flags=%#lx fd=%lu offset=%#lx\n",
+			current->pid, addr, len, prot, flags, fd, offset);
+
 	if (offset & ~PAGE_MASK)
 		return -EINVAL;
 
-	return ksys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
+	ret = ksys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
+
+	if (trace)
+		pr_info("linx: mmap-ret pid=%d ret=%#lx pgoff=%#lx\n",
+			current->pid, ret, offset >> PAGE_SHIFT);
+
+	return ret;
 }
 
 #ifndef CONFIG_MMU

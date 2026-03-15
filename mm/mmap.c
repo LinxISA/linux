@@ -77,6 +77,11 @@ int mmap_rnd_compat_bits __read_mostly = CONFIG_ARCH_MMAP_RND_COMPAT_BITS;
 static bool ignore_rlimit_data;
 core_param(ignore_rlimit_data, ignore_rlimit_data, bool, 0644);
 
+static bool linx_trace_mmap_failure_p(struct file *file)
+{
+	return current->pid == 1 && file != NULL;
+}
+
 /* Update vma->vm_page_prot to reflect vma->vm_flags. */
 void vma_set_page_prot(struct vm_area_struct *vma)
 {
@@ -339,6 +344,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 {
 	struct mm_struct *mm = current->mm;
 	int pkey = 0;
+	unsigned long req_addr = addr;
 
 	*populate = 0;
 
@@ -405,7 +411,17 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	 */
 	addr = __get_unmapped_area(file, addr, len, pgoff, flags, vm_flags);
 	if (IS_ERR_VALUE(addr))
+	{
+		if (linx_trace_mmap_failure_p(file))
+			pr_info("linx: mmap-fail stage=get_unmapped_area file=%pD len=%#lx pgoff=%#lx prot=%#lx flags=%#lx vm_flags=%#lx err=%ld\n",
+				file, len, pgoff, prot, flags, (unsigned long) vm_flags,
+				(long) addr);
 		return addr;
+	}
+	if (linx_trace_mmap_failure_p(file))
+		pr_info("linx: mmap-choose file=%pD req=%#lx chosen=%#lx len=%#lx pgoff=%#lx flags=%#lx vm_flags=%#lx\n",
+			file, req_addr, addr, len, pgoff, flags,
+			(unsigned long) vm_flags);
 
 	if (flags & MAP_FIXED_NOREPLACE) {
 		if (find_vma_intersection(mm, addr, addr + len))
@@ -556,6 +572,9 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 	}
 
 	addr = mmap_region(file, addr, len, vm_flags, pgoff, uf);
+	if (linx_trace_mmap_failure_p(file))
+		pr_info("linx: mmap-commit file=%pD ret=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx\n",
+			file, addr, len, pgoff, (unsigned long) vm_flags);
 	if (!IS_ERR_VALUE(addr) &&
 	    ((vm_flags & VM_LOCKED) ||
 	     (flags & (MAP_POPULATE | MAP_NONBLOCK)) == MAP_POPULATE))

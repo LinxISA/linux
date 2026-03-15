@@ -41,6 +41,17 @@ struct thread_struct {
 	unsigned long ra;
 	unsigned long sp;
 	unsigned long s[9]; /* s0..s8 */
+	unsigned long ebarg0;
+	unsigned long ebarg_bpc_cur;
+	unsigned long ebarg_bpc_tgt;
+	unsigned long ebarg_tpc;
+	unsigned long ebarg_lra;
+	unsigned long ebarg_tq[4];
+	unsigned long ebarg_uq[4];
+	unsigned long ebarg_lb;
+	unsigned long ebarg_lc;
+	unsigned long ebarg_ext_ptr;
+	unsigned long ebarg_ext_meta;
 	unsigned long kthread_fn;
 	unsigned long kthread_arg;
 };
@@ -49,6 +60,17 @@ struct thread_struct {
 	.ra = 0,			\
 	.sp = 0,			\
 	.s = { 0 },			\
+	.ebarg0 = 0,			\
+	.ebarg_bpc_cur = 0,		\
+	.ebarg_bpc_tgt = 0,		\
+	.ebarg_tpc = 0,			\
+	.ebarg_lra = 0,			\
+	.ebarg_tq = { 0 },		\
+	.ebarg_uq = { 0 },		\
+	.ebarg_lb = 0,			\
+	.ebarg_lc = 0,			\
+	.ebarg_ext_ptr = 0,		\
+	.ebarg_ext_meta = 0,		\
 	.kthread_fn = 0,		\
 	.kthread_arg = 0,		\
 }

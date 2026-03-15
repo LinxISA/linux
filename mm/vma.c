@@ -7,6 +7,11 @@
 #include "vma_internal.h"
 #include "vma.h"
 
+static bool linx_trace_mmap_failure_p(struct file *file)
+{
+	return current->pid == 1 && file != NULL;
+}
+
 struct mmap_state {
 	struct mm_struct *mm;
 	struct vma_iterator *vmi;
@@ -2688,8 +2693,16 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 	map.check_ksm_early = can_set_ksm_flags_early(&map);
 
 	error = __mmap_prepare(&map, uf);
+	if (error && linx_trace_mmap_failure_p(file))
+		pr_info("linx: mmap-fail stage=prepare file=%pD addr=%#lx end=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx err=%d\n",
+			file, addr, map.end, len, (unsigned long) pgoff,
+			(unsigned long) vm_flags, error);
 	if (!error && have_mmap_prepare)
 		error = call_mmap_prepare(&map);
+	if (error && have_mmap_prepare && linx_trace_mmap_failure_p(file))
+		pr_info("linx: mmap-fail stage=mmap_prepare file=%pD addr=%#lx end=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx err=%d\n",
+			file, addr, map.end, len, (unsigned long) map.pgoff,
+			(unsigned long) map.vm_flags, error);
 	if (error)
 		goto abort_munmap;
 
@@ -2706,6 +2719,10 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 	/* ...but if we can't, allocate a new VMA. */
 	if (!vma) {
 		error = __mmap_new_vma(&map, &vma);
+		if (error && linx_trace_mmap_failure_p(file))
+			pr_info("linx: mmap-fail stage=new_vma file=%pD addr=%#lx end=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx err=%d\n",
+				file, addr, map.end, len, (unsigned long) map.pgoff,
+				(unsigned long) map.vm_flags, error);
 		if (error)
 			goto unacct_error;
 	}
@@ -2760,11 +2777,21 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 
 	/* Check to see if MDWE is applicable. */
 	if (map_deny_write_exec(vm_flags, vm_flags))
-		return -EACCES;
+		{
+			if (linx_trace_mmap_failure_p(file))
+				pr_info("linx: mmap-fail stage=deny_wx file=%pD addr=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx\n",
+					file, addr, len, pgoff, (unsigned long) vm_flags);
+			return -EACCES;
+		}
 
 	/* Allow architectures to sanity-check the vm_flags. */
 	if (!arch_validate_flags(vm_flags))
-		return -EINVAL;
+		{
+			if (linx_trace_mmap_failure_p(file))
+				pr_info("linx: mmap-fail stage=arch_validate file=%pD addr=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx\n",
+					file, addr, len, pgoff, (unsigned long) vm_flags);
+			return -EINVAL;
+		}
 
 	/* Map writable and ensure this isn't a sealed memfd. */
 	if (file && is_shared_maywrite(vm_flags)) {
@@ -2776,6 +2803,9 @@ unsigned long mmap_region(struct file *file, unsigned long addr,
 	}
 
 	ret = __mmap_region(file, addr, len, vm_flags, pgoff, uf);
+	if (IS_ERR_VALUE(ret) && linx_trace_mmap_failure_p(file))
+		pr_info("linx: mmap-fail stage=mmap_region file=%pD addr=%#lx len=%#lx pgoff=%#lx vm_flags=%#lx err=%ld\n",
+			file, addr, len, pgoff, (unsigned long) vm_flags, ret);
 
 	/* Clear our write mapping regardless of error. */
 	if (writable_file_mapping)

@@ -12,6 +12,8 @@
 #include <linux/mm.h>
 #include <linux/printk.h>
 #include <linux/fdtable.h>
+#include <linux/fs.h>
+#include <linux/proc_fs.h>
 #include <linux/resource.h>
 #include <linux/sched.h>
 #include <linux/signal.h>
@@ -80,6 +82,9 @@ static bool linx_disable_timer_irq;
 static bool linx_ctx_tu_test;
 static bool linx_ctx_tu_step_test;
 static atomic_t linx_ctx_tu_pending_reason = ATOMIC_INIT(LINX_CTX_TU_PENDING_NONE);
+static atomic_t linx_ctx_tu_timer_arm_once = ATOMIC_INIT(0);
+static atomic_t linx_ctx_tu_poison_on_user_return = ATOMIC_INIT(0);
+static atomic64_t linx_ctx_tu_timer_irq_count = ATOMIC64_INIT(0);
 static atomic64_t linx_ctx_tu_step_bi_fail_count = ATOMIC64_INIT(0);
 
 enum {
@@ -153,14 +158,80 @@ static int __init linx_ctx_tu_step_test_setup(char *arg)
 }
 __setup("linx_ctx_tu_step_test=", linx_ctx_tu_step_test_setup);
 
+static ssize_t linx_ctx_tu_timer_arm_proc_write(struct file *file,
+						const char __user *buf,
+						size_t count, loff_t *ppos)
+{
+	char tmp[8];
+
+	if (!count)
+		return 0;
+	if (count >= sizeof(tmp))
+		return -EINVAL;
+	if (copy_from_user(tmp, buf, count))
+		return -EFAULT;
+
+	if (tmp[0] == '1')
+		atomic_set(&linx_ctx_tu_timer_arm_once, 1);
+	else if (tmp[0] == '0')
+		atomic_set(&linx_ctx_tu_timer_arm_once, 0);
+	else
+		return -EINVAL;
+
+	return count;
+}
+
+static ssize_t linx_ctx_tu_timer_count_proc_read(struct file *file,
+						 char __user *buf,
+						 size_t count, loff_t *ppos)
+{
+	char tmp[32];
+	int len;
+
+	len = scnprintf(tmp, sizeof(tmp), "%llu\n",
+			(unsigned long long)atomic64_read(&linx_ctx_tu_timer_irq_count));
+	return simple_read_from_buffer(buf, count, ppos, tmp, len);
+}
+
+static const struct proc_ops linx_ctx_tu_timer_arm_proc_ops = {
+	.proc_write	= linx_ctx_tu_timer_arm_proc_write,
+	.proc_lseek	= default_llseek,
+};
+
+static const struct proc_ops linx_ctx_tu_timer_count_proc_ops = {
+	.proc_read	= linx_ctx_tu_timer_count_proc_read,
+	.proc_lseek	= default_llseek,
+};
+
+static int __init linx_ctx_tu_timer_arm_proc_init(void)
+{
+	if (!proc_create("linx_ctx_tu_timer_arm", 0200, NULL,
+			 &linx_ctx_tu_timer_arm_proc_ops))
+		return -ENOMEM;
+	if (!proc_create("linx_ctx_tu_timer_count", 0444, NULL,
+			 &linx_ctx_tu_timer_count_proc_ops))
+		return -ENOMEM;
+
+	return 0;
+}
+device_initcall(linx_ctx_tu_timer_arm_proc_init);
+
 void linx_ctx_tu_test_note_timer_irq(struct pt_regs *regs, u64 irq_id)
 {
-	if (!READ_ONCE(linx_ctx_tu_test) || irq_id != 0 || !regs)
+	bool armed_once;
+
+	if (irq_id != 0 || !regs)
 		return;
 	if (!user_mode(regs))
 		return;
 	if (!(regs->ecstate & LINX_ECSTATE_BI_BIT))
 		return;
+
+	armed_once = atomic_xchg(&linx_ctx_tu_timer_arm_once, 0) != 0;
+	if (!READ_ONCE(linx_ctx_tu_test) && !armed_once)
+		return;
+
+	atomic64_inc(&linx_ctx_tu_timer_irq_count);
 	atomic_set(&linx_ctx_tu_pending_reason, LINX_CTX_TU_PENDING_TIMER_IRQ);
 }
 
@@ -191,12 +262,21 @@ enum linx_ctx_tu_test_pending_reason linx_ctx_tu_test_take_pending_reason(void)
 		atomic_xchg(&linx_ctx_tu_pending_reason, LINX_CTX_TU_PENDING_NONE);
 }
 
-void linx_ctx_tu_test_poison_manager_state(void)
+void linx_ctx_tu_test_request_poison_on_user_return(void)
 {
-	if (!READ_ONCE(linx_ctx_tu_test) &&
-	    !READ_ONCE(linx_ctx_tu_step_test))
+	atomic_set(&linx_ctx_tu_poison_on_user_return, 1);
+}
+
+void linx_ctx_tu_test_maybe_poison_return_state(void)
+{
+	if (!atomic_xchg(&linx_ctx_tu_poison_on_user_return, 0))
 		return;
 
+	linx_ctx_tu_test_poison_manager_state();
+}
+
+void linx_ctx_tu_test_poison_manager_state(void)
+{
 	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_BPC_CUR, SSR_EBARG_BPC_CUR_ACR1);
 	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_BPC_TGT, SSR_EBARG_BPC_TGT_ACR1);
 	linx_hl_ssrset((u64)LINX_CTX_TU_POISON_TPC, SSR_EBARG_TPC_ACR1);
@@ -318,6 +398,33 @@ retry:
 	return false;
 }
 
+static const char *linx_trace_user_string(const char __user *uptr,
+					  char *buf, size_t buf_sz)
+{
+	long copied;
+
+	if (!buf || !buf_sz)
+		return "<buf>";
+	if (!uptr) {
+		scnprintf(buf, buf_sz, "<null>");
+		return buf;
+	}
+
+	copied = strncpy_from_user(buf, uptr, buf_sz);
+	if (copied < 0) {
+		scnprintf(buf, buf_sz, "<fault:%ld>", copied);
+		return buf;
+	}
+	if (copied == 0) {
+		scnprintf(buf, buf_sz, "<empty>");
+		return buf;
+	}
+	if (copied >= buf_sz && buf_sz > 4)
+		scnprintf(buf + buf_sz - 5, 5, "...");
+
+	return buf;
+}
+
 static void linx_handle_syscall(struct pt_regs *regs)
 {
 	unsigned long nr = regs->regs[PTR_R9];
@@ -328,9 +435,79 @@ static void linx_handle_syscall(struct pt_regs *regs)
 	unsigned long arg4 = regs->regs[PTR_R6];
 	static unsigned int proc_sys_debug_left = 96;
 	static unsigned int child20_sys_debug_left = 128;
+	static unsigned int init_loader_sys_debug_left = 256;
+	static unsigned int sigaction_sys_debug_left = 64;
+	bool trace_init_loader = false;
+	char path_buf[96];
+	const char *path = NULL;
 
 	/* Preserve arg0; a0 is also the return value register. */
 	regs->orig_a0 = arg0;
+
+	if (unlikely(init_loader_sys_debug_left > 0) && current->pid == 1)
+		trace_init_loader = true;
+
+	if (unlikely(trace_init_loader)) {
+		switch (nr) {
+		case __NR_execve:
+			path = linx_trace_user_string((const char __user *)arg0,
+						      path_buf, sizeof(path_buf));
+			pr_err("linx: init-loader enter nr=%lu path=%s a1=0x%lx a2=0x%lx pc=0x%lx\n",
+			       nr, path, arg1, arg2, regs->regs[PTR_PC]);
+			break;
+		case __NR_openat:
+		case __NR_faccessat:
+			path = linx_trace_user_string((const char __user *)arg1,
+						      path_buf, sizeof(path_buf));
+			pr_err("linx: init-loader enter nr=%lu dirfd=%ld path=%s a2=0x%lx a3=0x%lx pc=0x%lx\n",
+			       nr, (long)arg0, path, arg2, arg3, regs->regs[PTR_PC]);
+			break;
+		case __NR_newfstatat:
+		case __NR_readlinkat:
+			path = linx_trace_user_string((const char __user *)arg1,
+						      path_buf, sizeof(path_buf));
+			pr_err("linx: init-loader enter nr=%lu dirfd=%ld path=%s a2=0x%lx a3=0x%lx a4=0x%lx pc=0x%lx\n",
+			       nr, (long)arg0, path, arg2, arg3, arg4, regs->regs[PTR_PC]);
+			break;
+		case __NR_read:
+			pr_err("linx: init-loader enter nr=%lu fd=%ld buf=0x%lx count=%lu pc=0x%lx\n",
+			       nr, (long)arg0, arg1, arg2, regs->regs[PTR_PC]);
+			break;
+		case __NR_pread64:
+			pr_err("linx: init-loader enter nr=%lu fd=%ld buf=0x%lx count=%lu off=%lu pc=0x%lx\n",
+			       nr, (long)arg0, arg1, arg2, arg3, regs->regs[PTR_PC]);
+			break;
+		case __NR_brk:
+			pr_err("linx: init-loader enter nr=%lu brk=0x%lx pc=0x%lx\n",
+			       nr, arg0, regs->regs[PTR_PC]);
+			break;
+		case __NR_mmap:
+			pr_err("linx: init-loader enter nr=%lu addr=0x%lx len=0x%lx prot=0x%lx flags=0x%lx fd=%ld off=0x%lx pc=0x%lx\n",
+			       nr, arg0, arg1, arg2, arg3, (long)arg4, regs->regs[PTR_R7],
+			       regs->regs[PTR_PC]);
+			break;
+		case __NR_mprotect:
+			pr_err("linx: init-loader enter nr=%lu addr=0x%lx len=0x%lx prot=0x%lx pc=0x%lx\n",
+			       nr, arg0, arg1, arg2, regs->regs[PTR_PC]);
+			break;
+		case __NR_munmap:
+			pr_err("linx: init-loader enter nr=%lu addr=0x%lx len=0x%lx pc=0x%lx\n",
+			       nr, arg0, arg1, regs->regs[PTR_PC]);
+			break;
+		case __NR_getdents64:
+			pr_err("linx: init-loader enter nr=%lu fd=%ld dirp=0x%lx count=%lu pc=0x%lx\n",
+			       nr, (long)arg0, arg1, arg2, regs->regs[PTR_PC]);
+			break;
+		case __NR_close:
+			pr_err("linx: init-loader enter nr=%lu fd=%ld pc=0x%lx\n",
+			       nr, (long)arg0, regs->regs[PTR_PC]);
+			break;
+		default:
+			pr_err("linx: init-loader enter nr=%lu a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx pc=0x%lx\n",
+			       nr, arg0, arg1, arg2, arg3, arg4, regs->regs[PTR_PC]);
+			break;
+		}
+	}
 
 	if (unlikely(proc_sys_debug_left > 0) &&
 	    (nr == __NR_clone || nr == __NR_wait4 || nr == __NR_waitid ||
@@ -341,6 +518,10 @@ static void linx_handle_syscall(struct pt_regs *regs)
 	if (unlikely(current->pid == 20 && child20_sys_debug_left > 0)) {
 		pr_err("linx: pid20 sys-enter nr=%lu a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx a4=0x%lx pc=0x%lx\n",
 		       nr, arg0, arg1, arg2, arg3, arg4, regs->regs[PTR_PC]);
+	}
+	if (unlikely(sigaction_sys_debug_left > 0 && nr == __NR_rt_sigaction)) {
+		pr_err("linx: sigaction-enter pid=%d a0=0x%lx a1=0x%lx a2=0x%lx a3=0x%lx pc=0x%lx\n",
+		       current->pid, arg0, arg1, arg2, arg3, regs->regs[PTR_PC]);
 	}
 
 	if (nr < __NR_syscalls) {
@@ -361,6 +542,17 @@ static void linx_handle_syscall(struct pt_regs *regs)
 			pr_err("linx: pid20 sys-exit  nr=%lu ret=%ld a0=0x%lx pc=0x%lx\n",
 			       nr, ret, regs->regs[PTR_R2], regs->regs[PTR_PC]);
 			child20_sys_debug_left--;
+		}
+		if (unlikely(trace_init_loader)) {
+			pr_err("linx: init-loader exit  nr=%lu ret=%ld a0=0x%lx pc=0x%lx%s\n",
+			       nr, ret, regs->regs[PTR_R2], regs->regs[PTR_PC],
+			       ret == -ENOMEM ? " [ENOMEM]" : "");
+			init_loader_sys_debug_left--;
+		}
+		if (unlikely(sigaction_sys_debug_left > 0 && nr == __NR_rt_sigaction)) {
+			pr_err("linx: sigaction-exit  pid=%d ret=%ld a0=0x%lx pc=0x%lx\n",
+			       current->pid, ret, regs->regs[PTR_R2], regs->regs[PTR_PC]);
+			sigaction_sys_debug_left--;
 		}
 	} else {
 		regs->regs[PTR_R2] = (unsigned long)-ENOSYS;
@@ -581,8 +773,13 @@ asmlinkage void linx_do_trap(struct pt_regs *regs)
 
 	if (!is_async && trapnum == LINX_TRAPNUM_BLOCK_TRAP) {
 		if (user_mode(regs)) {
-			pr_err("linx: user block trap -> SIGILL cause=0x%x traparg0=0x%lx pc=0x%lx\n",
-			       cause, regs->traparg0, regs->regs[PTR_PC]);
+			pr_err("linx: user block trap -> SIGILL cause=0x%x traparg0=0x%lx pc=0x%lx sp=0x%lx ra=0x%lx ecstate=0x%lx\n",
+			       cause, regs->traparg0, regs->regs[PTR_PC], regs->regs[PTR_R1],
+			       regs->regs[PTR_R10], regs->ecstate);
+			pr_err("linx: user block trap ebarg: bpc_cur=0x%lx bpc_tgt=0x%lx tpc=0x%lx lra=0x%lx lb=0x%lx lc=0x%lx ext_ptr=0x%lx ext_meta=0x%lx\n",
+			       regs->ebarg_bpc_cur, regs->ebarg_bpc_tgt, regs->ebarg_tpc,
+			       regs->ebarg_lra, regs->ebarg_lb, regs->ebarg_lc,
+			       regs->ebarg_ext_ptr, regs->ebarg_ext_meta);
 			force_sig_fault(SIGILL, ILL_ILLOPC,
 					(void __user *)regs->regs[PTR_PC]);
 			return;
