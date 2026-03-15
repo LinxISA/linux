@@ -71,6 +71,23 @@ void asm_offsets(void)
 	DEFINE(TASK_THREAD_S6, offsetof(struct task_struct, thread.s[6]));
 	DEFINE(TASK_THREAD_S7, offsetof(struct task_struct, thread.s[7]));
 	DEFINE(TASK_THREAD_S8, offsetof(struct task_struct, thread.s[8]));
+	DEFINE(TASK_THREAD_EBARG0, offsetof(struct task_struct, thread.ebarg0));
+	DEFINE(TASK_THREAD_EBARG_BPC_CUR, offsetof(struct task_struct, thread.ebarg_bpc_cur));
+	DEFINE(TASK_THREAD_EBARG_BPC_TGT, offsetof(struct task_struct, thread.ebarg_bpc_tgt));
+	DEFINE(TASK_THREAD_EBARG_TPC, offsetof(struct task_struct, thread.ebarg_tpc));
+	DEFINE(TASK_THREAD_EBARG_LRA, offsetof(struct task_struct, thread.ebarg_lra));
+	DEFINE(TASK_THREAD_EBARG_TQ0, offsetof(struct task_struct, thread.ebarg_tq[0]));
+	DEFINE(TASK_THREAD_EBARG_TQ1, offsetof(struct task_struct, thread.ebarg_tq[1]));
+	DEFINE(TASK_THREAD_EBARG_TQ2, offsetof(struct task_struct, thread.ebarg_tq[2]));
+	DEFINE(TASK_THREAD_EBARG_TQ3, offsetof(struct task_struct, thread.ebarg_tq[3]));
+	DEFINE(TASK_THREAD_EBARG_UQ0, offsetof(struct task_struct, thread.ebarg_uq[0]));
+	DEFINE(TASK_THREAD_EBARG_UQ1, offsetof(struct task_struct, thread.ebarg_uq[1]));
+	DEFINE(TASK_THREAD_EBARG_UQ2, offsetof(struct task_struct, thread.ebarg_uq[2]));
+	DEFINE(TASK_THREAD_EBARG_UQ3, offsetof(struct task_struct, thread.ebarg_uq[3]));
+	DEFINE(TASK_THREAD_EBARG_LB, offsetof(struct task_struct, thread.ebarg_lb));
+	DEFINE(TASK_THREAD_EBARG_LC, offsetof(struct task_struct, thread.ebarg_lc));
+	DEFINE(TASK_THREAD_EBARG_EXT_PTR, offsetof(struct task_struct, thread.ebarg_ext_ptr));
+	DEFINE(TASK_THREAD_EBARG_EXT_META, offsetof(struct task_struct, thread.ebarg_ext_meta));
 	DEFINE(TASK_THREAD_KTHREAD_FN, offsetof(struct task_struct, thread.kthread_fn));
 	DEFINE(TASK_THREAD_KTHREAD_ARG, offsetof(struct task_struct, thread.kthread_arg));
 

@@ -1079,6 +1079,25 @@ static int parse_intr_total_count(const char *buf, ulong len, ulong *out)
 	return -1;
 }
 
+static int parse_decimal_value(const char *buf, ulong len, ulong *out)
+{
+	ulong i = 0;
+	ulong v = 0;
+	int have_digit = 0;
+
+	while (i < len && (buf[i] == ' ' || buf[i] == '\t' || buf[i] == '\n'))
+		i++;
+	while (i < len && buf[i] >= '0' && buf[i] <= '9') {
+		have_digit = 1;
+		v = (v * 10) + (ulong)(buf[i] - '0');
+		i++;
+	}
+	if (!have_digit)
+		return -1;
+	*out = v;
+	return 0;
+}
+
 static int read_proc_file(const char *path, char *buf, ulong cap, ulong *got)
 {
 	slong n;
@@ -1106,20 +1125,45 @@ static int read_proc_file(const char *path, char *buf, ulong cap, ulong *got)
 	return 0;
 }
 
-static int read_irq0_count(ulong *out)
+static int read_timer_irq_count(ulong *out)
 {
-	char buf[4096];
+	char buf[64];
 	ulong got = 0;
 	int rc;
 
-	rc = read_proc_file("/proc/interrupts", buf, sizeof(buf), &got);
-	if (rc == 0 && parse_irq0_count(buf, got, out) == 0)
-		return 0;
-
-	rc = read_proc_file("/proc/stat", buf, sizeof(buf), &got);
+	rc = read_proc_file("/proc/linx_ctx_tu_timer_count", buf, sizeof(buf), &got);
 	if (rc < 0)
 		return rc;
-	return parse_intr_total_count(buf, got, out);
+	return parse_decimal_value(buf, got, out);
+}
+
+static int write_path_literal(const char *path, const char *value)
+{
+	int fd;
+	ulong len;
+	int n;
+
+	fd = sys_openat_compat(AT_FDCWD, path, O_WRONLY | O_CLOEXEC, 0);
+	if (is_errno(fd))
+		return fd;
+
+	len = c_strlen(value);
+	n = sys_write(fd, value, len);
+	(void)sys_close(fd);
+	return n;
+}
+
+static inline ulong ssrget_time_symbol(void)
+{
+	ulong out;
+
+	__asm__ volatile("ssrget TIME, ->%0" : "=r"(out) : : "memory");
+	return out;
+}
+
+static inline void hl_ssrset_timedcmp_acr1(ulong value)
+{
+	__asm__ volatile("hl.ssrset %0, 0x1f21" : : "r"(value) : "memory");
 }
 
 /*
@@ -1256,36 +1300,68 @@ static void write_ctx_tq_result(int ok, ulong loops, ulong mismatch,
 static int applet_ctx_tq_irq_test(int argc, char **argv)
 {
 	/*
-	 * Keep this test long enough to observe timer IRQ and BI=1 resume paths,
-	 * but short enough to complete under default smoke timeout.
+	 * Keep the hot section entirely in userspace: arm one explicit timer IRQ,
+	 * then run block traffic until a bounded local TIME deadline. Polling
+	 * procfs in the hot loop adds extra trap traffic and makes the result
+	 * noisy enough to mask the actual t/u restore issue we want to test.
 	 */
-	ulong loops = 20000;
+	const ulong warmup_loops = 8192;
+	const ulong min_loops = 20000;
+	const ulong hot_run_ns = 8000000UL; /* 8ms after explicit arm */
+	const ulong deadline_ns = 50000000UL; /* 50ms hard cap */
+	const ulong timer_delta_ns = 2000000UL; /* 2ms */
+	ulong loops = 0;
 	ulong i;
 	ulong mismatches = 0;
 	ulong irq0_before = 0;
 	ulong irq0_after = 0;
 	ulong irq0_delta = 0;
 	ulong seed_base = 0x1020304050607000UL;
+	ulong start_time = 0;
 	int rc;
 
 	(void)argc;
 	(void)argv;
 
-	rc = read_irq0_count(&irq0_before);
+	rc = write_path_literal("/proc/linx_ctx_tu_timer_arm", "1");
+	if (is_errno(rc))
+		return rc;
+
+	rc = read_timer_irq_count(&irq0_before);
 	if (rc < 0) {
+		(void)write_path_literal("/proc/linx_ctx_tu_timer_arm", "0");
 		write_ctx_tq_result(0, loops, (ulong)-1, 0, 0, 0);
 		return rc;
 	}
 
-	for (i = 0; i < loops; i++) {
+	for (i = 0;; i++) {
 		ulong in = seed_base + i;
 		ulong out = ctx_tq_block_round(in);
 
 		if (out != in)
 			mismatches++;
+
+		loops = i + 1;
+
+		if (loops == warmup_loops) {
+			start_time = ssrget_time_symbol();
+			hl_ssrset_timedcmp_acr1(start_time + timer_delta_ns);
+		}
+
+		if (loops < warmup_loops)
+			continue;
+
+		if (loops >= min_loops &&
+		    ssrget_time_symbol() - start_time >= hot_run_ns)
+			break;
+		if (ssrget_time_symbol() - start_time >= deadline_ns)
+			break;
 	}
 
-	rc = read_irq0_count(&irq0_after);
+	hl_ssrset_timedcmp_acr1(0);
+	(void)write_path_literal("/proc/linx_ctx_tu_timer_arm", "0");
+
+	rc = read_timer_irq_count(&irq0_after);
 	if (rc < 0) {
 		write_ctx_tq_result(0, loops, mismatches, irq0_before, 0, 0);
 		return rc;

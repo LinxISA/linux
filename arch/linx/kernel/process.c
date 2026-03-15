@@ -209,6 +209,17 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	p->thread.ra = (unsigned long)linx_ret_from_fork;
 	p->thread.sp = (unsigned long)regs;
 	memset(p->thread.s, 0, sizeof(p->thread.s));
+	p->thread.ebarg0 = 0;
+	p->thread.ebarg_bpc_cur = 0;
+	p->thread.ebarg_bpc_tgt = 0;
+	p->thread.ebarg_tpc = 0;
+	p->thread.ebarg_lra = 0;
+	memset(p->thread.ebarg_tq, 0, sizeof(p->thread.ebarg_tq));
+	memset(p->thread.ebarg_uq, 0, sizeof(p->thread.ebarg_uq));
+	p->thread.ebarg_lb = 0;
+	p->thread.ebarg_lc = 0;
+	p->thread.ebarg_ext_ptr = 0;
+	p->thread.ebarg_ext_meta = 0;
 
 	/*
 	 * Early bring-up probe: log a few copy_thread products so we can

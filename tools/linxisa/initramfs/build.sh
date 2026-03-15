@@ -2,10 +2,11 @@
 set -euo pipefail
 
 LINUX_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+REPO_ROOT="$(cd "$LINUX_ROOT/../.." && pwd)"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 O="${O:-$LINUX_ROOT/build-linx-fixed}"
-LLVM_BUILD="${LLVM_BUILD:-/home/zhoubot/linx-isa/compiler/llvm/build-linxisa-clang}"
+LLVM_BUILD="${LLVM_BUILD:-$REPO_ROOT/compiler/llvm/build-linxisa-clang}"
 
 CLANG="${CLANG:-$LLVM_BUILD/bin/clang}"
 GEN_INIT_CPIO="${GEN_INIT_CPIO:-$O/usr/gen_init_cpio}"

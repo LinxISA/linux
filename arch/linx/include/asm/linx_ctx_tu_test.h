@@ -15,6 +15,8 @@ enum linx_ctx_tu_test_pending_reason {
 void linx_ctx_tu_test_note_timer_irq(struct pt_regs *regs, u64 irq_id);
 void linx_ctx_tu_test_note_step_trap(struct pt_regs *regs, u8 trapnum);
 enum linx_ctx_tu_test_pending_reason linx_ctx_tu_test_take_pending_reason(void);
+void linx_ctx_tu_test_request_poison_on_user_return(void);
+void linx_ctx_tu_test_maybe_poison_return_state(void);
 void linx_ctx_tu_test_poison_manager_state(void);
 
 #endif /* _ASM_LINX_CTX_TU_TEST_H */

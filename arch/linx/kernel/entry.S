@@ -197,6 +197,11 @@ linx_trap_vector:
 
 .Llinx_return_restore:
 	C.BSTART.STD
+	BSTART CALL, linx_ctx_tu_test_maybe_poison_return_state, ra=.Llinx_return_after_poison
+	C.BSTOP
+
+.Llinx_return_after_poison:
+	C.BSTART.STD
 	/* Restore registers from pt_regs and return via ACRE RRAT_RESTORE (1). */
 	c.movr sp, ->x3
 

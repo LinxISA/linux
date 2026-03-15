@@ -234,16 +234,28 @@ asmlinkage void do_notify_resume(struct pt_regs *regs)
 	if (pending_reason != LINX_CTX_TU_PENDING_NONE) {
 		bool irq_was_disabled = irqs_disabled();
 
-		linx_ctx_tu_test_poison_manager_state();
 		if (irq_was_disabled)
 			local_irq_enable();
 		if (pending_reason == LINX_CTX_TU_PENDING_STEP_TRAP) {
 			set_current_state(TASK_RUNNING);
 			schedule();
 		} else {
-			schedule_timeout_uninterruptible(1);
+			/*
+			 * The timer-IRQ stress only needs one scheduler handoff
+			 * after the async user preemption. Using the generic
+			 * timeout path currently pulls in hrtimer state that is
+			 * not yet stable on Linx bring-up.
+			 */
+			set_current_state(TASK_RUNNING);
+			schedule();
 		}
 		if (irq_was_disabled)
 			local_irq_disable();
+		/*
+		 * Pollute manager-bank return state only after the scheduler
+		 * handoff has finished. entry.S will immediately overwrite it
+		 * from pt_regs before ACRE back to userspace.
+		 */
+		linx_ctx_tu_test_request_poison_on_user_return();
 	}
 }

@@ -41,8 +41,11 @@ def main() -> int:
             "error: ctx_tq_irq_smoke requires timer IRQ enabled; APPEND contains linx_disable_timer_irq=1\n"
         )
         return 2
-    if "linx_ctx_tu_test=" not in append:
-        append = f"{append} linx_ctx_tu_test=1".strip()
+    if "linx_ctx_tu_test=" in append:
+        sys.stderr.write(
+            "error: ctx_tq_irq_smoke uses /proc/linx_ctx_tu_timer_arm; remove linx_ctx_tu_test= from APPEND\n"
+        )
+        return 2
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
 
     script = os.environ.get(
