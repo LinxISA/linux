@@ -1466,11 +1466,12 @@ __asm__(
 	"__linx_ctx_ri_step_body:\n"
 	"  v.add zero, ri6, ->vt.w\n"
 	"  ebreak 0\n"
-	"  v.sw.brg vt#1, [ri0, lc0<<2, zero]\n"
+	"  v.swi.brg.local vt#1.sw, [ri0.sd, lc0<<2, 0]\n"
 	"  ebreak 0\n"
 	"  v.add zero, ri7, ->vt.w\n"
 	"  ebreak 0\n"
-	"  v.sw.brg vt#1, [ri0, lc0<<2, ri1]\n"
+	"  l.add ri0, ri1, ->t\n"
+	"  v.swi.brg.local vt#1.sw, [t#1.sd, lc0<<2, 0]\n"
 	"  ebreak 0\n"
 	"  C.BSTOP\n");
 

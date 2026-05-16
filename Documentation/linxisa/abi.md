@@ -4,18 +4,22 @@ This document captures the **current** LinxISA scalar ABI as implemented by the
 bring-up toolchain, and the **Linux boot ABI** used by the QEMU LinxISA `virt`
 machine.
 
-## Toolchain ABI profiles (linx32 vs linx64)
+## Toolchain ABI profiles (current branch)
 
-The LinxISA toolchain supports two profiles (see the LinxISA ISA manual):
+The current in-repo compiler branch exposes these scalar toolchain profiles:
 
-- **linx32**: ILP32 (32-bit `int`, `long`, and pointers)
 - **linx64**: LP64 (32-bit `int`, 64-bit `long` and pointers)
+- **linx64be**: LP64 big-endian
 
 For the current Linux bring-up on `qemu-system-linx64`, use **linx64**.
 The `arch/linx/` port in this tree is configured as a 64-bit kernel
 (`CONFIG_64BIT=y`).
 
-## `/proc/cpuinfo` ISA reporting (Linx v0.3)
+Historical bring-up notes may still mention `linx32`, but the current Bisheng
+compiler implementation used by the superproject does not register a `linx32`
+arch and the active compiler gate surface is `linx64`.
+
+## `/proc/cpuinfo` ISA reporting (Linx v0.56)
 
 The Linx Linux bring-up port reports ISA identity in two fields:
 
@@ -76,8 +80,8 @@ Kernel images accepted by QEMU `virt`:
 - ELF relocatable (`ET_REL`) object (`.o`) with `_start` (legacy bring-up path)
 - ELF executable (`ET_EXEC`) or PIE (`ET_DYN`) (recommended for Linux bring-up)
 
-Machine model reference and UART/exit MMIO are documented in
-`/Users/zhoubot/qemu/docs/linxisa/README.md`.
+Machine model reference and UART/exit MMIO are documented in the in-repo QEMU
+tree under `emulator/qemu/docs/linxisa/README.md`.
 
 This boot ABI is validated by the bring-up bootstub in `tools/linxisa/bootstub/`.
 

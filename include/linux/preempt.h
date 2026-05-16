@@ -467,8 +467,18 @@ static __always_inline void preempt_enable_nested(void)
 		preempt_enable();
 }
 
-DEFINE_LOCK_GUARD_0(preempt, preempt_disable(), preempt_enable())
-DEFINE_LOCK_GUARD_0(preempt_notrace, preempt_disable_notrace(), preempt_enable_notrace())
+#ifdef CONFIG_LINX
+void linx_preempt_guard_enable(void);
+void linx_preempt_guard_enable_notrace(void);
+#define __linx_preempt_guard_enable() linx_preempt_guard_enable()
+#define __linx_preempt_guard_enable_notrace() linx_preempt_guard_enable_notrace()
+#else
+#define __linx_preempt_guard_enable() preempt_enable()
+#define __linx_preempt_guard_enable_notrace() preempt_enable_notrace()
+#endif
+
+DEFINE_LOCK_GUARD_0(preempt, preempt_disable(), __linx_preempt_guard_enable())
+DEFINE_LOCK_GUARD_0(preempt_notrace, preempt_disable_notrace(), __linx_preempt_guard_enable_notrace())
 
 #ifdef CONFIG_PREEMPT_DYNAMIC
 

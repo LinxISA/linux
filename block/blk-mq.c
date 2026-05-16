@@ -33,6 +33,7 @@
 
 #ifdef CONFIG_LINX
 #include <asm/debug_uart.h>
+#define LINX_BLKMQ_FN __attribute__((optnone)) noinline
 static inline void linx_blk_mq_dbg(const char *tag, unsigned long val)
 {
 	linx_debug_uart_puts("[BLKMQ] ");
@@ -41,6 +42,7 @@ static inline void linx_blk_mq_dbg(const char *tag, unsigned long val)
 	linx_debug_uart_putc('\n');
 }
 #else
+#define LINX_BLKMQ_FN
 static inline void linx_blk_mq_dbg(const char *tag, unsigned long val) { }
 #endif
 
@@ -2943,7 +2945,7 @@ static void blk_mq_dispatch_list(struct rq_list *rqs, bool from_sched)
 	} else {
 		blk_mq_insert_requests(this_hctx, this_ctx, &list, from_sched);
 	}
-	percpu_ref_put(&this_hctx->queue->q_usage_counter);
+	blk_queue_exit(this_hctx->queue);
 }
 
 static void blk_mq_dispatch_multiple_queue_requests(struct rq_list *rqs)
@@ -3131,7 +3133,7 @@ static bool bio_unaligned(const struct bio *bio, struct request_queue *q)
  * It will not queue the request if there is an error with the bio, or at the
  * request creation.
  */
-void blk_mq_submit_bio(struct bio *bio)
+LINX_BLKMQ_FN void blk_mq_submit_bio(struct bio *bio)
 {
 	struct request_queue *q = bdev_get_queue(bio->bi_bdev);
 	struct blk_plug *plug = current->plug;
