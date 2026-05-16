@@ -79,6 +79,11 @@ enum {
 	LINX_UART_STATUS_RX_READY = 0x2,
 };
 
+enum {
+	SSR_TIME = 0x0010,
+	SSR_USER_SCRATCH0 = 0x0030,
+};
+
 /*
  * Keep the raw syscall helper out-of-line.
  *
@@ -1157,7 +1162,7 @@ static inline ulong ssrget_time_symbol(void)
 {
 	ulong out;
 
-	__asm__ volatile("ssrget TIME, ->%0" : "=r"(out) : : "memory");
+	__asm__ volatile("ssrget %1, ->%0" : "=r"(out) : "i"(SSR_TIME) : "memory");
 	return out;
 }
 
@@ -1464,28 +1469,52 @@ __asm__(
 	".p2align 3\n"
 	".globl __linx_ctx_ri_step_body\n"
 	"__linx_ctx_ri_step_body:\n"
-	"  v.add zero, ri6, ->vt.w\n"
+	"  v.add zero.sw, ri6.sw, ->vt.w\n"
 	"  ebreak 0\n"
-	"  v.swi.brg.local vt#1.sw, [ri0.sd, lc0<<2, 0]\n"
+	"  v.sw.brg.local vt#1.sw, [ri0.sd, lc0<<2, zero.sd]\n"
 	"  ebreak 0\n"
-	"  v.add zero, ri7, ->vt.w\n"
+	"  v.add zero.sw, ri7.sw, ->vt.w\n"
 	"  ebreak 0\n"
-	"  l.add ri0, ri1, ->t\n"
-	"  v.swi.brg.local vt#1.sw, [t#1.sd, lc0<<2, 0]\n"
+	"  v.sw.brg.local vt#1.sw, [ri0.sd, lc0<<2, ri1.sd]\n"
 	"  ebreak 0\n"
+	"  C.BSTOP\n");
+
+extern void linx_ctx_launch_ri_step_block_round(ulong out_base, ulong out_stride,
+						       ulong filler2, ulong filler3,
+						       ulong filler4, ulong filler5,
+						       ulong expect_ri6,
+						       ulong expect_ri7);
+
+__asm__(
+	".p2align 2\n"
+	".globl linx_ctx_launch_ri_step_block_round\n"
+	"linx_ctx_launch_ri_step_block_round:\n"
+	"  C.BSTART\n"
+	"  BSTART.MSEQ 0\n"
+	"  B.TEXT __linx_ctx_ri_step_body\n"
+	"  B.IOR [a0, a1],[]\n"
+	"  B.IOR [a2],[a3]\n"
+	"  B.IOR [a4],[a5]\n"
+	"  B.IOR [a6],[a7]\n"
+	"  C.B.DIMI 1, ->lb0\n"
+	"  C.BSTART DIRECT, linx_ctx_launch_ri_step_block_round_ret\n"
+	"  C.BSTOP\n"
+	"linx_ctx_launch_ri_step_block_round_ret:\n"
+	"  C.BSTART.STD RET\n"
+	"  c.setc.tgt ra\n"
 	"  C.BSTOP\n");
 
 static inline ulong user_scratch0_get(void)
 {
 	ulong out;
 
-	__asm__ volatile("ssrget 0x0030, ->%0" : "=r"(out) : : "memory");
+	__asm__ volatile("ssrget %1, ->%0" : "=r"(out) : "i"(SSR_USER_SCRATCH0) : "memory");
 	return out;
 }
 
 static inline void user_scratch0_set(ulong v)
 {
-	__asm__ volatile("ssrset %0, 0x0030" : : "r"(v) : "memory");
+	__asm__ volatile("ssrset %0, %1" : : "r"(v), "i"(SSR_USER_SCRATCH0) : "memory");
 }
 
 static void sigtrap_count_skip_handler(int sig, void *info, void *uctx)
@@ -1503,22 +1532,10 @@ __attribute__((noinline)) static void ctx_ri_step_block_round(ulong out_base,
 	const ulong filler3 = 0x33334444u;
 	const ulong filler4 = 0x55556666u;
 	const ulong filler5 = 0x77778888u;
-	const ulong filler8 = 0x90A0B0C0u;
 
-	__asm__ volatile(
-		"BSTART.MSEQ 0\n"
-		"B.TEXT __linx_ctx_ri_step_body\n"
-		"B.IOR [%0, %1],[zero]\n"
-		"B.IOR [zero, %2],[%3]\n"
-		"B.IOR [%4, zero],[%5]\n"
-		"B.IOR [%6, %7],[%8]\n"
-		"C.B.DIMI 1, ->lb0\n"
-		"C.BSTART\n"
-		:
-		: "r"(out_base), "r"(out_stride), "r"(filler2), "r"(filler3),
-		  "r"(filler4), "r"(filler5), "r"(expect_ri6), "r"(expect_ri7),
-		  "r"(filler8)
-		: "memory");
+	linx_ctx_launch_ri_step_block_round(out_base, out_stride, filler2, filler3,
+					    filler4, filler5, expect_ri6,
+					    expect_ri7);
 }
 
 static void write_ctx_ri_step_result(int ok, ulong loops, ulong mismatch,
