@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import os
 import pathlib
+import pty
 import re
 import select
 import shlex
@@ -21,62 +22,122 @@ def _irq0_count(text: str) -> Optional[int]:
         return None
 
 
-def _retry_with_virtio_cmdline_fallback(append: str) -> Optional[int]:
-    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
-    if fallback_flag in {"0", "false", "no"}:
-        return None
-    if "virtio_mmio.device=" in append:
-        return None
+def _attempt_appends(base_append: str) -> list[tuple[str, Optional[str]]]:
+    attempts: list[tuple[str, Optional[str]]] = [(base_append, None)]
 
-    env = dict(os.environ)
-    env["APPEND"] = f"{append} virtio_mmio.device=0x200@0x30001000:1".strip()
-    env["SKIP_BUILD"] = "1"
-    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
-    env["LINX_BUSYBOX_BOOT_RETRY"] = "0"
-    rerun = subprocess.run(
-        [sys.executable, str(pathlib.Path(__file__).resolve())],
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
-    )
-    if rerun.returncode == 0:
-        sys.stderr.write("note: boot.py used virtio-mmio cmdline fallback\n")
-        if rerun.stdout:
-            sys.stdout.write(rerun.stdout)
-            sys.stdout.flush()
-    else:
-        sys.stderr.write("note: virtio-mmio cmdline fallback failed\n")
-        if rerun.stderr:
-            sys.stderr.write(rerun.stderr)
-    return rerun.returncode
-
-
-def _retry_once_same_config(append: str) -> Optional[int]:
     retry_flag = os.environ.get("LINX_BUSYBOX_BOOT_RETRY", "1").lower()
-    if retry_flag in {"0", "false", "no"}:
-        return None
+    if retry_flag not in {"0", "false", "no"}:
+        attempts.append((base_append, "same-config retry"))
 
-    env = dict(os.environ)
-    env["APPEND"] = append
-    env["SKIP_BUILD"] = "1"
-    env["LINX_BUSYBOX_BOOT_RETRY"] = "0"
-    env["LINX_VIRTIO_MMIO_FALLBACK"] = "0"
-    rerun = subprocess.run(
-        [sys.executable, str(pathlib.Path(__file__).resolve())],
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=False,
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
+    if fallback_flag not in {"0", "false", "no"} and "virtio_mmio.device=" not in base_append:
+        attempts.append((f"{base_append} virtio_mmio.device=0x200@0x30001000:1".strip(), "virtio-mmio cmdline fallback"))
+
+    return attempts
+
+
+def _drain_stdout(proc: subprocess.Popen, out_chunks: list[bytes]) -> None:
+    if proc.stdout is None:
+        return
+    while True:
+        try:
+            chunk = os.read(proc.stdout.fileno(), 4096)
+        except OSError:
+            return
+        if not chunk:
+            return
+        out_chunks.append(chunk)
+
+
+def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(
+        cmd,
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
     )
-    if rerun.returncode == 0:
-        sys.stderr.write("note: boot.py recovered after same-config retry\n")
-        if rerun.stdout:
-            sys.stdout.write(rerun.stdout)
-            sys.stdout.flush()
-    return rerun.returncode
+    os.close(slave_fd)
+    timed_out = False
+    out_chunks: list[bytes] = []
+    prompt_seen = False
+    script_sent = False
+    boot_ready_seen = False
+    prompt = b"# "
+    deadline = time.monotonic() + timeout_s
+    last_output_at = time.monotonic()
+
+    def try_send_script() -> None:
+        nonlocal script_sent
+        if script_sent:
+            return
+        os.write(master_fd, script.encode("utf-8"))
+        script_sent = True
+
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            timed_out = True
+            proc.kill()
+            break
+
+        wait_s = min(0.25, max(0.0, deadline - now))
+        r, _, _ = select.select([master_fd], [], [], wait_s)
+        if r:
+            try:
+                chunk = os.read(master_fd, 4096)
+            except OSError:
+                chunk = b""
+            if not chunk:
+                break
+            out_chunks.append(chunk)
+            last_output_at = time.monotonic()
+            joined = b"".join(out_chunks[-8:])
+            if (
+                b"Run /sbin/init as init process" in joined
+                or b"Run /init as init process" in joined
+            ):
+                boot_ready_seen = True
+            if not prompt_seen and (
+                b"\n# " in joined
+                or b"\r# " in joined
+                or joined.endswith(prompt)
+            ):
+                prompt_seen = True
+                try_send_script()
+
+        if (
+            boot_ready_seen
+            and not script_sent
+            and (time.monotonic() - last_output_at) >= 0.5
+        ):
+            try_send_script()
+
+        if proc.poll() is not None:
+            break
+
+    if proc.poll() is None:
+        proc.kill()
+
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+    while True:
+        try:
+            chunk = os.read(master_fd, 4096)
+        except OSError:
+            break
+        if not chunk:
+            break
+        out_chunks.append(chunk)
+    try:
+        os.close(master_fd)
+    except OSError:
+        pass
+
+    return b"".join(out_chunks).decode("utf-8", errors="replace"), timed_out
 
 
 def main() -> int:
@@ -118,82 +179,6 @@ def main() -> int:
         build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
         subprocess.run([str(build_sh)], check=True)
 
-    cmd = [
-        str(qemu),
-        "-nographic",
-        "-monitor",
-        "none",
-        "-machine",
-        "virt",
-        "-m",
-        mem,
-        "-smp",
-        smp,
-        "-kernel",
-        str(kernel),
-        "-drive",
-        f"if=none,id=vd0,file={rootfs},format=raw",
-        "-device",
-        "virtio-blk-device,drive=vd0",
-        "-append",
-        append,
-    ]
-    cmd.extend(qemu_extra_args)
-
-    proc = subprocess.Popen(
-        cmd,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
-    timed_out = False
-    out_chunks: list[bytes] = []
-    prompt_seen = False
-    script_sent = False
-    prompt = b"# "
-    deadline = time.monotonic() + timeout_s
-
-    while True:
-        now = time.monotonic()
-        if now >= deadline:
-            timed_out = True
-            proc.kill()
-            break
-
-        wait_s = min(0.25, max(0.0, deadline - now))
-        r, _, _ = select.select([proc.stdout], [], [], wait_s)
-        if r:
-            chunk = os.read(proc.stdout.fileno(), 4096)
-            if not chunk:
-                break
-            out_chunks.append(chunk)
-            joined = b"".join(out_chunks[-8:])
-            if not prompt_seen and (b"\n# " in joined or joined.endswith(prompt)):
-                prompt_seen = True
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.write(script.encode("utf-8"))
-                    proc.stdin.flush()
-                    script_sent = True
-
-        if proc.poll() is not None:
-            break
-
-    if proc.poll() is None:
-        proc.kill()
-
-    tail_out = proc.stdout.read() if proc.stdout else b""
-    if tail_out:
-        out_chunks.append(tail_out)
-
-    out = b"".join(out_chunks)
-    if not script_sent and proc.stdin and not proc.stdin.closed:
-        try:
-            proc.stdin.close()
-        except Exception:
-            pass
-
-    text = out.decode("utf-8", errors="replace")
-
     want = [
         "cmds:",
         "# ls /",
@@ -201,49 +186,87 @@ def main() -> int:
         "init",
         "# cat /proc/interrupts",
     ]
-    missing = [w for w in want if w not in text]
-    if missing:
-        retry_rc = _retry_once_same_config(append)
-        if retry_rc == 0:
-            return 0
-        retry_rc = _retry_with_virtio_cmdline_fallback(append)
-        if retry_rc == 0:
-            return 0
-        sys.stderr.write("error: busybox rootfs boot failed; missing: %s\n" % ", ".join(missing))
-        sys.stderr.write("kernel: %s\n" % kernel)
-        sys.stderr.write("rootfs: %s\n" % rootfs)
-        sys.stderr.write("qemu: %s\n" % qemu)
-        sys.stderr.write("cmd: %s\n\n" % " ".join(cmd))
-        sys.stderr.write("\n".join(text.splitlines()[-240:]))
-        sys.stderr.write("\n")
-        return 2
+    last_text = ""
+    last_cmd: list[str] = []
+    last_missing: list[str] = []
+    last_timed_out = False
+    last_irq_error: Optional[str] = None
 
-    irq_counts = [_irq0_count(block) for block in text.split("# cat /proc/interrupts")]
-    irq_counts = [v for v in irq_counts if v is not None]
-    if not disable_timer_irq and len(irq_counts) >= 2 and irq_counts[-1] < irq_counts[-2]:
-        sys.stderr.write(
-            "error: timer IRQ count regressed: %d -> %d\n" % (irq_counts[-2], irq_counts[-1])
-        )
-        return 2
+    for attempt_append, recovery_note in _attempt_appends(append):
+        cmd = [
+            str(qemu),
+            "-nographic",
+            "-monitor",
+            "none",
+            "-machine",
+            "virt",
+            "-m",
+            mem,
+            "-smp",
+            smp,
+            "-kernel",
+            str(kernel),
+            "-drive",
+            f"if=none,id=vd0,file={rootfs},format=raw",
+            "-device",
+            "virtio-blk-device,drive=vd0",
+            "-append",
+            attempt_append,
+        ]
+        cmd.extend(qemu_extra_args)
 
-    if timed_out:
+        text, timed_out = _run_once(cmd, script, timeout_s)
+        missing = [w for w in want if w not in text]
+        irq_counts = [_irq0_count(block) for block in text.split("# cat /proc/interrupts")]
+        irq_counts = [v for v in irq_counts if v is not None]
+        irq_error = None
+        if not disable_timer_irq and len(irq_counts) >= 2 and irq_counts[-1] < irq_counts[-2]:
+            irq_error = "error: timer IRQ count regressed: %d -> %d\n" % (irq_counts[-2], irq_counts[-1])
+
+        last_text = text
+        last_cmd = cmd
+        last_missing = missing
+        last_timed_out = timed_out
+        last_irq_error = irq_error
+
+        if missing or irq_error:
+            continue
+
+        if recovery_note:
+            sys.stderr.write(f"note: boot.py used {recovery_note}\n")
+        if timed_out:
+            sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
+            sys.stderr.flush()
+
+        keep = []
+        for ln in text.splitlines():
+            s = ln.strip()
+            if (
+                s.startswith("#")
+                or s.startswith("cmds:")
+                or s.startswith("reboot:")
+                or s.startswith("Power down")
+                or s in {"bin", "dev", "etc", "proc", "run", "sbin", "sys", "tmp", "init", "poweroff"}
+            ):
+                keep.append(ln)
+        sys.stdout.write("\n".join(keep[-240:]) + "\n")
+        sys.stdout.flush()
+        return 0
+
+    if last_irq_error:
+        sys.stderr.write(last_irq_error)
+    else:
+        sys.stderr.write("error: busybox rootfs boot failed; missing: %s\n" % ", ".join(last_missing))
+    sys.stderr.write("kernel: %s\n" % kernel)
+    sys.stderr.write("rootfs: %s\n" % rootfs)
+    sys.stderr.write("qemu: %s\n" % qemu)
+    sys.stderr.write("cmd: %s\n" % " ".join(last_cmd))
+    if last_timed_out:
         sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
-        sys.stderr.flush()
-
-    keep = []
-    for ln in text.splitlines():
-        s = ln.strip()
-        if (
-            s.startswith("#")
-            or s.startswith("cmds:")
-            or s.startswith("reboot:")
-            or s.startswith("Power down")
-            or s in {"bin", "dev", "etc", "proc", "run", "sbin", "sys", "tmp", "init", "poweroff"}
-        ):
-            keep.append(ln)
-    sys.stdout.write("\n".join(keep[-240:]) + "\n")
-    sys.stdout.flush()
-    return 0
+    sys.stderr.write("\n")
+    sys.stderr.write("\n".join(last_text.splitlines()[-240:]))
+    sys.stderr.write("\n")
+    return 2
 
 
 if __name__ == "__main__":

@@ -51,7 +51,20 @@
 #include "blk-throttle.h"
 #include "blk-ioprio.h"
 
+#ifdef CONFIG_LINX
+#define LINX_BLKCORE_FN __attribute__((optnone)) noinline
+#else
+#define LINX_BLKCORE_FN
+#endif
+
 struct dentry *blk_debugfs_root;
+
+#ifdef CONFIG_LINX
+static LINX_BLKCORE_FN void linx_blk_percpu_ref_put(struct percpu_ref *ref)
+{
+	percpu_ref_put(ref);
+}
+#endif
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_bio_remap);
 EXPORT_TRACEPOINT_SYMBOL_GPL(block_rq_remap);
@@ -366,9 +379,13 @@ dead:
 	return -ENODEV;
 }
 
-void blk_queue_exit(struct request_queue *q)
+LINX_BLKCORE_FN void blk_queue_exit(struct request_queue *q)
 {
+#ifdef CONFIG_LINX
+	linx_blk_percpu_ref_put(&q->q_usage_counter);
+#else
 	percpu_ref_put(&q->q_usage_counter);
+#endif
 }
 
 static void blk_queue_usage_counter_release(struct percpu_ref *ref)
@@ -623,15 +640,19 @@ static inline blk_status_t blk_check_zone_append(struct request_queue *q,
 	return BLK_STS_OK;
 }
 
-static void __submit_bio(struct bio *bio)
+LINX_BLKCORE_FN static void __submit_bio(struct bio *bio)
 {
 	/* If plug is not used, add new plug here to cache nsecs time. */
+#ifndef CONFIG_LINX
 	struct blk_plug plug;
+#endif
 
 	if (unlikely(!blk_crypto_bio_prep(&bio)))
 		return;
 
+#ifndef CONFIG_LINX
 	blk_start_plug(&plug);
+#endif
 
 	if (!bdev_test_flag(bio->bi_bdev, BD_HAS_SUBMIT_BIO)) {
 		blk_mq_submit_bio(bio);
@@ -648,7 +669,9 @@ static void __submit_bio(struct bio *bio)
 		blk_queue_exit(disk->queue);
 	}
 
+#ifndef CONFIG_LINX
 	blk_finish_plug(&plug);
+#endif
 }
 
 /*
@@ -714,7 +737,7 @@ static void __submit_bio_noacct(struct bio *bio)
 	current->bio_list = NULL;
 }
 
-static void __submit_bio_noacct_mq(struct bio *bio)
+LINX_BLKCORE_FN static void __submit_bio_noacct_mq(struct bio *bio)
 {
 	struct bio_list bio_list[2] = { };
 
@@ -727,7 +750,7 @@ static void __submit_bio_noacct_mq(struct bio *bio)
 	current->bio_list = NULL;
 }
 
-void submit_bio_noacct_nocheck(struct bio *bio, bool split)
+LINX_BLKCORE_FN void submit_bio_noacct_nocheck(struct bio *bio, bool split)
 {
 	blk_cgroup_bio_start(bio);
 
@@ -779,7 +802,7 @@ static blk_status_t blk_validate_atomic_write_op_size(struct request_queue *q,
  * systems and other upper level users of the block layer should use
  * submit_bio() instead.
  */
-void submit_bio_noacct(struct bio *bio)
+LINX_BLKCORE_FN void submit_bio_noacct(struct bio *bio)
 {
 	struct block_device *bdev = bio->bi_bdev;
 	struct request_queue *q = bdev_get_queue(bdev);
@@ -908,7 +931,7 @@ static void bio_set_ioprio(struct bio *bio)
  * in @bio.  The bio must NOT be touched by the caller until ->bi_end_io() has
  * been called.
  */
-void submit_bio(struct bio *bio)
+LINX_BLKCORE_FN void submit_bio(struct bio *bio)
 {
 	if (bio_op(bio) == REQ_OP_READ) {
 		task_io_account_read(bio->bi_iter.bi_size);
@@ -1170,7 +1193,7 @@ void blk_start_plug_nr_ios(struct blk_plug *plug, unsigned short nr_ios)
  *   plug. By flushing the pending I/O when the process goes to sleep, we avoid
  *   this kind of deadlock.
  */
-void blk_start_plug(struct blk_plug *plug)
+LINX_BLKCORE_FN void blk_start_plug(struct blk_plug *plug)
 {
 	blk_start_plug_nr_ios(plug, 1);
 }

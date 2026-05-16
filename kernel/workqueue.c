@@ -3390,13 +3390,17 @@ __acquires(&pool->lock)
 	 * workqueues), so hiding them isn't a problem.
 	 */
 	lockdep_invariant_state(true);
+#ifndef CONFIG_LINX
 	trace_workqueue_execute_start(work);
+#endif
 	worker->current_func(work);
 	/*
 	 * While we must be careful to not use "work" after this, the trace
 	 * point will only record its address.
 	 */
+#ifndef CONFIG_LINX
 	trace_workqueue_execute_end(work, worker->current_func);
+#endif
 
 	lock_map_release(&lockdep_map);
 	if (!bh_draining)

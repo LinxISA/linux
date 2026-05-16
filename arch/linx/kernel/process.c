@@ -210,10 +210,16 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	p->thread.sp = (unsigned long)regs;
 	memset(p->thread.s, 0, sizeof(p->thread.s));
 	p->thread.ebarg0 = 0;
-	p->thread.ebarg_bpc_cur = 0;
-	p->thread.ebarg_bpc_tgt = 0;
-	p->thread.ebarg_tpc = 0;
-	p->thread.ebarg_lra = 0;
+	/*
+	 * Fresh tasks first resume in linx_ret_from_fork() via __switch_to.
+	 * Seed the kernel-side EBARG PC/LRA fields to that entry point so the
+	 * first schedule_tail()/finish_task_switch() return chain does not
+	 * observe a zero link target before userspace pt_regs state is restored.
+	 */
+	p->thread.ebarg_bpc_cur = p->thread.ra;
+	p->thread.ebarg_bpc_tgt = p->thread.ra;
+	p->thread.ebarg_tpc = p->thread.ra;
+	p->thread.ebarg_lra = p->thread.ra;
 	memset(p->thread.ebarg_tq, 0, sizeof(p->thread.ebarg_tq));
 	memset(p->thread.ebarg_uq, 0, sizeof(p->thread.ebarg_uq));
 	p->thread.ebarg_lb = 0;

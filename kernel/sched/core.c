@@ -4351,6 +4351,22 @@ out:
 	return success;
 }
 
+#ifdef CONFIG_LINX
+noinline void linx_preempt_guard_enable(void)
+{
+	preempt_enable();
+}
+
+EXPORT_SYMBOL_GPL(linx_preempt_guard_enable);
+
+noinline void linx_preempt_guard_enable_notrace(void)
+{
+	preempt_enable_notrace();
+}
+
+EXPORT_SYMBOL_GPL(linx_preempt_guard_enable_notrace);
+#endif
+
 static bool __task_needs_rq_lock(struct task_struct *p)
 {
 	unsigned int state = READ_ONCE(p->__state);

@@ -51,7 +51,11 @@ mkdir -p \
 cp "$BUSYBOX_BIN" "$ROOTFS_DIR/bin/busybox"
 chmod 0755 "$ROOTFS_DIR/bin/busybox"
 
-ln -sf /bin/busybox "$ROOTFS_DIR/sbin/init"
+# Keep /sbin/init as a real file instead of an absolute symlink, but reuse the
+# same inode as /bin/busybox. The current no-MMU rootfs bring-up regresses on a
+# symlinked /sbin/init, while duplicating the file body introduces a second
+# on-disk image that still hits unstable block-I/O return paths.
+ln "$ROOTFS_DIR/bin/busybox" "$ROOTFS_DIR/sbin/init"
 ln -sf /bin/busybox "$ROOTFS_DIR/bin/sh"
 ln -sf /bin/busybox "$ROOTFS_DIR/bin/help"
 ln -sf /bin/busybox "$ROOTFS_DIR/bin/ls"
