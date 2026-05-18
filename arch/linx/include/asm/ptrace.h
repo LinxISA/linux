@@ -1,54 +1,194 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _ASM_LINX_PTRACE_H
-#define _ASM_LINX_PTRACE_H
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ */
+
+#ifndef _ASM_RISCV_PTRACE_H
+#define _ASM_RISCV_PTRACE_H
 
 #include <uapi/asm/ptrace.h>
+#include <asm/ssr.h>
+#include <asm/block_head.h>
+#include <linux/compiler.h>
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
-/*
- * Early bring-up pt_regs: enough to satisfy generic code and basic tracing.
- * The exact layout is not yet ABI-stable.
- */
+
 struct pt_regs {
-	unsigned long regs[NUM_PTRACE_REG];
-	/* Syscall entry uses a0 for return value; preserve original arg0. */
-	unsigned long orig_a0;
+	/* temporal pc */
+	unsigned long tpc;
+	/* block pc and next-bpc, I split the `ebpc` into two parts for convenience */
+	unsigned long bpc;
+	unsigned long bpcn;
+	/* ebarg, include bpcn/lra and flags */
+	unsigned long ebarg;
+	/* LL_GPR */
+	unsigned long elpr0;
+	unsigned long elpr1;
+	unsigned long elpr2;
+	unsigned long elpr3;
+	unsigned long elpr4;
+	unsigned long elpr5;
+	unsigned long elpr6;
+	unsigned long elpr7;
+	/* UL_GPR */
+	unsigned long sp;
+	unsigned long a0;
+	unsigned long a1;
+	unsigned long a2;
+	unsigned long a3;
+	unsigned long a4;
+	unsigned long a5;
+	unsigned long a6;
+	unsigned long a7;
+	unsigned long ra;
+	unsigned long s0;
+	unsigned long s1;
+	unsigned long s2;
+	unsigned long s3;
+	unsigned long s4;
+	unsigned long s5;
+	unsigned long s6;
+	unsigned long s7;
+	unsigned long s8;
+	unsigned long x0;
+	unsigned long x1;
+	unsigned long x2;
+	unsigned long x3;
 
-	/*
-	 * Trap metadata saved from the managing ACR's banked SSRs.
-	 *
-	 * For QEMU bring-up, ECSTATE is the pre-trap CSTATE (includes ACR level).
-	 */
-	unsigned long ecstate;
-	unsigned long trapno;
+	/* non-BSTATE registers, won't be filled by LxLc */
+	/* general ssr */
+	unsigned long gp;
+	unsigned long tp;
+	/* Supervisor/Machine SSRs */
+	unsigned long cstate;
 	unsigned long traparg0;
-	unsigned long ebarg0;
-	unsigned long ebarg_bpc_cur;
-	unsigned long ebarg_bpc_tgt;
-	unsigned long ebarg_tpc;
-	unsigned long ebarg_lra;
-	unsigned long ebarg_tq[4];
-	unsigned long ebarg_uq[4];
-	unsigned long ebarg_lb;
-	unsigned long ebarg_lc;
-	unsigned long ebarg_ext_ptr;
-	unsigned long ebarg_ext_meta;
+	unsigned long trapno;
+	/* a0 value before the syscall */
+	unsigned long orig_a0;
+	unsigned long orig_bpc;
+	unsigned long orig_tpc;	/* tpc that launched a syscall */
 };
 
-/*
- * Bring-up privilege model (QEMU): ACR=2 is "user". ECSTATE encodes the
- * trapped-from CSTATE, so check its ACR field rather than current CSTATE.
+#ifdef CONFIG_64BIT
+#define REG_FMT "%016lx"
+#else
+#define REG_FMT "%08lx"
+#endif
+
+#define user_mode(regs) (((regs)->cstate & CSTATE_ACR_MASK) == CSTATE_ACR2)
+
+#define MAX_REG_OFFSET offsetof(struct pt_regs, orig_a0)
+
+/* Helpers for working with the instruction pointer */
+static inline unsigned long instruction_pointer(struct pt_regs *regs)
+{
+	return regs->tpc;
+}
+static inline void instruction_pointer_set(struct pt_regs *regs,
+					   unsigned long val)
+{
+	regs->tpc = val;
+}
+
+#define profile_pc(regs) instruction_pointer(regs)
+
+/* Helpers for working with the user stack pointer */
+static inline unsigned long user_stack_pointer(struct pt_regs *regs)
+{
+	return regs->sp;
+}
+static inline void user_stack_pointer_set(struct pt_regs *regs,
+					  unsigned long val)
+{
+	regs->sp =  val;
+}
+
+/* Valid only for Kernel mode traps. */
+static inline unsigned long kernel_stack_pointer(struct pt_regs *regs)
+{
+	return regs->sp;
+}
+
+/* Helpers for working with the frame pointer */
+static inline unsigned long frame_pointer(struct pt_regs *regs)
+{
+	return regs->s0;
+}
+static inline void frame_pointer_set(struct pt_regs *regs,
+				     unsigned long val)
+{
+	regs->s0 = val;
+}
+
+static inline unsigned long regs_return_value(struct pt_regs *regs)
+{
+	return regs->a0;
+}
+
+static inline void regs_set_return_value(struct pt_regs *regs,
+					 unsigned long val)
+{
+	regs->a0 = val;
+}
+
+extern int regs_query_register_offset(const char *name);
+extern unsigned long regs_get_kernel_stack_nth(struct pt_regs *regs,
+					       unsigned int n);
+
+void prepare_ftrace_return(unsigned long *parent, unsigned long self_addr,
+			   unsigned long frame_pointer);
+int do_syscall_trace_enter(struct pt_regs *regs);
+void do_syscall_trace_exit(struct pt_regs *regs);
+
+/**
+ * regs_get_register() - get register value from its offset
+ * @regs:	pt_regs from which register value is gotten
+ * @offset:	offset of the register.
+ *
+ * regs_get_register returns the value of a register whose offset from @regs.
+ * The @offset is the offset of the register in struct pt_regs.
+ * If @offset is bigger than MAX_REG_OFFSET, this returns 0.
  */
-#define LINX_CSTATE_ACR_MASK		(0xFULL)
-#define LINX_CSTATE_ACR_USER		(2UL)
+static inline unsigned long regs_get_register(struct pt_regs *regs,
+					      unsigned int offset)
+{
+	if (unlikely(offset > MAX_REG_OFFSET))
+		return 0;
 
-#define user_mode(regs_ptr)		(((regs_ptr)->ecstate & LINX_CSTATE_ACR_MASK) == LINX_CSTATE_ACR_USER)
+	return *(unsigned long *)((unsigned long)regs + offset);
+}
 
-#define instruction_pointer(regs_ptr)	((regs_ptr)->regs[PTR_PC])
-#define profile_pc(regs_ptr)		instruction_pointer(regs_ptr)
-#define user_stack_pointer(regs_ptr)	((regs_ptr)->regs[PTR_R1])
+/**
+ * regs_get_kernel_argument() - get Nth function argument in kernel
+ * @regs:       pt_regs of that context
+ * @n:          function argument number (start from 0)
+ *
+ * regs_get_argument() returns @n th argument of the function call.
+ *
+ * Note you can get the parameter correctly if the function has no
+ * more than eight arguments.
+ */
+static inline unsigned long regs_get_kernel_argument(struct pt_regs *regs,
+						unsigned int n)
+{
+	static const int nr_reg_arguments = 8;
+	static const unsigned int argument_offs[] = {
+		offsetof(struct pt_regs, a0),
+		offsetof(struct pt_regs, a1),
+		offsetof(struct pt_regs, a2),
+		offsetof(struct pt_regs, a3),
+		offsetof(struct pt_regs, a4),
+		offsetof(struct pt_regs, a5),
+		offsetof(struct pt_regs, a6),
+		offsetof(struct pt_regs, a7),
+	};
 
-#endif /* !__ASSEMBLER__ */
+	if (n < nr_reg_arguments)
+		return regs_get_register(regs, argument_offs[n]);
+	return 0;
+}
 
-#endif /* _ASM_LINX_PTRACE_H */
+#endif /* __ASSEMBLY__ */
+
+#endif /* _ASM_RISCV_PTRACE_H */

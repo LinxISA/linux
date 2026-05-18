@@ -32,7 +32,7 @@ __setup("lpj=", lpj_setup);
 #define DELAY_CALIBRATION_TICKS			((HZ < 100) ? 1 : (HZ/100))
 #define MAX_DIRECT_CALIBRATION_RETRIES		5
 
-static unsigned long calibrate_delay_direct(void)
+static unsigned long __maybe_unused calibrate_delay_direct(void)
 {
 	unsigned long pre_start, start, post_start;
 	unsigned long pre_end, end, post_end;
@@ -167,7 +167,7 @@ static unsigned long calibrate_delay_direct(void)
 	return 0;
 }
 #else
-static unsigned long calibrate_delay_direct(void)
+static unsigned long __maybe_unused calibrate_delay_direct(void)
 {
 	return 0;
 }
@@ -184,7 +184,7 @@ static unsigned long calibrate_delay_direct(void)
  */
 #define LPS_PREC 8
 
-static unsigned long calibrate_delay_converge(void)
+static unsigned long __maybe_unused calibrate_delay_converge(void)
 {
 	/* First stage - slowly accelerate to find initial bounds */
 	unsigned long lpj, lpj_base, ticks, loopadd, loopadd_base, chop_limit;
@@ -277,6 +277,22 @@ void calibrate_delay(void)
 	unsigned long lpj;
 	static bool printed;
 	int this_cpu = smp_processor_id();
+
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up under QEMU still trips backend/runtime faults in the
+	 * generic calibration control flow. Keep boot on a stable preset until
+	 * the compiler+emulator path is repaired end-to-end.
+	 */
+	lpj = 1000000;
+	if (preset_lpj)
+		lpj = preset_lpj;
+	per_cpu(cpu_loops_per_jiffy, this_cpu) = lpj;
+	loops_per_jiffy = lpj;
+	printed = true;
+	calibration_delay_done();
+	return;
+#endif
 
 	if (per_cpu(cpu_loops_per_jiffy, this_cpu)) {
 		lpj = per_cpu(cpu_loops_per_jiffy, this_cpu);

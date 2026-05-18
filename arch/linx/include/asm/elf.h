@@ -1,61 +1,93 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _ASM_LINX_ELF_H
-#define _ASM_LINX_ELF_H
+/* SPDX-License-Identifier: GPL-2.0-or-later */
+/*
+ * Copyright (C) 2003 Matjaz Breskvar <phoenix@bsemi.com>
+ * Copyright (C) 2010-2011 Jonas Bonn <jonas@southpole.se>
+ * Copyright (C) 2012 Regents of the University of California
+ */
 
-#include <asm/page.h>
-#include <asm/ptrace.h>
-#include <linux/types.h>
-#include <uapi/linux/elf.h>
+#ifndef _ASM_RISCV_ELF_H
+#define _ASM_RISCV_ELF_H
+
+#include <uapi/asm/elf.h>
+#include <asm/auxvec.h>
+#include <asm/byteorder.h>
+#include <asm/cacheinfo.h>
 
 /*
- * LinxISA bring-up: define the minimal ELF personality for binfmt_elf.
+ * These are used to set parameters in the core dumps.
  */
+#define ELF_ARCH	EM_LINX_V5
+
+#ifdef CONFIG_64BIT
 #define ELF_CLASS	ELFCLASS64
-#define ELF_DATA	ELFDATA2LSB
+#else
+#define ELF_CLASS	ELFCLASS32
+#endif
 
-/*
- * These are used to set parameters in core dumps and by the FDPIC loader.
- */
-#define ELF_ARCH	EM_LINXISA
-#define ELF_FDPIC_CORE_EFLAGS	0
+#define ELF_DATA	ELFDATA2LSB
 
 /*
  * This is used to ensure we don't load something for the wrong architecture.
  */
-#define elf_check_arch(x)	(((x)->e_machine == EM_LINXISA) && \
-				 ((x)->e_ident[EI_CLASS] == ELF_CLASS))
+#define elf_check_arch(x) ((x)->e_machine == ELF_ARCH)
 
-#define ELF_EXEC_PAGESIZE	PAGE_SIZE
+#define CORE_DUMP_USE_REGSET
+#define ELF_EXEC_PAGESIZE	(PAGE_SIZE)
 
-#define ELF_HWCAP		(0)
-#define ELF_PLATFORM		(NULL)
+/*
+ * This is the location that an ET_DYN program is loaded if exec'ed.  Typical
+ * use of this is to invoke "./ld.so someprog" to test out a new version of
+ * the loader.  We need to make sure that it is out of the way of the program
+ * that it will "exec", and that there is sufficient room for the brk.
+ */
+#define ELF_ET_DYN_BASE		((TASK_SIZE / 3) * 2)
+
+#ifdef CONFIG_64BIT
+#define STACK_RND_MASK		(0x3ffff >> (PAGE_SHIFT - 12))
+#endif
+/*
+ * This yields a mask that user programs can use to figure out what
+ * instruction set this CPU supports.  This could be done in user space,
+ * but it's not easy, and we've already done it here.
+ */
+#define ELF_HWCAP	(elf_hwcap)
+extern unsigned long elf_hwcap;
+
+/*
+ * This yields a string that ld.so will use to load implementation
+ * specific libraries for optimization.  This is more specific in
+ * intent than poking at uname or /proc/cpuinfo.
+ */
+#define ELF_PLATFORM	(NULL)
 
 #ifdef CONFIG_MMU
-/*
- * Base address for PIE/ET_DYN programs with an interpreter (PT_INTERP).
- * Keep it well above the low-address kernel image during bring-up.
- */
-#define ELF_ET_DYN_BASE		0x40000000UL
-#endif
+#define ARCH_DLINFO						\
+do {								\
+	NEW_AUX_ENT(AT_SYSINFO_EHDR,				\
+		(elf_addr_t)current->mm->context.vdso);		\
+	NEW_AUX_ENT(AT_L1I_CACHESIZE,				\
+		get_cache_size(1, CACHE_TYPE_INST));		\
+	NEW_AUX_ENT(AT_L1I_CACHEGEOMETRY,			\
+		get_cache_geometry(1, CACHE_TYPE_INST));	\
+	NEW_AUX_ENT(AT_L1D_CACHESIZE,				\
+		get_cache_size(1, CACHE_TYPE_DATA));		\
+	NEW_AUX_ENT(AT_L1D_CACHEGEOMETRY,			\
+		get_cache_geometry(1, CACHE_TYPE_DATA));	\
+	NEW_AUX_ENT(AT_L2_CACHESIZE,				\
+		get_cache_size(2, CACHE_TYPE_UNIFIED));		\
+	NEW_AUX_ENT(AT_L2_CACHEGEOMETRY,			\
+		get_cache_geometry(2, CACHE_TYPE_UNIFIED));	\
+} while (0)
+#define ARCH_HAS_SETUP_ADDITIONAL_PAGES
+struct linux_binprm;
+extern int arch_setup_additional_pages(struct linux_binprm *bprm,
+	int uses_interp);
+#endif /* CONFIG_MMU */
 
-/*
- * FDPIC loader ABI: pass the loadmap/dynamic addresses in a1/a2/a3, matching
- * the existing Linx scalar ABI register naming in Documentation/linxisa/abi.md.
- */
-#define ELF_FDPIC_PLAT_INIT(_r, _exec_map_addr, _interp_map_addr, dynamic_addr) \
-	do {								     \
-		(_r)->regs[PTR_R3] = _exec_map_addr;			     \
-		(_r)->regs[PTR_R4] = _interp_map_addr;			     \
-		(_r)->regs[PTR_R5] = dynamic_addr;			     \
-	} while (0)
+#define ELF_CORE_COPY_REGS(dest, regs)			\
+do {							\
+	*(struct user_regs_struct *)&(dest) =		\
+		*(struct user_regs_struct *)regs;	\
+} while (0);
 
-typedef unsigned long elf_greg_t;
-
-#define ELF_NGREG		NUM_PTRACE_REG
-typedef elf_greg_t elf_gregset_t[ELF_NGREG];
-
-typedef struct {
-	unsigned long dummy;
-} elf_fpregset_t;
-
-#endif /* _ASM_LINX_ELF_H */
+#endif /* _ASM_RISCV_ELF_H */

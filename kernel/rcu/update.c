@@ -257,6 +257,15 @@ EXPORT_SYMBOL_GPL(rcu_inkernel_boot_has_ended);
  */
 void rcu_test_sync_prims(void)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * Linx smoke bring-up only needs the scheduler/RCU state transition,
+	 * not the boot-time synchronous grace-period self tests. Those tests
+	 * can recurse into early scheduling paths before the first userspace
+	 * handoff is stable.
+	 */
+	return;
+#endif
 	if (!IS_ENABLED(CONFIG_PROVE_RCU))
 		return;
 	pr_info("Running RCU synchronous self tests\n");

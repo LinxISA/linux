@@ -32,7 +32,6 @@
 
 #include "of_private.h"
 
-#ifdef CONFIG_LINX_VIRT_UART_MARKERS
 #define LINX_VIRT_UART_BASE 0x10000000UL
 static inline void linx_virt_uart_putc(char c)
 {
@@ -51,9 +50,6 @@ static inline void linx_virt_uart_puthex_u64(u64 v)
 	}
 }
 #define LINX_EARLY_MARK(c) linx_virt_uart_putc(c)
-#else
-#define LINX_EARLY_MARK(c) do { } while (0)
-#endif
 
 /*
  * __dtb_empty_root_begin[] and __dtb_empty_root_end[] magically created by
@@ -907,6 +903,144 @@ static void __init early_init_dt_check_for_elfcorehdr(unsigned long node)
 
 static unsigned long chosen_node_offset = -FDT_ERR_NOTFOUND;
 
+#ifdef CONFIG_LINX
+static int linx_memory_node_offset = -FDT_ERR_NOTFOUND;
+
+static const char *__init linx_fdt_node_name(const void *fdt, int node)
+{
+	const struct fdt_node_header *nh;
+
+	nh = fdt_offset_ptr(fdt, node, sizeof(*nh));
+	if (!nh)
+		return NULL;
+
+	return nh->name;
+}
+
+static const void *__init linx_fdt_getprop(const void *fdt, int node,
+					   const char *name, int *lenp)
+{
+	int off = node;
+	int nextoff;
+	uint32_t tag;
+
+	tag = fdt_next_tag(fdt, off, &off);
+	if (tag != FDT_BEGIN_NODE) {
+		if (lenp)
+			*lenp = -FDT_ERR_BADOFFSET;
+		return NULL;
+	}
+
+	while (off >= 0) {
+		const struct fdt_property *prop;
+		const char *prop_name;
+		int len;
+
+		tag = fdt_next_tag(fdt, off, &nextoff);
+		if (tag == FDT_NOP) {
+			off = nextoff;
+			continue;
+		}
+		if (tag != FDT_PROP)
+			break;
+
+		prop = fdt_offset_ptr(fdt, off, sizeof(*prop));
+		if (!prop)
+			break;
+
+		len = (int)fdt32_to_cpu(prop->len);
+		prop_name = (const char *)fdt + fdt_off_dt_strings(fdt) +
+			    fdt32_to_cpu(prop->nameoff);
+		if (!strcmp(prop_name, name)) {
+			if (lenp)
+				*lenp = len;
+			return prop->data;
+		}
+
+		off = nextoff;
+	}
+
+	if (lenp)
+		*lenp = -FDT_ERR_NOTFOUND;
+	return NULL;
+}
+
+static int __init linx_fdt_find_chosen_node(const void *fdt)
+{
+	int depth = -1;
+	int node;
+
+	LINX_EARLY_MARK('0');
+	for (node = fdt_next_node(fdt, -1, &depth);
+	     node >= 0;
+	     node = fdt_next_node(fdt, node, &depth)) {
+		const char *name = linx_fdt_node_name(fdt, node);
+
+		LINX_EARLY_MARK('1');
+		if (depth != 1)
+			continue;
+		LINX_EARLY_MARK('2');
+
+		if (linx_memory_node_offset < 0 &&
+		    name && (!strcmp(name, "memory") ||
+			     !strncmp(name, "memory@", 7)))
+			linx_memory_node_offset = node;
+
+		if (name && (!strcmp(name, "chosen") ||
+			     !strncmp(name, "chosen@", 7))) {
+			LINX_EARLY_MARK('3');
+			return node;
+		}
+		LINX_EARLY_MARK('4');
+
+		if (linx_fdt_getprop(fdt, node, "bootargs", NULL) ||
+		    linx_fdt_getprop(fdt, node, "stdout-path", NULL) ||
+		    linx_fdt_getprop(fdt, node, "linux,stdout-path", NULL) ||
+		    linx_fdt_getprop(fdt, node, "linux,initrd-start", NULL)) {
+			LINX_EARLY_MARK('5');
+			return node;
+		}
+	}
+
+	LINX_EARLY_MARK('6');
+	return -FDT_ERR_NOTFOUND;
+}
+
+static void __init linx_fdt_check_for_initrd(unsigned long node)
+{
+	u64 start, end;
+	int len;
+	const __be32 *prop;
+
+	LINX_EARLY_MARK('7');
+	if (!IS_ENABLED(CONFIG_BLK_DEV_INITRD))
+		return;
+
+	prop = linx_fdt_getprop(initial_boot_params, node, "linux,initrd-start",
+				&len);
+	LINX_EARLY_MARK('8');
+	if (!prop || len <= 0)
+		return;
+	start = of_read_number(prop, len / 4);
+	LINX_EARLY_MARK('9');
+
+	prop = linx_fdt_getprop(initial_boot_params, node, "linux,initrd-end",
+				&len);
+	LINX_EARLY_MARK('A');
+	if (!prop || len <= 0)
+		return;
+	end = of_read_number(prop, len / 4);
+	LINX_EARLY_MARK('B');
+	if (start > end)
+		return;
+
+	__early_init_dt_declare_initrd(start, end);
+	phys_initrd_start = start;
+	phys_initrd_size = end - start;
+	LINX_EARLY_MARK('D');
+}
+#endif
+
 /*
  * The main usage of linux,usable-memory-range is for crash dump kernel.
  * Originally, the number of usable-memory regions is one. Now there may
@@ -1034,22 +1168,45 @@ int __init early_init_dt_scan_root(void)
 	const __be32 *prop;
 	const void *fdt = initial_boot_params;
 	int node = fdt_path_offset(fdt, "/");
+	bool linx_root_fallback = false;
 
+	LINX_EARLY_MARK('R');
+#ifdef CONFIG_LINX
+	if (node < 0) {
+		node = 0;
+		linx_root_fallback = true;
+	}
+#endif
 	if (node < 0)
 		return -ENODEV;
 
 	dt_root_size_cells = OF_ROOT_NODE_SIZE_CELLS_DEFAULT;
 	dt_root_addr_cells = OF_ROOT_NODE_ADDR_CELLS_DEFAULT;
 
+#ifdef CONFIG_LINX
+	if (!linx_root_fallback)
+		prop = linx_fdt_getprop(fdt, node, "#size-cells", NULL);
+	else
+		prop = NULL;
+#else
 	prop = of_get_flat_dt_prop(node, "#size-cells", NULL);
-	if (!WARN(!prop, "No '#size-cells' in root node\n"))
+#endif
+	if (prop)
 		dt_root_size_cells = be32_to_cpup(prop);
 	pr_debug("dt_root_size_cells = %x\n", dt_root_size_cells);
 
+#ifdef CONFIG_LINX
+	if (!linx_root_fallback)
+		prop = linx_fdt_getprop(fdt, node, "#address-cells", NULL);
+	else
+		prop = NULL;
+#else
 	prop = of_get_flat_dt_prop(node, "#address-cells", NULL);
-	if (!WARN(!prop, "No '#address-cells' in root node\n"))
+#endif
+	if (prop)
 		dt_root_addr_cells = be32_to_cpup(prop);
 	pr_debug("dt_root_addr_cells = %x\n", dt_root_addr_cells);
+	LINX_EARLY_MARK('r');
 
 	return 0;
 }
@@ -1070,42 +1227,96 @@ int __init early_init_dt_scan_memory(void)
 	int node, found_memory = 0;
 	const void *fdt = initial_boot_params;
 
+	LINX_EARLY_MARK('M');
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	LINX_EARLY_MARK('S');
 #endif
+#ifdef CONFIG_LINX
+	if (linx_memory_node_offset >= 0) {
+		LINX_EARLY_MARK('K');
+		node = linx_memory_node_offset;
+		goto scan_linx_memory_node;
+	}
+	{
+		int depth = -1;
+
+		for (node = fdt_next_node(fdt, -1, &depth);
+	     node >= 0;
+	     node = fdt_next_node(fdt, node, &depth)) {
+			const char *type;
+			const __be32 *reg, *endp;
+			int l;
+			bool hotpluggable;
+
+			if (depth != 1)
+				continue;
+#else
 	fdt_for_each_subnode(node, fdt, 0) {
-#ifdef CONFIG_LINX_VIRT_UART_MARKERS
-		LINX_EARLY_MARK('n');
-#endif
-		const char *type = of_get_flat_dt_prop(node, "device_type", NULL);
+		const char *type;
 		const __be32 *reg, *endp;
 		int l;
 		bool hotpluggable;
+#endif
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+			LINX_EARLY_MARK('n');
+#endif
+#ifdef CONFIG_LINX
+scan_linx_memory_node:
+		LINX_EARLY_MARK('N');
+		;
+#endif
+#ifdef CONFIG_LINX
+			if (node == linx_memory_node_offset)
+				type = "memory";
+			else
+				type = linx_fdt_getprop(fdt, node, "device_type", NULL);
+#else
+		type = of_get_flat_dt_prop(node, "device_type", NULL);
+#endif
 
 		/* We are scanning "memory" nodes only */
 		if (type == NULL || strcmp(type, "memory") != 0)
 			continue;
+		LINX_EARLY_MARK('O');
 
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
-		LINX_EARLY_MARK('M');
+			LINX_EARLY_MARK('M');
 #endif
 		if (!of_fdt_device_is_available(fdt, node))
 			continue;
 
+#ifdef CONFIG_LINX
+			reg = linx_fdt_getprop(fdt, node, "linux,usable-memory", &l);
+#else
 		reg = of_get_flat_dt_prop(node, "linux,usable-memory", &l);
+#endif
 		if (reg == NULL)
+#ifdef CONFIG_LINX
+			reg = linx_fdt_getprop(fdt, node, "reg", &l);
+#else
 			reg = of_get_flat_dt_prop(node, "reg", &l);
+#endif
 		if (reg == NULL)
 			continue;
+		LINX_EARLY_MARK('P');
 
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
-		LINX_EARLY_MARK('R');
+			LINX_EARLY_MARK('R');
 #endif
 		endp = reg + (l / sizeof(__be32));
+#ifdef CONFIG_LINX
+			hotpluggable = linx_fdt_getprop(fdt, node, "hotpluggable", NULL);
+#else
 		hotpluggable = of_get_flat_dt_prop(node, "hotpluggable", NULL);
+#endif
 
 		pr_debug("memory scan node %s, reg size %d,\n",
-			 fdt_get_name(fdt, node, NULL), l);
+#ifdef CONFIG_LINX
+			 linx_fdt_node_name(fdt, node),
+#else
+			 fdt_get_name(fdt, node, NULL),
+#endif
+			 l);
 
 		while ((endp - reg) >= (dt_root_addr_cells + dt_root_size_cells)) {
 			u64 base, size;
@@ -1121,6 +1332,7 @@ int __init early_init_dt_scan_memory(void)
 				LINX_EARLY_MARK('A');
 #endif
 			early_init_dt_add_memory_arch(base, size);
+			LINX_EARLY_MARK('Q');
 
 			found_memory = 1;
 
@@ -1131,7 +1343,16 @@ int __init early_init_dt_scan_memory(void)
 				pr_warn("failed to mark hotplug range 0x%llx - 0x%llx\n",
 					base, base + size);
 		}
+#ifdef CONFIG_LINX
+		if (node == linx_memory_node_offset)
+			goto linx_memory_done;
+#endif
 	}
+#ifdef CONFIG_LINX
+	}
+linx_memory_done:
+#endif
+	LINX_EARLY_MARK('m');
 	return found_memory;
 }
 
@@ -1142,20 +1363,36 @@ int __init early_init_dt_scan_chosen(char *cmdline)
 	const void *rng_seed;
 	const void *fdt = initial_boot_params;
 
+	LINX_EARLY_MARK('C');
 	node = fdt_path_offset(fdt, "/chosen");
 	if (node < 0)
 		node = fdt_path_offset(fdt, "/chosen@0");
+#ifdef CONFIG_LINX
+	if (node < 0)
+		node = linx_fdt_find_chosen_node(fdt);
+#endif
 	if (node < 0)
 		/* Handle the cmdline config options even if no /chosen node */
 		goto handle_cmdline;
 
 	chosen_node_offset = node;
 
+#ifdef CONFIG_LINX
+	linx_fdt_check_for_initrd(node);
+	LINX_EARLY_MARK('I');
+#else
 	early_init_dt_check_for_initrd(node);
+#endif
 	early_init_dt_check_for_elfcorehdr(node);
 
+#ifdef CONFIG_LINX
+	rng_seed = linx_fdt_getprop(fdt, node, "rng-seed", &l);
+	LINX_EARLY_MARK('G');
+#else
 	rng_seed = of_get_flat_dt_prop(node, "rng-seed", &l);
+#endif
 	if (rng_seed && l > 0) {
+#ifndef CONFIG_LINX
 		add_bootloader_randomness(rng_seed, l);
 
 		/* try to clear seed so it won't be found. */
@@ -1164,12 +1401,19 @@ int __init early_init_dt_scan_chosen(char *cmdline)
 		/* update CRC check value */
 		of_fdt_crc32 = crc32_be(~0, initial_boot_params,
 				fdt_totalsize(initial_boot_params));
+#endif
 	}
 
 	/* Retrieve command line */
+#ifdef CONFIG_LINX
 	p = of_get_flat_dt_prop(node, "bootargs", &l);
+	LINX_EARLY_MARK('P');
+#else
+	p = of_get_flat_dt_prop(node, "bootargs", &l);
+#endif
 	if (p != NULL && l > 0)
 		strscpy(cmdline, p, min(l, COMMAND_LINE_SIZE));
+	LINX_EARLY_MARK('c');
 
 handle_cmdline:
 	/*
@@ -1205,6 +1449,15 @@ handle_cmdline:
 void __init __weak early_init_dt_add_memory_arch(u64 base, u64 size)
 {
 	const u64 phys_offset = MIN_MEMBLOCK_ADDR;
+	int ret;
+
+	linx_virt_uart_putc('(');
+	linx_virt_uart_puthex_u64(base);
+	linx_virt_uart_putc(')');
+	linx_virt_uart_puthex_u64(size);
+	linx_virt_uart_putc('{');
+	linx_virt_uart_puthex_u64((u64)phys_offset);
+	linx_virt_uart_putc('}');
 
 	if (size < PAGE_SIZE - (base & ~PAGE_MASK)) {
 		pr_warn("Ignoring memory block 0x%llx - 0x%llx\n",
@@ -1231,22 +1484,41 @@ void __init __weak early_init_dt_add_memory_arch(u64 base, u64 size)
 	}
 
 	if (base + size < phys_offset) {
+#ifndef CONFIG_LINX
 		pr_warn("Ignoring memory block 0x%llx - 0x%llx\n",
 			base, base + size);
+#endif
 		return;
 	}
 	if (base < phys_offset) {
+#ifndef CONFIG_LINX
 		pr_warn("Ignoring memory range 0x%llx - 0x%llx\n",
 			base, phys_offset);
+#endif
 		size -= phys_offset - base;
 		base = phys_offset;
 	}
-	memblock_add(base, size);
+	linx_virt_uart_putc('[');
+	linx_virt_uart_puthex_u64((u64)memblock.memory.cnt);
+	linx_virt_uart_putc(']');
+#ifdef CONFIG_LINX
+	ret = memblock_add_node(base, size, 0, MEMBLOCK_NONE);
+#else
+	ret = memblock_add(base, size);
+#endif
+	linx_virt_uart_putc('<');
+	linx_virt_uart_puthex_u64((u64)memblock.memory.cnt);
+	linx_virt_uart_putc(ret ? '!' : '+');
 }
 
 static void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
 {
-	return memblock_alloc_or_panic(size, align);
+	void *mem;
+
+	LINX_EARLY_MARK('H');
+	mem = memblock_alloc_or_panic(size, align);
+	LINX_EARLY_MARK('I');
+	return mem;
 }
 
 bool __init early_init_dt_verify(void *dt_virt, phys_addr_t dt_phys)
@@ -1336,7 +1608,7 @@ void __init unflatten_device_tree(void)
 
 	/* Populate an empty root node when bootloader doesn't provide one */
 	if (!fdt) {
-		LINX_EARLY_MARK('n');
+		LINX_EARLY_MARK('N');
 		fdt = (void *) __dtb_empty_root_begin;
 		/* fdt_totalsize() will be used for copy size */
 		if (fdt_totalsize(fdt) >
@@ -1347,7 +1619,7 @@ void __init unflatten_device_tree(void)
 		of_fdt_crc32 = crc32_be(~0, fdt, fdt_totalsize(fdt));
 		fdt = copy_device_tree(fdt);
 	} else {
-		LINX_EARLY_MARK('p');
+		LINX_EARLY_MARK('P');
 	}
 
 	LINX_EARLY_MARK('w');

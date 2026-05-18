@@ -1,276 +1,144 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2009 Sunplus Core Technology Co., Ltd.
+ *  Chen Liqin <liqin.chen@sunplusct.com>
+ *  Lennox Wu <lennox.wu@sunplusct.com>
+ * Copyright (C) 2012 Regents of the University of California
+ * Copyright (C) 2017 SiFive
+ */
 
+#include <linux/cpu.h>
 #include <linux/kernel.h>
-#include <linux/sched/debug.h>
 #include <linux/sched.h>
-#include <linux/sched/task.h>
+#include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
-#include <linux/string.h>
+#include <linux/tick.h>
+#include <linux/ptrace.h>
 #include <linux/uaccess.h>
 
+#include <asm/unistd.h>
 #include <asm/processor.h>
-#include <asm/ptrace.h>
+#include <asm/ssr.h>
+#include <asm/stacktrace.h>
+#include <asm/string.h>
 #include <asm/switch_to.h>
-#include <asm/debug_uart.h>
+#include <asm/thread_info.h>
 
-unsigned long __get_wchan(struct task_struct *p)
-{
-	(void)p;
-	return 0;
-}
 
-extern void __noreturn linx_enter_user(struct pt_regs *regs);
-extern void __noreturn linx_restore_user(struct pt_regs *regs);
-
-asmlinkage void __noreturn linx_ret_from_fork(struct task_struct *prev)
-{
-	int (*fn)(void *);
-	void *fn_arg;
-	bool fork_child;
-	int ret = 0;
-	static unsigned int dbg_left = 1024;
-	static unsigned int dbg_post_left = 1024;
-	struct pt_regs *regs = task_pt_regs(current);
-
-	if (unlikely(current->pid == 20)) {
-		pr_err("linx: ret_from_fork pid20 entry fn=%px arg=%px pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx orig_a0=0x%lx ecstate=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
-		       (void *)current->thread.kthread_fn,
-		       (void *)current->thread.kthread_arg,
-		       regs->regs[PTR_PC], regs->regs[PTR_R1],
-		       regs->regs[PTR_R10], regs->regs[PTR_R2],
-		       regs->orig_a0, regs->ecstate,
-		       regs->ebarg_tpc, regs->ebarg_lra);
-	}
-
-#ifdef CONFIG_LINX_DEBUG
-	pr_err("Linx dbg: ret_from_fork enter pid=%d prev=%px fn=%px arg=%px\n",
-	       current->pid, prev,
-	       (void *)current->thread.kthread_fn,
-	       (void *)current->thread.kthread_arg);
-#endif
-	if (unlikely(dbg_left > 0)) {
-		pr_err("linx: ret_from_fork enter pid=%d prev=%px fn=%px arg=%px pc=0x%lx sp=0x%lx r2=0x%lx orig_a0=0x%lx flags=0x%lx\n",
-		       current->pid, prev,
-		       (void *)current->thread.kthread_fn,
-		       (void *)current->thread.kthread_arg,
-		       regs->regs[PTR_PC], regs->regs[PTR_R1],
-		       regs->regs[PTR_R2], regs->orig_a0, current->flags);
-		dbg_left--;
-	}
-
-	schedule_tail(prev);
-
-	if (unlikely(dbg_post_left > 0)) {
-		pr_err("linx: ret_from_fork post-tail pid=%d fn=%px arg=%px pc=0x%lx sp=0x%lx r2=0x%lx ecstate=0x%lx trapno=0x%lx traparg0=0x%lx\n",
-		       current->pid,
-		       (void *)current->thread.kthread_fn,
-		       (void *)current->thread.kthread_arg,
-		       regs->regs[PTR_PC], regs->regs[PTR_R1],
-		       regs->regs[PTR_R2], regs->ecstate, regs->trapno, regs->traparg0);
-		dbg_post_left--;
-	}
-
-#ifdef CONFIG_LINX_DEBUG
-	pr_err("Linx dbg: ret_from_fork after schedule_tail pid=%d\n", current->pid);
+#if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_STACKPROTECTOR_PER_TASK)
+#include <linux/stackprotector.h>
+unsigned long __stack_chk_guard __read_mostly;
+EXPORT_SYMBOL(__stack_chk_guard);
 #endif
 
-	fn = (int (*)(void *))current->thread.kthread_fn;
-	fn_arg = (void *)current->thread.kthread_arg;
-	fork_child = !fn;
+extern asmlinkage void ret_from_fork(void);
+extern asmlinkage void ret_from_kernel_thread(void);
 
-	current->thread.kthread_fn = 0;
-	current->thread.kthread_arg = 0;
-
-	if (fn)
-		ret = fn(fn_arg);
-
-	if (current->flags & PF_KTHREAD)
-		do_exit(ret);
-
-	/*
-	 * Userspace fork/clone children must observe return value 0.
-	 * Reinstate it at the final user-entry handoff in case any
-	 * intermediate path clobbered the child pt_regs return slot.
-	 */
-	if (fork_child) {
-		regs->regs[PTR_R2] = 0;
-		regs->orig_a0 = (unsigned long)-1;
-	}
-
-	/* user_mode_thread()/fork/clone: transition into userspace context. */
-	if (unlikely(current->pid == 20)) {
-		pr_err("linx: ret_from_fork pid20 pre-enter fork_child=%d ret=%d pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx orig_a0=0x%lx ecstate=0x%lx eb_tpc=0x%lx eb_lra=0x%lx bpc_cur=0x%lx bpc_tgt=0x%lx\n",
-		       fork_child, ret,
-		       regs->regs[PTR_PC], regs->regs[PTR_R1], regs->regs[PTR_R10],
-		       regs->regs[PTR_R2], regs->orig_a0, regs->ecstate,
-		       regs->ebarg_tpc, regs->ebarg_lra,
-		       regs->ebarg_bpc_cur, regs->ebarg_bpc_tgt);
-	}
-	if (unlikely(dbg_post_left > 0)) {
-		pr_err("linx: ret_from_fork enter-user pid=%d pc=0x%lx sp=0x%lx r2=0x%lx ecstate=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
-		       current->pid,
-		       regs->regs[PTR_PC], regs->regs[PTR_R1],
-		       regs->regs[PTR_R2], regs->ecstate,
-		       regs->ebarg_tpc, regs->ebarg_lra);
-		dbg_post_left--;
-	}
-	if (fork_child)
-		linx_restore_user(task_pt_regs(current));
-	linx_enter_user(task_pt_regs(current));
+void arch_cpu_idle(void)
+{
+	wait_for_interrupt();
+	raw_local_irq_enable();
 }
 
-int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
+void __show_regs(struct pt_regs *regs)
 {
-	struct pt_regs *regs = task_pt_regs(p);
-	static unsigned int dbg_user_copy_left = 32;
+	show_regs_print_info(KERN_DEFAULT);
 
-	if (args->fn) {
-		/*
-		 * kernel_thread() and user_mode_thread() both start by running a
-		 * kernel function. The difference is that user_mode_thread()
-		 * expects to transition into userspace after execve().
-		 */
-		memset(regs, 0, sizeof(*regs));
-		p->thread.kthread_fn = (unsigned long)args->fn;
-		p->thread.kthread_arg = (unsigned long)args->fn_arg;
-	} else {
-		/* fork/clone from userspace: copy pt_regs and return 0 in child. */
-		*regs = *task_pt_regs(current);
-		{
-			unsigned long resume_pc = regs->regs[PTR_PC];
-			u16 hw = 0xffffu;
-
-			/*
-			 * Clone children are entered through linx_enter_user()
-			 * (ACRE path), not the direct syscall-return path.
-			 *
-			 * If the trapped resume PC points at C.BSTOP (0x0000),
-			 * skipping that terminator avoids replaying a stale
-			 * post-syscall block footer in the freshly cloned child.
-			 */
-			if (!copy_from_user(&hw, (const void __user *)resume_pc, sizeof(hw)) &&
-			    hw == 0x0000u)
-				resume_pc += 2;
-			regs->regs[PTR_PC] = resume_pc;
-		}
-		regs->regs[PTR_R2] = 0;
-		/*
-		 * Child enters userspace via linx_enter_user() (not syscall-return),
-		 * so clear syscall-inflight markers and sanitize resume state.
-		 */
-		regs->orig_a0 = (unsigned long)-1;
-		regs->trapno = 0;
-		regs->traparg0 = 0;
-		regs->ebarg_bpc_cur = regs->regs[PTR_PC];
-		regs->ebarg_bpc_tgt = regs->regs[PTR_PC];
-		regs->ebarg_tpc = regs->regs[PTR_PC];
-		/*
-		 * Fork/clone children resume in the parent's libc wrapper after
-		 * syscall return; seed LRA from saved user RA so FRET paths do not
-		 * observe a zero link target.
-		 */
-		regs->ebarg_lra = regs->regs[PTR_R10];
-		do {
-			unsigned long ecstate = linx_ssr_read_cstate();
-
-			ecstate |= LINX_CSTATE_I_BIT;
-			ecstate = (ecstate & ~LINX_CSTATE_ACR_MASK) | LINX_CSTATE_ACR_USER;
-			regs->ecstate = ecstate;
-		} while (0);
-		p->thread.kthread_fn = 0;
-		p->thread.kthread_arg = 0;
-		if (unlikely(dbg_user_copy_left > 0)) {
-			unsigned long usp_w0 = ~0UL;
-			unsigned long usp_w1 = ~0UL;
-			unsigned long usp_w2 = ~0UL;
-			void __user *usp = (void __user *)regs->regs[PTR_R1];
-
-			if (copy_from_user(&usp_w0, usp, sizeof(usp_w0)))
-				usp_w0 = ~0UL;
-			if (copy_from_user(&usp_w1, (void __user *)((unsigned long)usp + sizeof(unsigned long)), sizeof(usp_w1)))
-				usp_w1 = ~0UL;
-			if (copy_from_user(&usp_w2, (void __user *)((unsigned long)usp + 2 * sizeof(unsigned long)), sizeof(usp_w2)))
-				usp_w2 = ~0UL;
-			pr_err("linx: copy_thread user pid=%d parent=%d child_regs=%px parent_regs=%px parent_r2=0x%lx parent_uq0=0x%lx parent_uq1=0x%lx parent_tq0=0x%lx child_pc=0x%lx child_sp=0x%lx child_ra=0x%lx child_r2=0x%lx child_ecstate=0x%lx child_trapno=0x%lx child_targ0=0x%lx child_eb_tpc=0x%lx child_eb_lra=0x%lx child_uq0=0x%lx child_uq1=0x%lx child_tq0=0x%lx\n",
-			       p->pid, current->pid,
-			       regs, task_pt_regs(current), task_pt_regs(current)->regs[PTR_R2],
-			       task_pt_regs(current)->ebarg_uq[0], task_pt_regs(current)->ebarg_uq[1],
-			       task_pt_regs(current)->ebarg_tq[0],
-			       regs->regs[PTR_PC], regs->regs[PTR_R1], regs->regs[PTR_R10], regs->regs[PTR_R2],
-			       regs->ecstate, regs->trapno, regs->traparg0, regs->ebarg_tpc,
-			       regs->ebarg_lra, regs->ebarg_uq[0], regs->ebarg_uq[1], regs->ebarg_tq[0]);
-			pr_err("linx: copy_thread user-stack usp=0x%lx w0=0x%lx w1=0x%lx w2=0x%lx\n",
-			       regs->regs[PTR_R1], usp_w0, usp_w1, usp_w2);
-			dbg_user_copy_left--;
-		}
+	if (!user_mode(regs)) {
+		pr_cont("bpc : %pS\n", (void *)regs->bpc);
+		pr_cont(" ra : %pS\n", (void *)regs->ra);
 	}
 
-	/* New tasks start in linx_ret_from_fork() on their kernel stack. */
-	p->thread.ra = (unsigned long)linx_ret_from_fork;
-	p->thread.sp = (unsigned long)regs;
-	memset(p->thread.s, 0, sizeof(p->thread.s));
-	p->thread.ebarg0 = 0;
+	pr_cont(" tpc : " REG_FMT " bpc : " REG_FMT " bpcn : " REG_FMT "\n",
+		regs->tpc, regs->bpc, regs->bpcn);
+	pr_cont(" ebarg : " REG_FMT "\n",
+		regs->ebarg);
+	pr_cont(" gp : " REG_FMT " tp : " REG_FMT "\n",
+		regs->gp, regs->tp );
+	pr_cont(" t1 : " REG_FMT " t2 : " REG_FMT " t3 : " REG_FMT " t4 : " REG_FMT "\n",
+		regs->elpr0, regs->elpr1, regs->elpr2, regs->elpr3);
+	pr_cont(" u1 : " REG_FMT " u2 : " REG_FMT " u3 : " REG_FMT " u4 : " REG_FMT "\n",
+		regs->elpr4, regs->elpr5, regs->elpr6, regs->elpr7);
+	pr_cont(" sp : " REG_FMT " a0 : " REG_FMT " a1 : " REG_FMT "\n",
+		regs->sp, regs->a0, regs->a1);
+	pr_cont(" a2 : " REG_FMT " a3 : " REG_FMT " a4 : " REG_FMT "\n",
+		regs->a2, regs->a3, regs->a4);
+	pr_cont(" a5 : " REG_FMT " a6 : " REG_FMT " a7 : " REG_FMT "\n",
+		regs->a5, regs->a6, regs->a7);
+	pr_cont(" ra : " REG_FMT " s0 : " REG_FMT " s1 : " REG_FMT "\n",
+		regs->ra, regs->s0, regs->s1);
+	pr_cont(" s2 : " REG_FMT " s3 : " REG_FMT " s4 : " REG_FMT "\n",
+		regs->s2, regs->s3, regs->s4);
+	pr_cont(" s5 : " REG_FMT " s6 : " REG_FMT " s7 : " REG_FMT "\n",
+		regs->s5, regs->s6, regs->s7);
+	pr_cont(" s8 : " REG_FMT " x0 : " REG_FMT " x1: " REG_FMT "\n",
+		regs->s8, regs->x0, regs->x1);
+	pr_cont(" x2: " REG_FMT " x3 : " REG_FMT "\n",
+		regs->x2, regs->x3);
+
+	pr_cont(" cstate : " REG_FMT " traparg0 : " REG_FMT " trapno : " REG_FMT "\n",
+		regs->cstate, regs->traparg0, regs->trapno);
+	pr_cont(" orig_a0 : " REG_FMT " orig_bpc : " REG_FMT " orig_tpc : " REG_FMT "\n",
+		regs->orig_a0, regs->orig_bpc, regs->orig_tpc);
+
+}
+void show_regs(struct pt_regs *regs)
+{
+	__show_regs(regs);
+	if (!user_mode(regs))
+		dump_backtrace(regs, NULL, KERN_DEFAULT);
+}
+
+void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
+{
+	/* called by `load_elf_binary` */
+	regs->cstate = CSTATE_ACR2 | CSTATE_I;
 	/*
-	 * Fresh tasks first resume in linx_ret_from_fork() via __switch_to.
-	 * Seed the kernel-side EBARG PC/LRA fields to that entry point so the
-	 * first schedule_tail()/finish_task_switch() return chain does not
-	 * observe a zero link target before userspace pt_regs state is restored.
+	 * Since the epc have been changed, the bstate of the exception block
+	 * should be discarded also.
 	 */
-	p->thread.ebarg_bpc_cur = p->thread.ra;
-	p->thread.ebarg_bpc_tgt = p->thread.ra;
-	p->thread.ebarg_tpc = p->thread.ra;
-	p->thread.ebarg_lra = p->thread.ra;
-	memset(p->thread.ebarg_tq, 0, sizeof(p->thread.ebarg_tq));
-	memset(p->thread.ebarg_uq, 0, sizeof(p->thread.ebarg_uq));
-	p->thread.ebarg_lb = 0;
-	p->thread.ebarg_lc = 0;
-	p->thread.ebarg_ext_ptr = 0;
-	p->thread.ebarg_ext_meta = 0;
-
-	/*
-	 * Early bring-up probe: log a few copy_thread products so we can
-	 * correlate scheduler next-task pointers with thread context setup.
-	 */
-	do {
-		static int dbg_left = 8;
-
-		if (dbg_left <= 0)
-			break;
-		dbg_left--;
-		linx_debug_uart_puts("\n[linx copy_thread] p=");
-		linx_debug_uart_puthex_ulong((unsigned long)p);
-		linx_debug_uart_puts(" ra=");
-		linx_debug_uart_puthex_ulong(p->thread.ra);
-		linx_debug_uart_puts(" sp=");
-		linx_debug_uart_puthex_ulong(p->thread.sp);
-		linx_debug_uart_puts(" fn=");
-		linx_debug_uart_puthex_ulong((unsigned long)args->fn);
-		linx_debug_uart_puts(" idle=");
-		linx_debug_uart_puthex_ulong((unsigned long)args->idle);
-		linx_debug_uart_puts("\n");
-	} while (0);
-
-	return 0;
+	WARN_ON_ONCE(regs->bpc == pc);
+	regs->bpc = pc;
+	regs->tpc = pc;
+	// regs->ebstate.rra = RRAT_DEFAULT;
+	regs->sp = sp;
 }
 
 void flush_thread(void)
 {
 }
 
-void show_regs(struct pt_regs *regs)
+int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
-	if (!regs) {
-		pr_info("show_regs: (null)\n");
-		return;
-	}
-
-	pr_info("show_regs: pc=%lx sp=%lx\n",
-		regs->regs[PTR_PC], regs->regs[PTR_R1]);
+	*dst = *src;
+	return 0;
 }
 
-void show_stack(struct task_struct *task, unsigned long *sp, const char *loglvl)
+int copy_thread(unsigned long clone_flags, unsigned long usp, unsigned long arg,
+		struct task_struct *p, unsigned long tls)
 {
-	(void)task;
-	(void)sp;
-	(void)loglvl;
+	struct pt_regs *childregs = task_pt_regs(p);
+
+	/* p->thread holds context to be restored by __switch_to() */
+	if (unlikely(p->flags & (PF_KTHREAD | PF_IO_WORKER))) {
+		/* Kernel thread */
+		memset(childregs, 0, sizeof(struct pt_regs));
+		childregs->gp = ssr_read(SSR_GP);
+
+		childregs->cstate = CSTATE_ACR1 | CSTATE_I;
+
+		p->thread.ra = (unsigned long)ret_from_kernel_thread;
+		p->thread.s[0] = usp; /* fn */
+		p->thread.s[1] = arg;
+	} else {
+		*childregs = *(current_pt_regs());
+		if (usp) /* User fork */
+			childregs->sp = usp;
+		if (clone_flags & CLONE_SETTLS)
+			childregs->tp = tls;
+		childregs->a0 = 0; /* Return value of fork() */
+		p->thread.ra = (unsigned long)ret_from_fork;
+	}
+	p->thread.sp = (unsigned long)childregs; /* kernel sp */
+	return 0;
 }

@@ -613,6 +613,7 @@ config TI_PRUSS_INTC
 config RISCV_INTC
 	bool
 	depends on RISCV
+	default n
 	select IRQ_DOMAIN_HIERARCHY
 
 config RISCV_APLIC
@@ -801,6 +802,17 @@ config MCHP_EIC
 	select IRQ_DOMAIN_HIERARCHY
 	help
 	  Support for Microchip External Interrupt Controller.
+
+config LINX_INTC
+	bool "Huawei LinxISA Interrupt Controller"
+	depends on RISCV
+	select IRQ_DOMAIN_HIERARCHY
+	help
+	   This enables support for the LINX-INTC chip found in Huawei
+	   LinxISA systems. The LINX-INTC consists of three major units:
+	   LXIR, LXIC and IRQ-IF. LXIR collects device interrupts and routes
+	   them to each core's LXIC. LXIC prioritizes interrupts and delivers
+	   them to LinxCore.
 
 config SOPHGO_SG2042_MSI
 	bool "Sophgo SG2042 MSI Controller"

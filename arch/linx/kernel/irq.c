@@ -1,43 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ * Copyright (C) 2017 SiFive
+ * Copyright (C) 2018 Christoph Hellwig
+ */
 
-#include <linux/init.h>
-#include <linux/irq.h>
 #include <linux/interrupt.h>
+#include <linux/irqchip.h>
+#include <linux/seq_file.h>
+#include <asm/smp.h>
 
-#include <asm/irqflags.h>
-#include <asm/ssr.h>
-
-enum {
-	LINX_NR_VIRT_IRQS = 64,
-};
-
-static void linx_irq_mask(struct irq_data *d)
+int arch_show_interrupts(struct seq_file *p, int prec)
 {
-	(void)d;
+	show_ipi_stats(p, prec);
+	return 0;
 }
-
-static void linx_irq_unmask(struct irq_data *d)
-{
-	(void)d;
-}
-
-static void linx_irq_eoi(struct irq_data *d)
-{
-	/* QEMU models EOIEI as an SSR write on the managing ACR bank. */
-	linx_ssr_write_eoiei_acr1((u64)d->hwirq);
-}
-
-static struct irq_chip linx_irq_chip = {
-	.name = "linx-virt",
-	.irq_mask = linx_irq_mask,
-	.irq_unmask = linx_irq_unmask,
-	.irq_eoi = linx_irq_eoi,
-};
 
 void __init init_IRQ(void)
 {
-	unsigned int irq;
-
-	for (irq = 0; irq < LINX_NR_VIRT_IRQS; irq++)
-		irq_set_chip_and_handler(irq, &linx_irq_chip, handle_fasteoi_irq);
+	irqchip_init();
+	if (!handle_arch_irq)
+		panic("No interrupt controller found.");
 }

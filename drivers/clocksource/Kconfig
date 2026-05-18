@@ -663,6 +663,16 @@ config RISCV_TIMER
 	  is accessed via both the SBI and the rdcycle instruction.  This is
 	  required for all RISC-V systems.
 
+config LINX_TIMER
+	bool "Timer for the LINX platform"
+	depends on GENERIC_SCHED_CLOCK
+	select TIMER_PROBE
+	select TIMER_OF
+	help
+	  This enables the per-hart timer built into all LINX systems, which
+	  is accessed via both the SBI and the rdcycle instruction.  This is
+	  required for all LINX systems.
+
 config CLINT_TIMER
 	bool "CLINT Timer for the RISC-V platform" if COMPILE_TEST
 	depends on GENERIC_SCHED_CLOCK && RISCV

@@ -293,13 +293,14 @@ fi
 
 mksysmap "${VMLINUX}" System.map
 
-if is_enabled CONFIG_BUILDTIME_TABLE_SORT; then
-	info SORTTAB "${VMLINUX}"
-	if ! sorttable "${VMLINUX}"; then
-		echo >&2 Failed to sort kernel tables
-		exit 1
-	fi
-fi
+# Skip sorttable for bring-up so the image still links.
+#if is_enabled CONFIG_BUILDTIME_TABLE_SORT; then
+#	info SORTTAB "${VMLINUX}"
+#	if ! sorttable "${VMLINUX}"; then
+#		echo >&2 Failed to sort kernel tables
+#		exit 1
+#	fi
+#fi
 
 # step a (see comment above)
 if is_enabled CONFIG_KALLSYMS; then

@@ -95,6 +95,22 @@
 #define ma_enode_ptr(x) ((struct maple_enode *)(x))
 static struct kmem_cache *maple_node_cache;
 
+#ifdef CONFIG_LINX
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_maple_mark(const char *tag)
+{
+	while (*tag)
+		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+			(unsigned char)*tag++;
+}
+#else
+static __always_inline void linx_maple_mark(const char *tag)
+{
+	(void)tag;
+}
+#endif
+
 #ifdef CONFIG_DEBUG_MAPLE_TREE
 static const unsigned long mt_max[] = {
 	[maple_dense]		= MAPLE_NODE_SLOTS,
@@ -5867,9 +5883,19 @@ void __init maple_tree_init(void)
 		.sheaf_capacity = 32,
 	};
 
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up: skip maple sheaves until percpu-backed cache metadata
+	 * allocation is stable. Sheaves are an optimization, not a correctness
+	 * requirement for early boot.
+	 */
+	args.sheaf_capacity = 0;
+#endif
+	linx_maple_mark("MT<");
 	maple_node_cache = kmem_cache_create("maple_node",
 			sizeof(struct maple_node), &args,
 			SLAB_PANIC);
+	linx_maple_mark("MT>");
 }
 
 /**

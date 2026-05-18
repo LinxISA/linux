@@ -576,9 +576,9 @@ static inline unsigned int arch_slab_minalign(void)
  * kmalloc and friends return pointers aligned to both ARCH_KMALLOC_MINALIGN
  * and ARCH_SLAB_MINALIGN, but here we only assume the former alignment.
  */
-#define __assume_kmalloc_alignment __assume_aligned(ARCH_KMALLOC_MINALIGN)
-#define __assume_slab_alignment __assume_aligned(ARCH_SLAB_MINALIGN)
-#define __assume_page_alignment __assume_aligned(PAGE_SIZE)
+#define __assume_kmalloc_alignment
+#define __assume_slab_alignment
+#define __assume_page_alignment
 
 /*
  * Kmalloc array related definitions

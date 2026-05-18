@@ -496,6 +496,7 @@ out:
 }
 
 static bool is_tmpfs;
+#ifndef CONFIG_LINX
 static int rootfs_init_fs_context(struct fs_context *fc)
 {
 	if (IS_ENABLED(CONFIG_TMPFS) && is_tmpfs)
@@ -503,10 +504,15 @@ static int rootfs_init_fs_context(struct fs_context *fc)
 
 	return ramfs_init_fs_context(fc);
 }
+#endif
 
 struct file_system_type rootfs_fs_type = {
 	.name		= "rootfs",
+#ifdef CONFIG_LINX
+	.init_fs_context = ramfs_init_fs_context,
+#else
 	.init_fs_context = rootfs_init_fs_context,
+#endif
 	.kill_sb	= kill_litter_super,
 };
 

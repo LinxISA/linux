@@ -27,7 +27,7 @@ extern void * const compat_sys_call_table[];
 static inline int syscall_get_nr(struct task_struct *task,
 				 struct pt_regs *regs)
 {
-	return regs->a7;
+	return regs->x1;
 }
 
 static inline void syscall_set_nr(struct task_struct *task,
@@ -91,7 +91,7 @@ static inline void syscall_set_arguments(struct task_struct *task,
 static inline int syscall_get_arch(struct task_struct *task)
 {
 #ifdef CONFIG_64BIT
-	return AUDIT_ARCH_RISCV64;
+	return AUDIT_ARCH_LINX64;
 #else
 	return AUDIT_ARCH_RISCV32;
 #endif

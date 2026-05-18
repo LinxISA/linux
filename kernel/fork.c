@@ -78,6 +78,50 @@
 #include <linux/delayacct.h>
 #include <linux/taskstats_kern.h>
 #include <linux/tty.h>
+
+#ifdef CONFIG_LINX
+static __always_inline void linx_fork_mark(char c)
+{
+	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+	barrier();
+}
+
+static noinline void linx_fork_call_void_indirect(void (*fn)(void))
+{
+	linx_fork_mark('~');
+	linx_fork_mark('w');
+	fn();
+	linx_fork_mark('~');
+	linx_fork_mark('x');
+}
+
+static noinline int linx_fork_call_int_indirect(int (*fn)(void))
+{
+	int ret;
+
+	linx_fork_mark('~');
+	linx_fork_mark('y');
+	ret = fn();
+	linx_fork_mark('~');
+	linx_fork_mark('z');
+	return ret;
+}
+#else
+static __always_inline void linx_fork_mark(char c)
+{
+	(void)c;
+}
+
+static __always_inline void linx_fork_call_void_indirect(void (*fn)(void))
+{
+	fn();
+}
+
+static __always_inline int linx_fork_call_int_indirect(int (*fn)(void))
+{
+	return fn();
+}
+#endif
 #include <linux/fs_struct.h>
 #include <linux/magic.h>
 #include <linux/perf_event.h>
@@ -2607,7 +2651,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 			trace = 0;
 	}
 
+	linx_fork_mark('K');
 	p = copy_process(NULL, trace, NUMA_NO_NODE, args);
+	linx_fork_mark('L');
 	add_latent_entropy();
 
 	if (IS_ERR(p))
@@ -2654,7 +2700,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 		task_unlock(p);
 	}
 
+	linx_fork_mark('M');
 	wake_up_new_task(p);
+	linx_fork_mark('N');
 
 	if (unlikely(linx_clone_dbg_left > 0 && current->pid == 1)) {
 		pr_err("linx: kernel_clone wake child=%d state=0x%x exit_state=0x%x parent_pid=%d real_parent_pid=%d\n",
@@ -3001,24 +3049,47 @@ void __init mm_cache_init(void)
 
 void __init proc_caches_init(void)
 {
+	linx_fork_mark('a');
 	sighand_cachep = kmem_cache_create("sighand_cache",
 			sizeof(struct sighand_struct), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_TYPESAFE_BY_RCU|
 			SLAB_ACCOUNT, sighand_ctor);
+	linx_fork_mark('b');
 	signal_cachep = kmem_cache_create("signal_cache",
 			sizeof(struct signal_struct), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
 			NULL);
+	linx_fork_mark('c');
 	files_cachep = kmem_cache_create("files_cache",
 			sizeof(struct files_struct), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
 			NULL);
+	linx_fork_mark('d');
 	fs_cachep = kmem_cache_create("fs_cache",
 			sizeof(struct fs_struct), 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT,
 			NULL);
+	linx_fork_mark('e');
+	linx_fork_mark('~');
+	linx_fork_mark('m');
+#ifdef CONFIG_LINX
+	linx_fork_call_void_indirect(mmap_init);
+#else
 	mmap_init();
+#endif
+	linx_fork_mark('~');
+	linx_fork_mark('n');
+	linx_fork_mark('f');
+	linx_fork_mark('~');
+	linx_fork_mark('o');
+#ifdef CONFIG_LINX
+	(void)linx_fork_call_int_indirect(nsproxy_cache_init);
+#else
 	nsproxy_cache_init();
+#endif
+	linx_fork_mark('~');
+	linx_fork_mark('p');
+	linx_fork_mark('g');
 }
 
 /*

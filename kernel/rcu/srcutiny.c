@@ -20,6 +20,18 @@
 #include "rcu_segcblist.h"
 #include "rcu.h"
 
+#ifdef CONFIG_LINX
+static __always_inline void linx_srcu_mark(char c)
+{
+	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+}
+#else
+static __always_inline void linx_srcu_mark(char c)
+{
+	(void)c;
+}
+#endif
+
 #ifndef CONFIG_TREE_RCU
 int rcu_scheduler_active __read_mostly;
 #else // #ifndef CONFIG_TREE_RCU
@@ -286,9 +298,11 @@ EXPORT_SYMBOL_GPL(poll_state_synchronize_srcu);
 
 #ifndef CONFIG_TREE_RCU
 /* Lockdep diagnostics.  */
-void __init rcu_scheduler_starting(void)
+noinline void __init rcu_scheduler_starting(void)
 {
+	linx_srcu_mark('R');
 	rcu_scheduler_active = RCU_SCHEDULER_RUNNING;
+	linx_srcu_mark('S');
 }
 #endif // #ifndef CONFIG_TREE_RCU
 

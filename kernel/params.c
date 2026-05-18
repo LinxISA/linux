@@ -16,6 +16,40 @@
 #include <linux/slab.h>
 #include <linux/string.h>
 
+#ifdef CONFIG_LINX
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_param_mark(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+
+static __always_inline void linx_param_mark_arg(char phase, const char *param)
+{
+	linx_param_mark('%');
+	linx_param_mark(phase);
+
+	if (!param) {
+		linx_param_mark('?');
+		return;
+	}
+
+	if (!strcmp(param, "lpj"))
+		linx_param_mark('1');
+	else if (!strcmp(param, "loglevel"))
+		linx_param_mark('2');
+	else if (!strcmp(param, "console"))
+		linx_param_mark('3');
+	else if (!strcmp(param, "panic"))
+		linx_param_mark('4');
+	else if (!strcmp(param, "linx_disable_timer_irq"))
+		linx_param_mark('5');
+	else
+		linx_param_mark(param[0] ? param[0] : '?');
+}
+#endif
+
 #ifdef CONFIG_SYSFS
 /* Protects all built-in parameters, modules use their own param_lock */
 static DEFINE_MUTEX(param_lock);
@@ -167,6 +201,10 @@ char *parse_args(const char *doing,
 		 void *arg, parse_unknown_fn unknown)
 {
 	char *param, *val, *err = NULL;
+#ifdef CONFIG_LINX
+	const bool linx_booting_kernel =
+		doing && strcmp(doing, "Booting kernel") == 0;
+#endif
 
 	/* Chew leading spaces */
 	args = skip_spaces(args);
@@ -182,9 +220,17 @@ char *parse_args(const char *doing,
 		/* Stop at -- */
 		if (!val && strcmp(param, "--") == 0)
 			return err ?: args;
+#ifdef CONFIG_LINX
+		if (linx_booting_kernel)
+			linx_param_mark_arg('b', param);
+#endif
 		irq_was_disabled = irqs_disabled();
 		ret = parse_one(param, val, doing, params, num,
 				min_level, max_level, arg, unknown);
+#ifdef CONFIG_LINX
+		if (linx_booting_kernel)
+			linx_param_mark_arg('a', param);
+#endif
 		if (irq_was_disabled && !irqs_disabled())
 			pr_warn("%s: option '%s' enabled irq's!\n",
 				doing, param);

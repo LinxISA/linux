@@ -1,8 +1,21 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _ASM_LINX_TLB_H
-#define _ASM_LINX_TLB_H
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ */
 
-#include <linux/pagemap.h>
+#ifndef _ASM_RISCV_TLB_H
+#define _ASM_RISCV_TLB_H
+
+struct mmu_gather;
+
+static void tlb_flush(struct mmu_gather *tlb);
+
+#define tlb_flush tlb_flush
 #include <asm-generic/tlb.h>
 
-#endif /* _ASM_LINX_TLB_H */
+static inline void tlb_flush(struct mmu_gather *tlb)
+{
+	flush_tlb_mm(tlb->mm);
+}
+
+#endif /* _ASM_RISCV_TLB_H */

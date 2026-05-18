@@ -1,91 +1,41 @@
 // SPDX-License-Identifier: GPL-2.0-only
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ * Copyright (C) 2017 SiFive
+ */
 
-#include <linux/clockchips.h>
+#include <linux/of_clk.h>
 #include <linux/clocksource.h>
-#include <linux/init.h>
-#include <linux/interrupt.h>
-#include <linux/kernel.h>
+#include <linux/delay.h>
+#include <asm/lisc.h>
+#include <asm/processor.h>
+#include <asm/timex.h>
 
-#include <asm/ssr.h>
-
-static u64 linx_clocksource_read(struct clocksource *cs)
-{
-	(void)cs;
-	return linx_ssr_read_time();
-}
-
-static struct clocksource linx_clocksource = {
-	.name	= "linx-time",
-	.rating	= 300,
-	.read	= linx_clocksource_read,
-	.mask	= CLOCKSOURCE_MASK(64),
-	.flags	= CLOCK_SOURCE_IS_CONTINUOUS,
-};
-
-static int linx_clockevent_shutdown(struct clock_event_device *ced)
-{
-	(void)ced;
-	linx_ssr_write_timecmp_acr1(0);
-	return 0;
-}
-
-static int linx_clockevent_set_next_event(unsigned long delta,
-					  struct clock_event_device *ced)
-{
-	u64 now;
-
-	(void)ced;
-	now = linx_ssr_read_time();
-	linx_ssr_write_timecmp_acr1(now + (u64)delta);
-	return 0;
-}
-
-static struct clock_event_device linx_clockevent = {
-	.name			= "linx-timer0",
-	.features		= CLOCK_EVT_FEAT_ONESHOT,
-	.rating			= 300,
-	.set_state_shutdown	= linx_clockevent_shutdown,
-	.set_next_event		= linx_clockevent_set_next_event,
-};
-
-void linx_timer_handle_irq(void);
-
-static irqreturn_t linx_timer_irq_handler(int irq, void *dev_id)
-{
-	(void)irq;
-	(void)dev_id;
-	linx_timer_handle_irq();
-	return IRQ_HANDLED;
-}
-
-void linx_timer_handle_irq(void)
-{
-	/*
-	 * Called from the trap vector. The tick framework installs the actual
-	 * event handler when the clock event device is registered.
-	 */
-	if (unlikely(system_state < SYSTEM_SCHEDULING))
-		return;
-
-	if (linx_clockevent.event_handler)
-		linx_clockevent.event_handler(&linx_clockevent);
-}
+unsigned long linx_timebase __ro_after_init;
+EXPORT_SYMBOL_GPL(linx_timebase);
 
 void __init time_init(void)
 {
-	int rc;
+	struct device_node *cpu;
+	u32 prop;
 
-	/* Ensure no stale timer interrupt remains armed across resets. */
-	linx_ssr_write_timecmp_acr1(0);
+	cpu = of_find_node_by_path("/cpus");
+	if (!cpu || of_property_read_u32(cpu, "timebase-frequency", &prop))
+		panic(KERN_WARNING "Linx system with no 'timebase-frequency' in DTS\n");
+	of_node_put(cpu);
+	linx_timebase = prop;
 
-	linx_clockevent.cpumask = cpumask_of(0);
+	lpj_fine = linx_timebase / HZ;
 
-	clocksource_register_hz(&linx_clocksource, 1000000000);
-	clockevents_config_and_register(&linx_clockevent, 1000000000, 1,
-					(unsigned long)-1);
+	of_clk_init(NULL);
+	timer_probe();
+}
 
-	rc = request_irq(0, linx_timer_irq_handler, IRQF_TIMER, "linx-timer0",
-			 &linx_clockevent);
-	if (rc)
-		pr_err("linx: failed to request timer irq0: rc=%d\n", rc);
+void clocksource_arch_init(struct clocksource *cs)
+{
+#ifdef CONFIG_GENERIC_GETTIMEOFDAY
+	cs->vdso_clock_mode = VDSO_CLOCKMODE_ARCHTIMER;
+#else
+	cs->vdso_clock_mode = VDSO_CLOCKMODE_NONE;
+#endif
 }

@@ -60,6 +60,10 @@
 #define __ro_after_init __section(".data..ro_after_init")
 #endif
 
+#ifndef ____cacheline_aligned
+#define ____cacheline_aligned
+#endif
+
 #ifndef ____cacheline_aligned_in_smp
 #ifdef CONFIG_SMP
 #define ____cacheline_aligned_in_smp ____cacheline_aligned
@@ -69,9 +73,7 @@
 #endif
 
 #ifndef __cacheline_aligned
-#define __cacheline_aligned					\
-  __attribute__((__aligned__(SMP_CACHE_BYTES),			\
-		 __section__(".data..cacheline_aligned")))
+#define __cacheline_aligned
 #endif /* __cacheline_aligned */
 
 #ifndef __cacheline_aligned_in_smp
@@ -93,8 +95,7 @@
 
 #if !defined(____cacheline_internodealigned_in_smp)
 #if defined(CONFIG_SMP)
-#define ____cacheline_internodealigned_in_smp \
-	__attribute__((__aligned__(1 << (INTERNODE_CACHE_SHIFT))))
+#define ____cacheline_internodealigned_in_smp
 #else
 #define ____cacheline_internodealigned_in_smp
 #endif

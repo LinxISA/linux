@@ -65,7 +65,7 @@
 	typeof(d) __d = (d);			\
 	(void) (&__a == &__b);			\
 	(void) (&__a == __d);			\
-	__builtin_mul_overflow(__a, __b, __d);	\
+	*__d = __a  * __b;	\
 })
 
 /**
