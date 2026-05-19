@@ -9,6 +9,7 @@
  */
 
 #include <linux/init.h>
+#include <linux/cpu.h>
 #include <linux/mm.h>
 #include <linux/memblock.h>
 #include <linux/sched.h>
@@ -242,7 +243,7 @@ static void __init init_resources(void)
 static void __init parse_dtb(void)
 {
 	/* Early scan of device tree from init memory */
-	if (early_init_dt_scan(dtb_early_va)) {
+	if (early_init_dt_scan(dtb_early_va, dtb_early_pa)) {
 		const char *name = of_flat_dt_get_machine_name();
 
 		if (name) {
@@ -275,7 +276,8 @@ void __init setup_arch(char **cmdline_p)
 #if IS_ENABLED(CONFIG_BUILTIN_DTB)
 	unflatten_and_copy_device_tree();
 #else
-	if (early_init_dt_verify(__va(XIP_FIXUP(dtb_early_pa))))
+	if (early_init_dt_verify(__va(XIP_FIXUP(dtb_early_pa)),
+				 XIP_FIXUP(dtb_early_pa)))
 		unflatten_device_tree();
 	else
 		pr_err("No DTB found in kernel mappings\n");

@@ -6,6 +6,14 @@
 obj-$(CONFIG_NFS_FS) += nfs.o
 
 CFLAGS_nfstrace.o += -I$(src)
+# LinxISA bring-up: several NFS translation units (client.o, super.o,
+# nfs3xdr.o, nfs4proc.o, ...) currently trip the same Linx SelectionDAG crash
+# under O2 with loop/SLP vectorization enabled.
+ccflags-y += -fno-vectorize -fno-slp-vectorize
+CFLAGS_client.o += -fno-vectorize -fno-slp-vectorize
+CFLAGS_super.o += -fno-vectorize -fno-slp-vectorize
+CFLAGS_nfs3xdr.o += -fno-vectorize -fno-slp-vectorize
+CFLAGS_nfs4proc.o += -fno-vectorize -fno-slp-vectorize
 nfs-y 			:= client.o dir.o file.o getroot.o inode.o super.o \
 			   io.o direct.o pagelist.o read.o symlink.o unlink.o \
 			   write.o namespace.o mount_clnt.o nfstrace.o \

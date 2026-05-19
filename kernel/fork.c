@@ -2669,9 +2669,9 @@ pid_t kernel_clone(struct kernel_clone_args *args)
 		       p->tgid, p->__state, p->exit_state);
 		pr_err("linx: kernel_clone child-thread child=%d ra=0x%lx sp=0x%lx pc=0x%lx usp=0x%lx r10=0x%lx r2=0x%lx ecstate=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
 		       p->pid, p->thread.ra, p->thread.sp,
-		       cregs->regs[PTR_PC], cregs->regs[PTR_R1],
-		       cregs->regs[PTR_R10], cregs->regs[PTR_R2],
-		       cregs->ecstate, cregs->ebarg_tpc, cregs->ebarg_lra);
+		       instruction_pointer(cregs), user_stack_pointer(cregs),
+		       cregs->a0, cregs->a2,
+		       cregs->cstate, cregs->tpc, cregs->ra);
 		linx_clone_dbg_left--;
 	}
 

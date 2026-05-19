@@ -169,6 +169,30 @@
 		: [p] "r" (ptr), [o] "r" (old), [n] "r" (new)	\
 		: "memory")
 
+#define ASM_CMPXCHG_MASKED(ret, ptr, old, new)				\
+({									\
+	__typeof__(ptr) __ptr = (ptr);					\
+	unsigned int *__ptr32 = (unsigned int *)((unsigned long)__ptr & ~0x3UL); \
+	unsigned long __shift =					\
+		((unsigned long)__ptr & (0x4 - sizeof(*__ptr))) * 8;	\
+	unsigned int __mask =					\
+		(((1U << (sizeof(*__ptr) * 8)) - 1U) << __shift);	\
+	unsigned int __oldword, __newword, __prevword;			\
+									\
+	for (;;) {							\
+		__oldword = *(volatile unsigned int *)__ptr32;		\
+		(ret) = (__typeof__(ret))((__oldword & __mask) >> __shift); \
+		if ((ret) != (old))					\
+			break;						\
+		__newword = (__oldword & ~__mask) |			\
+			    ((((unsigned int)(new)) << __shift) & __mask); \
+		ASM_CMPXCHG(w, .aqrl, __prevword, __newword,		\
+			    (long)__oldword, __ptr32);			\
+		if (__prevword == __oldword)				\
+			break;						\
+	}								\
+})
+
 #define __cmpxchg_relaxed(ptr, old, new, size)				\
 ({									\
 	__typeof__(ptr) __ptr = (ptr);					\
@@ -176,11 +200,15 @@
 	__typeof__(*(ptr)) __new = (new);				\
 	__typeof__(*(ptr)) __ret;					\
 	switch (size) {							\
+	case 1:								\
+	case 2:								\
+		ASM_CMPXCHG_MASKED(__ret, __ptr, __old, __new);		\
+		break;							\
 	case 4:								\
-		ASM_CMPXCHG(w, , __ret, __new, (long)__old, __ptr);	\
+		ASM_CMPXCHG(w, .aqrl, __ret, __new, (long)__old, __ptr);	\
 		break;							\
 	case 8:								\
-		ASM_CMPXCHG(d, , __ret, __new, __old, __ptr);	\
+		ASM_CMPXCHG(d, .aqrl, __ret, __new, __old, __ptr);	\
 		break;							\
 	default:							\
 		BUILD_BUG();						\
@@ -203,6 +231,10 @@
 	__typeof__(*(ptr)) __new = (new);				\
 	__typeof__(*(ptr)) __ret;					\
 	switch (size) {							\
+	case 1:								\
+	case 2:								\
+		ASM_CMPXCHG_MASKED(__ret, __ptr, __old, __new);		\
+		break;							\
 	case 4:								\
 		ASM_CMPXCHG(w, .aq,		\
 			__ret, __new, (long)__old, __ptr);		\
@@ -232,6 +264,10 @@
 	__typeof__(*(ptr)) __new = (new);				\
 	__typeof__(*(ptr)) __ret;					\
 	switch (size) {							\
+	case 1:								\
+	case 2:								\
+		ASM_CMPXCHG_MASKED(__ret, __ptr, __old, __new);		\
+		break;							\
 	case 4:								\
 		ASM_CMPXCHG(w, .rl, 		\
 			__ret, __new, (long)__old, __ptr);		\
@@ -261,6 +297,10 @@
 	__typeof__(*(ptr)) __new = (new);				\
 	__typeof__(*(ptr)) __ret;					\
 	switch (size) {							\
+	case 1:								\
+	case 2:								\
+		ASM_CMPXCHG_MASKED(__ret, __ptr, __old, __new);		\
+		break;							\
 	case 4:								\
 		ASM_CMPXCHG(w, .aqrl, 		\
 			__ret, __new, (long)__old, __ptr);		\

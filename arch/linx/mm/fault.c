@@ -294,7 +294,8 @@ retry:
 		bad_area(regs, mm, code, addr);
 		return;
 	}
-	if (unlikely(expand_stack(vma, addr))) {
+	vma = expand_stack(mm, addr);
+	if (unlikely(!vma)) {
 		tsk->thread.bad_cause = cause;
 		bad_area(regs, mm, code, addr);
 		return;

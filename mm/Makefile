@@ -33,7 +33,7 @@ KCOV_INSTRUMENT_failslab.o := n
 
 CFLAGS_init-mm.o += -Wno-override-init
 
-ifdef CONFIG_LINX
+ifdef CONFIG_RISCV
 # LinxISA bring-up: work around remaining clang backend issues in early percpu
 # setup by compiling the core percpu allocator at -O0.
 CFLAGS_percpu.o += -O0

@@ -1738,11 +1738,11 @@ static int do_wait_pid(struct wait_opts *wo)
 		       !!target->ptrace, target->flags, target->files, current->files,
 		       target->files == current->files, target->mm,
 		       wo->wo_flags);
-		pr_err("linx: do_wait_pid tgid regs pid=%d pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx orig_a0=0x%lx ecstate=0x%lx trapno=0x%lx eb_tpc=0x%lx eb_lra=0x%lx uq0=0x%lx uq1=0x%lx tq0=0x%lx\n",
-		       target->pid, tregs->regs[PTR_PC], tregs->regs[PTR_R1],
-		       tregs->regs[PTR_R10], tregs->regs[PTR_R2], tregs->orig_a0,
-		       tregs->ecstate, tregs->trapno, tregs->ebarg_tpc, tregs->ebarg_lra,
-		       tregs->ebarg_uq[0], tregs->ebarg_uq[1], tregs->ebarg_tq[0]);
+		pr_err("linx: do_wait_pid tgid regs pid=%d pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx orig_a0=0x%lx cstate=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx ebarg=0x%lx\n",
+		       target->pid, instruction_pointer(tregs), user_stack_pointer(tregs),
+		       tregs->a0, tregs->a2, tregs->orig_a0,
+		       tregs->cstate, tregs->trapno, tregs->tpc, tregs->ra,
+		       tregs->ebarg);
 		linx_wait_pid_dbg_left--;
 	}
 	if (target && is_effectively_child(wo, ptrace, target)) {
@@ -1750,14 +1750,14 @@ static int do_wait_pid(struct wait_opts *wo)
 
 		retval = wait_consider_task(wo, ptrace, target);
 		if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1)) {
-			pr_err("linx: do_wait_pid tgid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx trapno=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
+			pr_err("linx: do_wait_pid tgid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx\n",
 			       retval, target->pid, target->__state, target->exit_state,
 			       target->exit_code,
 			       target->signal ? target->signal->group_exit_code : 0,
 			       target->flags,
-			       tregs->regs[PTR_PC], tregs->regs[PTR_R1],
-			       tregs->regs[PTR_R10], tregs->regs[PTR_R2],
-			       tregs->trapno, tregs->ebarg_tpc, tregs->ebarg_lra);
+			       instruction_pointer(tregs), user_stack_pointer(tregs),
+			       tregs->a0, tregs->a2,
+			       tregs->trapno, tregs->tpc, tregs->ra);
 			linx_wait_pid_dbg_left--;
 		}
 		if (retval)
@@ -1777,11 +1777,11 @@ static int do_wait_pid(struct wait_opts *wo)
 		       !!target->ptrace, target->flags, target->files, current->files,
 		       target->files == current->files, target->mm,
 		       wo->wo_flags);
-		pr_err("linx: do_wait_pid pid regs pid=%d pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx orig_a0=0x%lx ecstate=0x%lx trapno=0x%lx eb_tpc=0x%lx eb_lra=0x%lx uq0=0x%lx uq1=0x%lx tq0=0x%lx\n",
-		       target->pid, tregs->regs[PTR_PC], tregs->regs[PTR_R1],
-		       tregs->regs[PTR_R10], tregs->regs[PTR_R2], tregs->orig_a0,
-		       tregs->ecstate, tregs->trapno, tregs->ebarg_tpc, tregs->ebarg_lra,
-		       tregs->ebarg_uq[0], tregs->ebarg_uq[1], tregs->ebarg_tq[0]);
+		pr_err("linx: do_wait_pid pid regs pid=%d pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx orig_a0=0x%lx cstate=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx ebarg=0x%lx\n",
+		       target->pid, instruction_pointer(tregs), user_stack_pointer(tregs),
+		       tregs->a0, tregs->a2, tregs->orig_a0,
+		       tregs->cstate, tregs->trapno, tregs->tpc, tregs->ra,
+		       tregs->ebarg);
 		linx_wait_pid_dbg_left--;
 	}
 	if (target && target->ptrace &&
@@ -1790,14 +1790,14 @@ static int do_wait_pid(struct wait_opts *wo)
 
 		retval = wait_consider_task(wo, ptrace, target);
 		if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1)) {
-			pr_err("linx: do_wait_pid pid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx r10=0x%lx r2=0x%lx trapno=0x%lx eb_tpc=0x%lx eb_lra=0x%lx\n",
+			pr_err("linx: do_wait_pid pid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx\n",
 			       retval, target->pid, target->__state, target->exit_state,
 			       target->exit_code,
 			       target->signal ? target->signal->group_exit_code : 0,
 			       target->flags,
-			       tregs->regs[PTR_PC], tregs->regs[PTR_R1],
-			       tregs->regs[PTR_R10], tregs->regs[PTR_R2],
-			       tregs->trapno, tregs->ebarg_tpc, tregs->ebarg_lra);
+			       instruction_pointer(tregs), user_stack_pointer(tregs),
+			       tregs->a0, tregs->a2,
+			       tregs->trapno, tregs->tpc, tregs->ra);
 			linx_wait_pid_dbg_left--;
 		}
 		if (retval)

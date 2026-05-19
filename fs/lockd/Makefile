@@ -5,6 +5,10 @@
 
 ccflags-y += -I$(src)			# needed for trace events
 
+# LinxISA bring-up: multiple lockd translation units currently trip the same
+# Linx SelectionDAG crash family with loop/SLP vectorization enabled under O2.
+ccflags-y += -fno-vectorize -fno-slp-vectorize
+
 obj-$(CONFIG_LOCKD) += lockd.o
 
 lockd-y := clntlock.o clntproc.o clntxdr.o host.o svc.o svclock.o \

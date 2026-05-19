@@ -126,6 +126,13 @@ CFLAGS_string.o += -Og
 CFLAGS_kasprintf.o += -Og
 endif
 
+ifdef CONFIG_RISCV
+# LinxISA bring-up rides the RISC-V config surface here. prandom_u32_state
+# currently trips the same SelectionDAG crash family when loop/SLP
+# vectorization is enabled under O2.
+CFLAGS_random32.o += -fno-vectorize -fno-slp-vectorize
+endif
+
 ifeq ($(CONFIG_DEBUG_KOBJECT),y)
 CFLAGS_kobject.o += -DDEBUG
 CFLAGS_kobject_uevent.o += -DDEBUG
