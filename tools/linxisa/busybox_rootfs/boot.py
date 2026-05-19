@@ -164,6 +164,8 @@ def main() -> int:
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
+    if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
+        qemu_extra_args.extend(["-bios", "none"])
 
     script = os.environ.get(
         "SCRIPT",

@@ -55,16 +55,18 @@
  */
 #define access_ok(addr, size) ({					\
 	__chk_user_ptr(addr);						\
-	likely(__access_ok((unsigned long __force)(addr), (size)));	\
+	likely(__access_ok((const void __user *)(addr), (size)));	\
 })
 
 /*
  * Ensure that the range [addr, addr+size) is within the process's
  * address space
  */
-static inline int __access_ok(unsigned long addr, unsigned long size)
+static inline int __access_ok(const void __user *addr, unsigned long size)
 {
-	return size <= TASK_SIZE && addr <= TASK_SIZE - size;
+	unsigned long uaddr = (unsigned long __force)addr;
+
+	return size <= TASK_SIZE && uaddr <= TASK_SIZE - size;
 }
 
 /*
@@ -93,7 +95,7 @@ do {								\
 	__typeof__(x) __x;					\
 	__asm__ __volatile__ (					\
 	"1:\n"							\
-	"L.BSTART.std fall, 3f\n"						\
+	"BSTART.std fall, 3f\n"						\
 		insn " [%[src], 0], -> t\n"				\
 		"addi t#1, 0, -> %[dst]\n"				\
 	"2:\n"							\
@@ -201,7 +203,7 @@ do {									\
 	__typeof__(*(ptr)) __x = x;					\
 	__asm__ __volatile__ (						\
 	"1:\n"								\
-	"L.BSTART.std fall, 3f\n"						\
+	"BSTART.std fall, 3f\n"						\
 		insn " %[src], [%[dst], 0]\n"					\
 	"2:\n"								\
 	".section .fixup,\"ax\"\n"					\

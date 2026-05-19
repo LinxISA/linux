@@ -7,9 +7,9 @@
  */
 
 #include <linux/signal.h>
+#include <linux/resume_user_mode.h>
 #include <linux/uaccess.h>
 #include <linux/syscalls.h>
-#include <linux/tracehook.h>
 #include <linux/linkage.h>
 
 #include <asm/ucontext.h>
@@ -185,7 +185,7 @@ static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
 
 	/* Set up to return from userspace. */
 #ifdef SA_RESTORER
-	regs->ra = ksig->ka.sa.sa_restorer;
+	regs->ra = (unsigned long)ksig->ka.sa.sa_restorer;
 #else
 	regs->ra = (unsigned long)VDSO_SYMBOL(
 		current->mm->context.vdso, rt_sigreturn);
@@ -308,5 +308,5 @@ asmlinkage __visible void do_notify_resume(struct pt_regs *regs,
 		do_signal(regs);
 
 	if (thread_info_flags & _TIF_NOTIFY_RESUME)
-		tracehook_notify_resume(regs);
+		resume_user_mode_work(regs);
 }

@@ -71,6 +71,8 @@ def main() -> int:
         "-append",
         append,
     ]
+    if "-bios" not in cmd and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
+        cmd += ["-bios", "none"]
     cmd.extend(qemu_extra_args)
 
     proc = subprocess.Popen(

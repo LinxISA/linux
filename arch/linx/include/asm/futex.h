@@ -23,7 +23,7 @@
 #define AMOSWAP_W_INSN			\
 	"addi %[u], 0, -> t	\n"	\
 	"lwi  [t#1, 0], -> t	\n"	\
-	"addi %z[op], 0, -> t	\n"	\
+	"addi %[op], 0, -> t	\n"	\
 	"swi  t#1, [t#3, 0]	\n"	\
 	"addi t#3, 0, -> %[ov]	\n"	\
 
@@ -31,7 +31,7 @@
 #define AMOADD_W_INSN			\
 	"addi %[u], 0, -> t	\n"	\
 	"lwi  [t#1, 0], -> t	\n"	\
-	"addi %z[op], 0, -> t	\n"	\
+	"addi %[op], 0, -> t	\n"	\
 	"add t#1, t#2, -> t	\n"	\
 	"swi  t#1, [t#4, 0]	\n"	\
 	"addi t#4, 0, -> %[ov]	\n"	\
@@ -40,7 +40,7 @@
 #define AMOOR_W_INSN			\
 	"addi %[u], 0, -> t	\n"	\
 	"lwi  [t#1, 0], -> t	\n"	\
-	"addi %z[op], 0, -> t	\n"	\
+	"addi %[op], 0, -> t	\n"	\
 	"or  t#1, t#2, -> t	\n"	\
 	"swi  t#1, [t#4, 0]	\n"	\
 	"addi t#4, 0, -> %[ov]	\n"	\
@@ -49,7 +49,7 @@
 #define AMOAND_W_INSN			\
 	"addi %[u], 0, -> t	\n"	\
 	"lwi [t#1, 0], -> t	\n"	\
-	"addi %z[op], 0, -> t	\n"	\
+	"addi %[op], 0, -> t	\n"	\
 	"and t#1, t#2, -> t	\n"	\
 	"swi  t#1, [t#4, 0]	\n"	\
 	"addi t#4, 0, -> %[ov]	\n"	\
@@ -58,7 +58,7 @@
 #define AMOXOR_W_INSN			\
 	"addi %[u], 0, -> t	\n"	\
 	"lwi [t#1, 0], -> t	\n"	\
-	"addi %z[op], 0, -> t	\n"	\
+	"addi %[op], 0, -> t	\n"	\
 	"xor t#1, t#2, -> t	\n"	\
 	"swi  t#1, [t#4, 0]	\n"	\
 	"addi t#4, 0, -> %[ov]	\n"	\
@@ -68,7 +68,7 @@
 	__enable_user_access();					\
 	__asm__ __volatile__ (					\
 		"1:					\n"	\
-		"L.BSTART.std fall, 3f			\n"	\
+		"BSTART.std fall, 3f			\n"	\
 		"b.attr aqrl				\n"	\
 			"" insn "			\n"	\
 		"2:					\n"	\
@@ -144,14 +144,14 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	__enable_user_access();
 	__asm__ __volatile__ (
 		"10:					\n"
-		"L.BSTART.sys fall, 3f			\n"
+		"BSTART.sys fall, 3f			\n"
 			"lr.w.aqrl [%[u]], -> t		\n"
 			"addi t#1, 0, -> %[v]		\n"
-			"sub %z[ov], t#1, -> %[equ]	\n"
+			"sub %[ov], t#1, -> %[equ]	\n"
 		"BSTART.std cond, 1f			\n"
 			"setc.ne %[equ], zero		\n"
 		"BSTART.std cond, 10b			\n"
-			"sc.w.aqrl %z[nv], [%[u]] -> t	\n"
+			"sc.w.aqrl %[nv], [%[u]] -> t	\n"
 			"setc.ne t#1, zero		\n"
 		"BSTART.std direct, 1f			\n"
 			"bstop				\n"

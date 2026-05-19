@@ -18,3 +18,7 @@ ext4-inode-test-objs			+= inode-test.o
 obj-$(CONFIG_EXT4_KUNIT_TESTS)		+= ext4-inode-test.o
 ext4-$(CONFIG_FS_VERITY)		+= verity.o
 ext4-$(CONFIG_FS_ENCRYPTION)		+= crypto.o
+
+# LinxISA bring-up: ext4 ioctl currently trips a Linx SelectionDAG crash under
+# O2 when loop/SLP vectorization is enabled.
+CFLAGS_ioctl.o += -fno-vectorize -fno-slp-vectorize

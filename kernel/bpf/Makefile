@@ -63,3 +63,7 @@ CFLAGS_REMOVE_queue_stack_maps.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_lpm_trie.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_ringbuf.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_rqspinlock.o = $(CC_FLAGS_FTRACE)
+
+# Temporary Linx backend workaround: SelectionDAG currently crashes in
+# kernel/bpf/verifier.o with vectorizers enabled under O2.
+CFLAGS_verifier.o += -fno-vectorize -fno-slp-vectorize

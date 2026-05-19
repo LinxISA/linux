@@ -75,10 +75,11 @@ void flush_icache_mm(struct mm_struct *mm, bool local)
 #ifdef CONFIG_MMU
 void flush_icache_pte(struct mm_struct *mm, pte_t pte)
 {
-	(void)mm;
-	struct page *page = pte_page(pte);
+	struct folio *folio = page_folio(pte_page(pte));
 
-	if (!test_and_set_bit(PG_dcache_clean, &page->flags))
-		flush_icache_all();
+	if (!test_bit(PG_dcache_clean, &folio->flags.f)) {
+		flush_icache_mm(mm, false);
+		set_bit(PG_dcache_clean, &folio->flags.f);
+	}
 }
 #endif /* CONFIG_MMU */

@@ -9,6 +9,7 @@
 #include <linux/init.h>
 #include <linux/mm.h>
 #include <linux/memblock.h>
+#include <linux/mmzone.h>
 #include <linux/initrd.h>
 #include <linux/swap.h>
 #include <linux/swiotlb.h>
@@ -20,6 +21,7 @@
 #include <linux/dma-map-ops.h>
 #include <linux/crash_dump.h>
 #include <linux/hugetlb.h>
+#include <linux/kfence.h>
 
 #include <asm/fixmap.h>
 #include <asm/tlbflush.h>
@@ -30,6 +32,9 @@
 #include <asm/ssr.h>
 
 #include "../kernel/head.h"
+
+extern void memblock_free_all(void);
+extern unsigned long max_mapnr;
 
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
@@ -117,16 +122,15 @@ static void print_vm_layout(void) { }
 
 void __init mem_init(void)
 {
+	bool swiotlb = false;
+
 #ifdef CONFIG_FLATMEM
 	BUG_ON(!mem_map);
 #endif /* CONFIG_FLATMEM */
 
 #ifdef CONFIG_SWIOTLB
-	if (swiotlb_force == SWIOTLB_FORCE ||
-	    max_pfn > PFN_DOWN(dma32_phys_limit))
-		swiotlb_init(1);
-	else
-		swiotlb_force = SWIOTLB_NO_FORCE;
+	swiotlb = max_pfn > PFN_DOWN(dma32_phys_limit);
+	swiotlb_init(swiotlb, SWIOTLB_VERBOSE);
 #endif
 	high_memory = (void *)(__va(PFN_PHYS(max_low_pfn)));
 	memblock_free_all();
@@ -203,7 +207,7 @@ static void __init setup_bootmem(void)
 	max_low_pfn = max_pfn = PFN_DOWN(phys_ram_end);
 
 	dma32_phys_limit = min(4UL * SZ_1G, (unsigned long)PFN_PHYS(max_low_pfn));
-	set_max_mapnr(max_low_pfn - ARCH_PFN_OFFSET);
+	max_mapnr = max_low_pfn - ARCH_PFN_OFFSET;
 
 	reserve_initrd_mem();
 	/*
@@ -307,12 +311,10 @@ static inline phys_addr_t __init alloc_pte_fixmap(uintptr_t va)
 
 static phys_addr_t __init alloc_pte_late(uintptr_t va)
 {
-	unsigned long vaddr;
+	struct ptdesc *ptdesc = pagetable_alloc(GFP_KERNEL & ~__GFP_HIGHMEM, 0);
 
-	vaddr = __get_free_page(GFP_KERNEL);
-	BUG_ON(!vaddr || !pgtable_pte_page_ctor(virt_to_page(vaddr)));
-
-	return __pa(vaddr);
+	BUG_ON(!ptdesc || !pagetable_pte_ctor(NULL, ptdesc));
+	return __pa((pte_t *)ptdesc_address(ptdesc));
 }
 
 static void __init create_pte_mapping(pte_t *ptep,
@@ -748,7 +750,7 @@ retry:
  * for init.o in mm/Makefile.
  */
 
-#ifndef __linx_cmodel_medany
+#if !defined(__clang__) && !defined(__linx_cmodel_medany)
 #error "setup_vm() is called from head.S before relocate so it should not use absolute addressing."
 #endif
 

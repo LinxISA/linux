@@ -210,12 +210,9 @@ ETEMP_IS_TLS:
 	hl.ssrset zero, SSR_ETEMP // it's already zero
 
 	/* Load the global pointer */
-.option push
-.option norelax
 	1: addtpc %tpcrel_hi(__global_pointer$), -> t
 	addi t#1, %tpcrel_lo(1b), -> t
 	ssrset t#1, SSR_GP
-.option pop
 
 	/*
 	 * MSB (SSR_TRAPNO.E) of SSR_TRAPNO
@@ -422,7 +419,10 @@ restore_all:
 	BSTART.sys fall
 	addi sp, PT_BPC, -> t
 	ldi [t#1, 0], -> t	/* sp holds &pt_regs */
-	sc.d t#1, [t#2], -> t	/* this should't be optimized away */
+	/* Bring-up lane: skip explicit LR/SC reservation clear until SC parsing
+	 * support is fully propagated through the production compiler build.
+	 */
+	addi zero, 0, -> t
 
 	/* restore register except ebstate */
 	/* restore gp, tp, ecstate */
@@ -635,7 +635,7 @@ ENTRY(__switch_to)
 ENDPROC(__switch_to)
 
 	.section ".rodata"
-	.align LGREG
+	.p2align LGREG
 	/* Exception vector table */
 ENTRY(excp_vect_table)
 	RISCV_PTR do_trap_insn_exception

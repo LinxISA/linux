@@ -16,6 +16,17 @@
 #include <linux/types.h>
 #include <linux/slab.h>
 
+#ifdef CONFIG_LINX
+/*
+ * The rootfs bring-up lane still trips return-path E_BLOCK failures inside the
+ * badblocks update path. Keep these helpers out-of-line and unoptimized until
+ * the underlying call/return closure is fully stable.
+ */
+#define LINX_BADBLOCKS_FN __attribute__((optnone)) noinline
+#else
+#define LINX_BADBLOCKS_FN
+#endif
+
 /*
  * The purpose of badblocks set/clear is to manage bad blocks ranges which are
  * identified by LBA addresses.
@@ -836,8 +847,8 @@ static bool try_adjacent_combine(struct badblocks *bb, int prev)
 }
 
 /* Do exact work to set bad block range into the bad block table */
-static bool _badblocks_set(struct badblocks *bb, sector_t s, sector_t sectors,
-			   int acknowledged)
+static LINX_BADBLOCKS_FN bool _badblocks_set(struct badblocks *bb, sector_t s,
+					     sector_t sectors, int acknowledged)
 {
 	int len = 0, added = 0;
 	struct badblocks_context bad;
@@ -1046,7 +1057,8 @@ static int front_splitting_clear(struct badblocks *bb, int prev,
 }
 
 /* Do the exact work to clear bad block range from the bad block table */
-static bool _badblocks_clear(struct badblocks *bb, sector_t s, sector_t sectors)
+static LINX_BADBLOCKS_FN bool _badblocks_clear(struct badblocks *bb, sector_t s,
+					       sector_t sectors)
 {
 	struct badblocks_context bad;
 	int prev = -1, hint = -1;
