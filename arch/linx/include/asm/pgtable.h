@@ -91,6 +91,7 @@
 #include <linux/mm_types.h>
 
 #include <asm/pgtable-64.h>
+#include <linux/page_table_check.h>
 
 #define XIP_FIXUP(addr)		(addr)
 
@@ -264,8 +265,6 @@ static inline pte_t pfn_pte(unsigned long pfn, pgprot_t prot)
 	return __pte((pfn << _PAGE_PFN_SHIFT) | pgprot_val(prot));
 }
 
-#define mk_pte(page, prot)       pfn_pte(page_to_pfn(page), prot)
-
 static inline int pte_present(pte_t pte)
 {
 	return (pte_val(pte) & (_PAGE_PRESENT | _PAGE_PROT_NONE));
@@ -315,7 +314,7 @@ static inline pte_t pte_wrprotect(pte_t pte)
 
 /* static inline pte_t pte_mkread(pte_t pte) */
 
-static inline pte_t pte_mkwrite(pte_t pte)
+static inline pte_t pte_mkwrite_novma(pte_t pte)
 {
 	return __pte(pte_val(pte) | _PAGE_WRITE);
 }
@@ -415,15 +414,23 @@ static inline void set_pte(pte_t *ptep, pte_t pteval)
 	*ptep = pteval;
 }
 
-void flush_icache_pte(pte_t pte);
+void flush_icache_pte(struct mm_struct *mm, pte_t pte);
+
+static inline void __set_pte_at(struct mm_struct *mm,
+	unsigned long addr, pte_t *ptep, pte_t pteval)
+{
+	if (pte_present(pteval) && pte_exec(pteval))
+		flush_icache_pte(mm, pteval);
+
+	set_pte(ptep, pteval);
+}
+
+#define PFN_PTE_SHIFT		_PAGE_PFN_SHIFT
 
 static inline void set_pte_at(struct mm_struct *mm,
 	unsigned long addr, pte_t *ptep, pte_t pteval)
 {
-	if (pte_present(pteval) && pte_exec(pteval))
-		flush_icache_pte(pteval);
-
-	set_pte(ptep, pteval);
+	__set_pte_at(mm, addr, ptep, pteval);
 }
 
 static inline void pte_clear(struct mm_struct *mm,
@@ -550,11 +557,13 @@ static inline int pmd_write(pmd_t pmd)
 	return pte_write(pmd_pte(pmd));
 }
 
+#define pmd_dirty pmd_dirty
 static inline int pmd_dirty(pmd_t pmd)
 {
 	return pte_dirty(pmd_pte(pmd));
 }
 
+#define pmd_young pmd_young
 static inline int pmd_young(pmd_t pmd)
 {
 	return pte_young(pmd_pte(pmd));
@@ -570,9 +579,9 @@ static inline pmd_t pmd_mkyoung(pmd_t pmd)
 	return pte_pmd(pte_mkyoung(pmd_pte(pmd)));
 }
 
-static inline pmd_t pmd_mkwrite(pmd_t pmd)
+static inline pmd_t pmd_mkwrite_novma(pmd_t pmd)
 {
-	return pte_pmd(pte_mkwrite(pmd_pte(pmd)));
+	return pte_pmd(pte_mkwrite_novma(pmd_pte(pmd)));
 }
 
 static inline pmd_t pmd_wrprotect(pmd_t pmd)

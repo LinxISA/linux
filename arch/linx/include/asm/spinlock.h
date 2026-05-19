@@ -17,11 +17,11 @@
 
 /* FIXME: Replace this with a ticket lock, like MIPS. */
 
-#define arch_spin_is_locked(x)	(READ_ONCE((x)->lock) != 0)
+#define arch_spin_is_locked(x)	(READ_ONCE((x)->locked) != 0)
 
 static inline void arch_spin_unlock(arch_spinlock_t *lock)
 {
-	smp_store_release(&lock->lock, 0);
+	smp_store_release(&lock->locked, 0);
 }
 
 #if 0 /* TODO: 先注释掉，优先保证内核整体编译通过 */
@@ -45,7 +45,7 @@ static inline int arch_spin_trylock(arch_spinlock_t *lock)
 static inline int arch_spin_trylock(arch_spinlock_t *lock)
 {
 	int busy, tmp = 1;
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->val.counter) *ptr = &lock->val.counter;
 
 	__asm__ __volatile__(
 		"BSTART.sys fall\n"
@@ -153,7 +153,7 @@ static inline void arch_read_unlock(arch_rwlock_t *lock)
 
 static inline void arch_read_lock(arch_rwlock_t *lock)
 {
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->cnts.counter) *ptr = &lock->cnts.counter;
 	unsigned int tmp;
 	__asm__ __volatile__(
 		"1:\n"
@@ -174,7 +174,7 @@ static inline void arch_read_lock(arch_rwlock_t *lock)
 
 static inline void arch_write_lock(arch_rwlock_t *lock)
 {
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->cnts.counter) *ptr = &lock->cnts.counter;
 	int lr_res, sc_res;
 
 	__asm__ __volatile__(
@@ -198,7 +198,7 @@ static inline int arch_read_trylock(arch_rwlock_t *lock)
 {
 	int busy;
 	int sc_res; /* sys block can't do conditional jump, need pass the result to the next std block and jump */
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->cnts.counter) *ptr = &lock->cnts.counter;
 
 	__asm__ __volatile__(
 		"1:\n"
@@ -223,7 +223,7 @@ static inline int arch_read_trylock(arch_rwlock_t *lock)
 static inline int arch_write_trylock(arch_rwlock_t *lock)
 {
 	int busy;
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->cnts.counter) *ptr = &lock->cnts.counter;
 
 	__asm__ __volatile__(
 		"BSTART.sys fall\n"
@@ -237,7 +237,7 @@ static inline int arch_write_trylock(arch_rwlock_t *lock)
 
 static inline void arch_read_unlock(arch_rwlock_t *lock)
 {
-	__typeof__(lock->lock) *ptr = &lock->lock;
+	__typeof__(lock->cnts.counter) *ptr = &lock->cnts.counter;
 
 	__asm__ __volatile__(
 		"BSTART.sys fall\n"
@@ -252,7 +252,7 @@ static inline void arch_read_unlock(arch_rwlock_t *lock)
 
 static inline void arch_write_unlock(arch_rwlock_t *lock)
 {
-	smp_store_release(&lock->lock, 0);
+	smp_store_release(&lock->cnts.counter, 0);
 }
 
 #endif /* _ASM_LINX_SPINLOCK_H */

@@ -14,31 +14,19 @@ ifeq ($(CONFIG_DYNAMIC_FTRACE),y)
 	CC_FLAGS_FTRACE := -fpatchable-function-entry=8
 endif
 
-ifeq ($(CONFIG_CMODEL_MEDLOW),y)
-KBUILD_CFLAGS_MODULE += -mcmodel=medany
-endif
-
 export BITS
 ifeq ($(CONFIG_ARCH_RV64I),y)
 	BITS := 64
 	UTS_MACHINE := linx64
 
-	KBUILD_CFLAGS += -mabi=lp64
-	KBUILD_AFLAGS += -mabi=lp64
-
 	KBUILD_LDFLAGS += -melf64llinxv5
 else
 	BITS := 32
 	UTS_MACHINE := linx32
-
-	KBUILD_CFLAGS += -mabi=ilp32
-	KBUILD_AFLAGS += -mabi=ilp32
 	KBUILD_LDFLAGS += -melf32llinxv5
 endif
 
 ifeq ($(CONFIG_LD_IS_LLD),y)
-	KBUILD_CFLAGS += -mno-relax
-	KBUILD_AFLAGS += -mno-relax
 ifndef CONFIG_AS_IS_LLVM
 	KBUILD_CFLAGS += -Wa,-mno-relax
 	KBUILD_AFLAGS += -Wa,-mno-relax
@@ -53,26 +41,15 @@ linx-march-$(CONFIG_RISCV_ISA_C)	:= $(linx-march-y)c
 KBUILD_CFLAGS += -march=$(subst fd,,$(linx-march-y))
 KBUILD_AFLAGS += -march=$(linx-march-y)
 
-KBUILD_CFLAGS += -mno-save-restore
 KBUILD_CFLAGS += -DCONFIG_PAGE_OFFSET=$(CONFIG_PAGE_OFFSET)
-
-ifeq ($(CONFIG_CMODEL_MEDLOW),y)
-	KBUILD_CFLAGS += -mcmodel=medlow
-endif
-ifeq ($(CONFIG_CMODEL_MEDANY),y)
-	KBUILD_CFLAGS += -mcmodel=medany
-endif
 ifeq ($(CONFIG_PERF_EVENTS),y)
         KBUILD_CFLAGS += -fno-omit-frame-pointer
 endif
-
-KBUILD_CFLAGS_MODULE += $(call cc-option,-mno-relax)
 
 # GCC versions that support the "-mstrict-align" option default to allowing
 # unaligned accesses.  While unaligned accesses are explicitly allowed in the
 # RISC-V ISA, they're emulated by machine mode traps on all extant
 # architectures.  It's faster to have GCC emit only aligned accesses.
-KBUILD_CFLAGS += $(call cc-option,-mstrict-align)
 
 ifeq ($(CONFIG_STACKPROTECTOR_PER_TASK),y)
 prepare: stack_protector_prepare

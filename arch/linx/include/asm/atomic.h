@@ -11,6 +11,13 @@
 #ifdef CONFIG_GENERIC_ATOMIC64
 # include <asm-generic/atomic64.h>
 #else
+# ifndef __linx_xlen
+#  if __SIZEOF_POINTER__ == 8
+#   define __linx_xlen 64
+#  elif __SIZEOF_POINTER__ == 4
+#   define __linx_xlen 32
+#  endif
+# endif
 # if (__linx_xlen < 64)
 #  error "64-bit atomics require XLEN to be at least 64"
 # endif

@@ -20,7 +20,6 @@
 #include <asm-generic/bitops/fls.h>
 #include <asm-generic/bitops/__fls.h>
 #include <asm-generic/bitops/fls64.h>
-#include <asm-generic/bitops/find.h>
 #include <asm-generic/bitops/sched.h>
 #include <asm-generic/bitops/ffs.h>
 
@@ -204,6 +203,23 @@ static inline void __clear_bit_unlock(
 	unsigned long nr, volatile unsigned long *addr)
 {
 	clear_bit_unlock(nr, addr);
+}
+
+static __always_inline bool arch_xor_unlock_is_negative_byte(unsigned long mask,
+		volatile unsigned long *addr)
+{
+	unsigned long res = test_and_change_bit(0, addr) ? BIT(7) : 0;
+
+	if (!(mask & BIT(0)))
+		clear_bit(0, addr);
+
+	return (res & BIT(7)) != 0;
+}
+
+static inline bool xor_unlock_is_negative_byte(unsigned long mask,
+		volatile unsigned long *addr)
+{
+	return arch_xor_unlock_is_negative_byte(mask, addr);
 }
 
 #undef __test_and_op_bit

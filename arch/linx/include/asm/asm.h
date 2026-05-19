@@ -6,10 +6,18 @@
 #ifndef _ASM_RISCV_ASM_H
 #define _ASM_RISCV_ASM_H
 
-#ifdef __ASSEMBLY__
+#ifdef __ASSEMBLER__
 #define __ASM_STR(x)	x
 #else
 #define __ASM_STR(x)	#x
+#endif
+
+#ifndef __linx_xlen
+# if __SIZEOF_POINTER__ == 8
+#  define __linx_xlen 64
+# elif __SIZEOF_POINTER__ == 4
+#  define __linx_xlen 32
+# endif
 #endif
 
 #if __linx_xlen == 64

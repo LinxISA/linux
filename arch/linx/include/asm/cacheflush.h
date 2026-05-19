@@ -22,8 +22,10 @@ static inline void local_flush_icache_all(void)
 
 static inline void flush_dcache_page(struct page *page)
 {
-	if (test_bit(PG_dcache_clean, &page->flags))
-		clear_bit(PG_dcache_clean, &page->flags);
+	volatile unsigned long *flags = (volatile unsigned long *)&page->flags;
+
+	if (test_bit(PG_dcache_clean, flags))
+		clear_bit(PG_dcache_clean, flags);
 }
 #define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 1
 
