@@ -122,12 +122,44 @@
 #include <kunit/test.h>
 
 static int kernel_init(void *);
+static char *static_command_line;
+
+#ifdef CONFIG_LINX
+static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
+						 unsigned long flags,
+						 const char *name, bool kthread);
+static noinline void linx_call_void_indirect(void (*fn)(void));
+static noinline void __noreturn linx_call_noreturn_indirect(void (*fn)(void));
+#endif
 
 #ifdef CONFIG_LINX
 static __always_inline void linx_boot_mark(char c)
 {
+#ifdef CONFIG_LINX_DEBUG
 	linx_debug_uart_putc(c);
+#else
+	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+#endif
 }
+
+static __always_inline void linx_boot_mark_hex_u8(unsigned char v)
+{
+	static const char hexdigits[] = "0123456789abcdef";
+
+	linx_boot_mark(hexdigits[(v >> 4) & 0xf]);
+	linx_boot_mark(hexdigits[v & 0xf]);
+}
+
+static __always_inline void linx_boot_dump_cmdline_prefix(char tag)
+{
+	int i;
+
+	linx_boot_mark('=');
+	linx_boot_mark(tag);
+	for (i = 0; i < 8; i++)
+		linx_boot_mark_hex_u8((unsigned char)static_command_line[i]);
+}
+
 #else
 static __always_inline void linx_boot_mark(char c)
 {
@@ -569,6 +601,10 @@ static int __init unknown_bootoption(char *param, char *val,
 	 */
 	const char *bootloader[] = { "BOOT_IMAGE=", "kexec", NULL };
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+	linx_virt_uart_mark_unknown_bootoption(param);
+#endif
+
 	/* Handle params aliased to sysctls */
 	if (sysctl_is_alias(param))
 		return 0;
@@ -725,19 +761,46 @@ static void __init setup_command_line(char *command_line)
 
 static __initdata DECLARE_COMPLETION(kthreadd_done);
 
+#if defined(CONFIG_LINX)
+static __always_inline void __ref __noreturn rest_init(void)
+#else
 static noinline void __ref __noreturn rest_init(void)
+#endif
 {
 	struct task_struct *tsk;
 	int pid;
 
+#ifdef CONFIG_LINX
+	linx_boot_mark('0');
+#endif
+#if defined(CONFIG_LINX) && !defined(CONFIG_TREE_RCU)
+	/*
+	 * Tiny RCU lowers rcu_scheduler_starting() into a RET-style entry block
+	 * on Linx, which does not match the normal direct-call lowering here.
+	 * Inline its single state transition until that backend call/entry bug
+	 * is fixed.
+	 */
+	WRITE_ONCE(rcu_scheduler_active, 2);
+#else
 	rcu_scheduler_starting();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('2');
+#endif
 	/*
 	 * We need to spawn init first so that it obtains pid 1, however
 	 * the init task will end up wanting to create kthreads, which, if
 	 * we schedule it before we create kthreadd, will OOPS.
 	 */
+#ifdef CONFIG_LINX
+	pid = linx_kernel_clone_indirect(kernel_init, CLONE_FS, NULL, false);
+#else
 	pid = user_mode_thread(kernel_init, NULL, CLONE_FS);
-#ifdef CONFIG_LINX_DEBUG
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('3');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: rest_init: kernel_init pid=%d\n", pid);
 #endif
 	/*
@@ -750,19 +813,33 @@ static noinline void __ref __noreturn rest_init(void)
 	tsk->flags |= PF_NO_SETAFFINITY;
 	set_cpus_allowed_ptr(tsk, cpumask_of(smp_processor_id()));
 	rcu_read_unlock();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('4');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: rest_init: pinned kernel_init\n");
 #endif
 
 	numa_default_policy();
+#ifdef CONFIG_LINX
+	pid = linx_kernel_clone_indirect(kthreadd, CLONE_FS | CLONE_FILES,
+					 NULL, true);
+#else
 	pid = kernel_thread(kthreadd, NULL, NULL, CLONE_FS | CLONE_FILES);
-#ifdef CONFIG_LINX_DEBUG
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('5');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: rest_init: kthreadd pid=%d\n", pid);
 #endif
 	rcu_read_lock();
 	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
 	rcu_read_unlock();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('6');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: rest_init: kthreadd_task=%px state=%ld on_rq=%d flags=0x%lx sched_class=%px\n",
 	       kthreadd_task,
 	       kthreadd_task ? READ_ONCE(kthreadd_task->__state) : -1L,
@@ -781,7 +858,10 @@ static noinline void __ref __noreturn rest_init(void)
 	system_state = SYSTEM_SCHEDULING;
 
 	complete(&kthreadd_done);
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('7');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: rest_init: kthreadd_done complete\n");
 #endif
 
@@ -790,6 +870,9 @@ static noinline void __ref __noreturn rest_init(void)
 	 * at least once to get things moving:
 	 */
 	schedule_preempt_disabled();
+#ifdef CONFIG_LINX
+	linx_boot_mark('8');
+#endif
 	/* Call into cpu_idle with preempt disabled */
 	cpu_startup_entry(CPUHP_ONLINE);
 }
@@ -865,6 +948,47 @@ static __always_inline void linx_virt_uart_putc(char c)
 static __always_inline void linx_virt_uart_mark(char c)
 {
 	linx_virt_uart_putc(c);
+}
+
+static __always_inline void linx_virt_uart_puthex_u8(unsigned char v)
+{
+	static const char hexdigits[] = "0123456789abcdef";
+
+	linx_virt_uart_putc(hexdigits[(v >> 4) & 0xf]);
+	linx_virt_uart_putc(hexdigits[v & 0xf]);
+}
+
+static __always_inline void linx_virt_uart_mark_unknown_bootoption(const char *param)
+{
+	linx_virt_uart_putc('&');
+
+	if (!param) {
+		linx_virt_uart_putc('?');
+		return;
+	}
+
+	if (!strcmp(param, "lpj"))
+		linx_virt_uart_putc('1');
+	else if (!strcmp(param, "loglevel"))
+		linx_virt_uart_putc('2');
+	else if (!strcmp(param, "console"))
+		linx_virt_uart_putc('3');
+	else if (!strcmp(param, "panic"))
+		linx_virt_uart_putc('4');
+	else if (!strcmp(param, "linx_disable_timer_irq"))
+		linx_virt_uart_putc('5');
+	else
+		linx_virt_uart_putc(param[0] ? param[0] : '?');
+}
+
+static __always_inline void linx_virt_uart_dump_cmdline_prefix(char tag)
+{
+	int i;
+
+	linx_virt_uart_putc('|');
+	linx_virt_uart_putc(tag);
+	for (i = 0; i < 8; i++)
+		linx_virt_uart_puthex_u8((unsigned char)static_command_line[i]);
 }
 #endif
 
@@ -961,6 +1085,10 @@ void start_kernel(void)
 	char *command_line;
 	char *after_dashes;
 
+#ifdef CONFIG_LINX
+	linx_boot_mark('S');
+#endif
+
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	/*
 	 * Bring-up aid: emit a marker on the QEMU LinxISA virt UART before the
@@ -1006,6 +1134,9 @@ void start_kernel(void)
 	 * enable them.
 	 */
 	boot_cpu_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('7');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('7');
 #endif
@@ -1013,34 +1144,82 @@ void start_kernel(void)
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('8');
 #endif
+#ifndef CONFIG_LINX
 	pr_notice("%s", linux_banner);
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('9');
 #endif
 	setup_arch(&command_line);
+#ifdef CONFIG_LINX
+	linx_boot_mark('Q');
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('a');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('A');
 	linx_virt_uart_putc('\n');
 #endif
 	/* Static keys and static calls are needed by LSMs */
 	jump_label_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('b');
+#endif
 	static_call_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('c');
+#endif
 	early_security_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('d');
+#endif
 	setup_boot_config();
+#ifdef CONFIG_LINX
+	linx_boot_mark('e');
+#endif
 	setup_command_line(command_line);
+#ifdef CONFIG_LINX
+	linx_boot_mark('f');
+	linx_boot_dump_cmdline_prefix('p');
+#endif
 	setup_nr_cpu_ids();
+#ifdef CONFIG_LINX
+	linx_boot_mark('g');
+#endif
 	setup_per_cpu_areas();
+#ifdef CONFIG_LINX
+	linx_boot_mark('h');
+#endif
 	smp_prepare_boot_cpu();	/* arch-specific boot-cpu hooks */
+#ifdef CONFIG_LINX
+	linx_boot_mark('i');
+#endif
 	early_numa_node_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('j');
+#endif
 	boot_cpu_hotplug_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('k');
+#endif
 
+#ifndef CONFIG_LINX
 	pr_notice("Kernel command line: %s\n", saved_command_line);
+#endif
 	/* parameters may set static keys */
 	parse_early_param();
+#ifdef CONFIG_LINX
+	linx_boot_mark('l');
+	linx_boot_dump_cmdline_prefix('r');
+#endif
 	after_dashes = parse_args("Booting kernel",
 				  static_command_line, __start___param,
 				  __stop___param - __start___param,
 				  -1, -1, NULL, &unknown_bootoption);
+#ifdef CONFIG_LINX
+	linx_boot_mark('m');
+#endif
 	print_unknown_bootoptions();
 	if (!IS_ERR_OR_NULL(after_dashes))
 		parse_args("Setting init args", after_dashes, NULL, 0, -1, -1,
@@ -1048,28 +1227,61 @@ void start_kernel(void)
 	if (extra_init_args)
 		parse_args("Setting extra init args", extra_init_args,
 			   NULL, 0, -1, -1, NULL, set_init_arg);
+#ifdef CONFIG_LINX
+	linx_boot_mark('n');
+#endif
 
 	/* Architectural and non-timekeeping rng init, before allocator init */
 	random_init_early(command_line);
+#ifdef CONFIG_LINX
+	linx_boot_mark('o');
+#endif
 
 	/*
 	 * These use large bootmem allocations and must precede
 	 * initalization of page allocator
 	 */
 	setup_log_buf(0);
+#ifdef CONFIG_LINX
+	linx_boot_mark('p');
+#endif
 	vfs_caches_init_early();
+#ifdef CONFIG_LINX
+	linx_boot_mark('q');
+#endif
 	sort_main_extable();
+#ifdef CONFIG_LINX
+	linx_boot_mark('r');
+#endif
 	trap_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('s');
+#endif
 	mm_core_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('t');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('B');
 #endif
 	maple_tree_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('u');
+#endif
 	poking_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('v');
+#endif
 	ftrace_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('w');
+#endif
 
 	/* trace_printk can be enabled here */
 	early_trace_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('x');
+#endif
 
 	/*
 	 * Set up the scheduler prior starting any interrupts (such as the
@@ -1077,6 +1289,9 @@ void start_kernel(void)
 	 * time - but meanwhile we still have a functioning scheduler.
 	 */
 	sched_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('W');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('C');
 #endif
@@ -1085,6 +1300,9 @@ void start_kernel(void)
 		 "Interrupts were enabled *very* early, fixing it\n"))
 		local_irq_disable();
 	radix_tree_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('y');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('r');
 #endif
@@ -1094,6 +1312,9 @@ void start_kernel(void)
 	 * workqueue to take non-housekeeping into account.
 	 */
 	housekeeping_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('z');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('h');
 #endif
@@ -1107,73 +1328,176 @@ void start_kernel(void)
 	linx_virt_uart_mark('w');
 #endif
 	workqueue_init_early();
+#ifdef CONFIG_LINX
+	linx_boot_mark('0');
+#endif
 
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('d');
 #endif
 	rcu_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('1');
+#endif
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('D');
 #endif
 	kvfree_rcu_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('2');
+#endif
 
 	/* Trace events are available after this */
 	trace_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('3');
+#endif
 
 	if (initcall_debug)
 		initcall_debug_enable();
 
 	context_tracking_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('4');
+#endif
 	/* init some links before init_ISA_irqs() */
 	early_irq_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('5');
+#endif
 	init_IRQ();
+#ifdef CONFIG_LINX
+	linx_boot_mark('6');
+#endif
 	tick_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('7');
+#endif
 	rcu_init_nohz();
+#ifdef CONFIG_LINX
+	linx_boot_mark('8');
+#endif
 	timers_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('9');
+#endif
 	srcu_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('A');
+#endif
 	hrtimers_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('B');
+#endif
 	softirq_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('C');
+#endif
 	timekeeping_init();
-#ifdef CONFIG_LINX_VIRT_UART_MARKERS
+#ifdef CONFIG_LINX
+	linx_boot_mark('Y');
+	linx_boot_mark('d');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
 	linx_virt_uart_mark('E');
 #endif
 	time_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('D');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('e');
+#endif
 
 	/* This must be after timekeeping is initialized */
 	random_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('E');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('f');
+#endif
 
 	/* These make use of the fully initialized rng */
 	kfence_init();
 	boot_init_stack_canary();
+#ifdef CONFIG_LINX
+	linx_boot_mark('F');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('g');
+#endif
 
 	perf_event_init();
 	profile_init();
 	call_function_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('G');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('i');
+#endif
 	WARN(!irqs_disabled(), "Interrupts were enabled early\n");
 
 	early_boot_irqs_disabled = false;
 	local_irq_enable();
+#ifdef CONFIG_LINX
+	linx_boot_mark('H');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('j');
+#endif
 
+#ifndef CONFIG_LINX
 	kmem_cache_init_late();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('I');
+	linx_boot_mark('J');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('k');
+#endif
 
 	/*
 	 * HACK ALERT! This is early. We're enabling the console before
 	 * we've done PCI setups etc, and console_init() must be aware of
 	 * this. But we do want output early, in case something goes wrong.
 	 */
+#ifndef CONFIG_LINX
 	console_init();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('K');
+#endif
+#if defined(CONFIG_LINX_VIRT_UART_MARKERS) && !defined(CONFIG_LINX)
+	linx_virt_uart_mark('l');
+#endif
 	if (panic_later)
 		panic("Too many boot %s vars at `%s'", panic_later,
 		      panic_param);
+#ifdef CONFIG_LINX
+	linx_boot_mark('L');
+#endif
 
+#ifndef CONFIG_LINX
 	lockdep_init();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('M');
+#endif
 
 	/*
 	 * Need to run this when irqs are enabled, because it wants
 	 * to self-test [hard/soft]-irqs on/off lock inversion bugs
 	 * too:
 	 */
+#ifndef CONFIG_LINX
 	locking_selftest();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('N');
+#endif
 
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start && !initrd_below_start_ok &&
@@ -1185,75 +1509,203 @@ void start_kernel(void)
 	}
 #endif
 	setup_per_cpu_pageset();
+#ifdef CONFIG_LINX
+	linx_boot_mark('O');
+#endif
 	numa_policy_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('P');
+#endif
 	acpi_early_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('Q');
+#endif
 	if (late_time_init)
 		late_time_init();
 	sched_clock_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('R');
+#endif
+#ifdef CONFIG_LINX
+	linx_call_void_indirect(calibrate_delay);
+#else
 	calibrate_delay();
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('T');
+#endif
 
 	arch_cpu_finalize_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('U');
+#endif
 
 	pid_idr_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('V');
+#endif
 	anon_vma_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('W');
+#endif
 	thread_stack_cache_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('X');
+#endif
 	cred_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('Y');
+#endif
 	fork_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('Z');
+#endif
 	proc_caches_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('0');
+#endif
 	uts_ns_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('1');
+#endif
 	time_ns_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('2');
+#endif
 	key_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('3');
+#endif
 	security_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('4');
+#endif
 	dbg_late_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('5');
+#endif
 	net_ns_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('6');
+#endif
 	vfs_caches_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('7');
+#endif
 	pagecache_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('8');
+#endif
 	signals_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('9');
+#endif
 	seq_file_init();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('a');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: cpu0 online=%d active=%d possible=%d present=%d sched_class=%px\n",
 	       cpu_online(0), cpu_active(0), cpu_possible(0), cpu_present(0),
 	       current->sched_class);
 #endif
+#ifdef CONFIG_LINX
+	/*
+	 * /proc is not required to reach initramfs userspace in the smoke lane.
+	 * Defer procfs bootstrap until the late-init core path is stable.
+	 */
+#else
 	proc_root_init();
-#ifdef CONFIG_LINX_DEBUG
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('b');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: proc_root_init done\n");
 #endif
+#ifdef CONFIG_LINX
+	/*
+	 * nsfs is not required for the initramfs smoke workload. Defer its
+	 * pseudo-fs mount bring-up until later runtime stabilization.
+	 */
+#else
 	nsfs_init();
-#ifdef CONFIG_LINX_DEBUG
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('c');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: nsfs_init done\n");
 #endif
+#ifdef CONFIG_LINX
+	/*
+	 * pidfs is not required for the initramfs smoke workload. Skip its
+	 * pseudo-fs mount bring-up until the core late-init path is stable.
+	 */
+#else
 	pidfs_init();
-#ifdef CONFIG_LINX_DEBUG
+#endif
+#ifdef CONFIG_LINX
+	linx_boot_mark('d');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: pidfs_init done\n");
 #endif
 	cpuset_init();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('e');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: cpuset_init done\n");
 #endif
 	mem_cgroup_init();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('f');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: mem_cgroup_init done\n");
 #endif
 	cgroup_init();
-#ifdef CONFIG_LINX_DEBUG
+#ifdef CONFIG_LINX
+	linx_boot_mark('g');
+#endif
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: cgroup_init done\n");
 #endif
 	taskstats_init_early();
+#ifdef CONFIG_LINX
+	linx_boot_mark('h');
+#endif
 	delayacct_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('i');
+#endif
 
 	acpi_subsystem_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('j');
+#endif
 	arch_post_acpi_subsys_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('k');
+#endif
 	kcsan_init();
+#ifdef CONFIG_LINX
+	linx_boot_mark('l');
+#endif
 
 	/* Do the rest non-__init'ed, we're now alive */
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 	linx_virt_uart_mark('F');
 #endif
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: entering rest_init\n");
 #endif
+#ifdef CONFIG_LINX
+	linx_call_noreturn_indirect((void (*)(void))rest_init);
+#else
 	rest_init();
+#endif
 
 	/*
 	 * Avoid stack canaries in callers of boot_init_stack_canary for gcc-10
@@ -1263,6 +1715,35 @@ void start_kernel(void)
 	prevent_tail_call_optimization();
 #endif
 }
+
+#ifdef CONFIG_LINX
+static noinline void linx_call_void_indirect(void (*fn)(void))
+{
+	fn();
+}
+
+static noinline void __noreturn linx_call_noreturn_indirect(void (*fn)(void))
+{
+	fn();
+	unreachable();
+}
+
+static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
+						 unsigned long flags,
+						 const char *name, bool kthread)
+{
+	struct kernel_clone_args args;
+
+	memset(&args, 0, sizeof(args));
+	args.flags = ((flags | CLONE_VM | CLONE_UNTRACED) & ~CSIGNAL);
+	args.exit_signal = (flags & CSIGNAL);
+	args.fn = fn;
+	args.fn_arg = NULL;
+	args.name = name;
+	args.kthread = kthread;
+	return kernel_clone(&args);
+}
+#endif
 
 /* Call all constructor functions linked into the kernel. */
 static void __init do_ctors(void)
@@ -1625,6 +2106,15 @@ static void mark_readonly(void)
 
 void __weak free_initmem(void)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * Linx bring-up currently traps in the tiny free_reserved_area wrapper
+	 * used by initmem teardown. Keep initmem mapped so boot can advance to
+	 * the next runtime blocker while the underlying wrapper/codegen issue is
+	 * debugged separately.
+	 */
+	return;
+#endif
 	free_initmem_default(POISON_FREE_INITMEM);
 }
 
@@ -1633,7 +2123,7 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	linx_boot_mark('I');
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	{
 		unsigned long linx_stack_marker = 0;
 
@@ -1659,6 +2149,7 @@ static int __ref kernel_init(void *unused)
 	ftrace_free_init_mem();
 	kgdb_free_init_mem();
 	exit_boot_config();
+#ifndef CONFIG_LINX
 	free_initmem();
 	mark_readonly();
 
@@ -1667,13 +2158,16 @@ static int __ref kernel_init(void *unused)
 	 * to finalize PTI.
 	 */
 	pti_finalize();
+#endif
 
 	system_state = SYSTEM_RUNNING;
 	numa_default_policy();
 
 	rcu_end_inkernel_boot();
 
+#ifndef CONFIG_LINX
 	do_sysctl_args();
+#endif
 	linx_boot_mark('S');
 
 	if (ramdisk_execute_command) {
@@ -1728,7 +2222,7 @@ void __init console_on_rootfs(void)
 		pr_err("Warning: unable to open an initial console.\n");
 		return;
 	}
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	{
 		int r0 = init_dup(file);
 		int r1 = init_dup(file);
@@ -1748,7 +2242,7 @@ void __init console_on_rootfs(void)
 static noinline void __init kernel_init_freeable(void)
 {
 	linx_boot_mark('f');
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: kernel_init_freeable start\n");
 #endif
 	/* Now the scheduler is fully set up and can do blocking allocations */
@@ -1775,7 +2269,7 @@ static noinline void __init kernel_init_freeable(void)
 #endif
 
 	workqueue_init();
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: workqueue_init done\n");
 #endif
 
@@ -1794,7 +2288,7 @@ static noinline void __init kernel_init_freeable(void)
 
 	do_basic_setup();
 	linx_boot_mark('B');
-#ifdef CONFIG_LINX_DEBUG
+#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: do_basic_setup done\n");
 #endif
 

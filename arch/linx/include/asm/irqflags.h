@@ -1,63 +1,55 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ */
+
+
 #ifndef _ASM_LINX_IRQFLAGS_H
 #define _ASM_LINX_IRQFLAGS_H
 
-/*
- * LinxISA bring-up: use CSTATE.I as the interrupt enable bit (as modeled by
- * the QEMU LinxISA CPU).
- */
-
+#include <asm/processor.h>
 #include <asm/ssr.h>
 
-static __always_inline unsigned long arch_local_save_flags(void)
+/* read interrupt enabled status */
+static inline unsigned long arch_local_save_flags(void)
 {
-	return linx_ssr_read_cstate();
+	return ssr_read(SSR_CSTATE);
 }
 
-static __always_inline void arch_local_irq_enable(void)
+/* unconditionally enable interrupts */
+static inline void arch_local_irq_enable(void)
 {
-	unsigned long cstate = linx_ssr_read_cstate();
-
-	linx_ssr_write_cstate(cstate | LINX_CSTATE_I_BIT);
+	ssr_set(SSR_CSTATE, CSTATE_I);
 }
 
-static __always_inline void arch_local_irq_disable(void)
+/* unconditionally disable interrupts */
+static inline void arch_local_irq_disable(void)
 {
-	unsigned long cstate = linx_ssr_read_cstate();
-
-	linx_ssr_write_cstate(cstate & ~LINX_CSTATE_I_BIT);
+	ssr_clear(SSR_CSTATE, CSTATE_I);
 }
 
-static __always_inline unsigned long arch_local_irq_save(void)
+/* get status and disable interrupts */
+static inline unsigned long arch_local_irq_save(void)
 {
-	unsigned long flags = arch_local_save_flags();
-
-	arch_local_irq_disable();
-	return flags;
+	return ssr_read_clear(SSR_CSTATE, CSTATE_I);
 }
 
-static __always_inline int arch_irqs_disabled_flags(unsigned long flags)
+/* test flags */
+static inline int arch_irqs_disabled_flags(unsigned long flags)
 {
-	return !(flags & LINX_CSTATE_I_BIT);
+	return !(flags & CSTATE_I);
 }
 
-static __always_inline int arch_irqs_disabled(void)
+/* test hardware interrupt enable bit */
+static inline int arch_irqs_disabled(void)
 {
 	return arch_irqs_disabled_flags(arch_local_save_flags());
 }
 
-static __always_inline void arch_local_irq_restore(unsigned long flags)
+/* set interrupt enabled status */
+static inline void arch_local_irq_restore(unsigned long flags)
 {
-	unsigned long cstate = linx_ssr_read_cstate();
-
-	if (flags & LINX_CSTATE_I_BIT)
-		linx_ssr_write_cstate(cstate | LINX_CSTATE_I_BIT);
-	else
-		linx_ssr_write_cstate(cstate & ~LINX_CSTATE_I_BIT);
-}
-
-static __always_inline void arch_safe_halt(void)
-{
+	ssr_set(SSR_CSTATE, flags & CSTATE_I);
 }
 
 #endif /* _ASM_LINX_IRQFLAGS_H */

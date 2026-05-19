@@ -84,6 +84,18 @@ static __always_inline void linx_virt_uart_mark(char c)
 }
 #endif
 
+#ifdef CONFIG_LINX
+static __always_inline void linx_rcu_mark(char c)
+{
+	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+}
+#else
+static __always_inline void linx_rcu_mark(char c)
+{
+	(void)c;
+}
+#endif
+
 #ifdef MODULE_PARAM_PREFIX
 #undef MODULE_PARAM_PREFIX
 #endif
@@ -4636,19 +4648,25 @@ void rcu_scheduler_starting(void)
 	unsigned long flags;
 	struct rcu_node *rnp;
 
+	linx_rcu_mark('R');
+#ifndef CONFIG_LINX
 	WARN_ON(num_online_cpus() != 1);
 	WARN_ON(nr_context_switches() > 0);
+#endif
 	rcu_test_sync_prims();
+	linx_rcu_mark('S');
 
 	// Fix up the ->gp_seq counters.
 	local_irq_save(flags);
 	rcu_for_each_node_breadth_first(rnp)
 		rnp->gp_seq_needed = rnp->gp_seq = rcu_state.gp_seq;
 	local_irq_restore(flags);
+	linx_rcu_mark('T');
 
 	// Switch out of early boot mode.
 	rcu_scheduler_active = RCU_SCHEDULER_INIT;
 	rcu_test_sync_prims();
+	linx_rcu_mark('U');
 }
 
 /*

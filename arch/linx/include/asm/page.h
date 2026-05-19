@@ -1,50 +1,82 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
+/*
+ * Copyright (C) 2009 Chen Liqin <liqin.chen@sunplusct.com>
+ * Copyright (C) 2012 Regents of the University of California
+ * Copyright (C) 2017 SiFive
+ * Copyright (C) 2017 XiaojingZhu <zhuxiaoj@ict.ac.cn>
+ */
 
-#ifndef _ASM_LINX_PAGE_H
-#define _ASM_LINX_PAGE_H
+#ifndef _ASM_RISCV_PAGE_H
+#define _ASM_RISCV_PAGE_H
 
+#include <linux/pfn.h>
 #include <linux/const.h>
-#include <linux/types.h>
 
-#include <asm/pgtable-bits.h>
+#define PAGE_SHIFT	(12)
+#define PAGE_SIZE	(_AC(1, UL) << PAGE_SHIFT)
+#define PAGE_MASK	(~(PAGE_SIZE - 1))
 
-#define PAGE_SHIFT 12
-#define PAGE_SIZE (_AC(1, UL) << PAGE_SHIFT)
-#define PAGE_MASK (~(PAGE_SIZE - 1))
-
-#define PAGE_OFFSET _AC(0, UL)
-#define PHYS_OFFSET _AC(0, UL)
+#ifdef CONFIG_64BIT
+#define HUGE_MAX_HSTATE		2
+#else
+#define HUGE_MAX_HSTATE		1
+#endif
+#define HPAGE_SHIFT		PMD_SHIFT
+#define HPAGE_SIZE		(_AC(1, UL) << HPAGE_SHIFT)
+#define HPAGE_MASK              (~(HPAGE_SIZE - 1))
+#define HUGETLB_PAGE_ORDER      (HPAGE_SHIFT - PAGE_SHIFT)
 
 /*
- * QEMU LinxISA `virt` loads the kernel at 0x10000 and uses a flat virt==phys
- * mapping during NOMMU bring-up. Avoid allocating early DT/memblock objects at
- * physical address 0 which would appear as a NULL pointer.
+ * PAGE_OFFSET -- the first address of the first page of memory.
+ * When not using MMU this corresponds to the first free page in
+ * physical memory (aligned on a page boundary).
  */
-#define MIN_MEMBLOCK_ADDR _AC(0x10000, UL)
+#ifdef CONFIG_64BIT
+#ifdef CONFIG_MMU
+#define PAGE_OFFSET            kernel_map.page_offset
+#else
+#define PAGE_OFFSET            _AC(CONFIG_PAGE_OFFSET, UL)
+#endif
+/*
+ * By default, CONFIG_PAGE_OFFSET value corresponds to SV48 address space so
+ * define the PAGE_OFFSET value for SV39.
+ */
+#define PAGE_OFFSET_L4         _AC(0xffffaf8000000000, UL)
+#define PAGE_OFFSET_L3         _AC(0xffffffd800000000, UL)
+#else
+#define PAGE_OFFSET            _AC(CONFIG_PAGE_OFFSET, UL)
+#endif /* CONFIG_64BIT */
 
-#ifndef __ASSEMBLER__
+#define KERN_VIRT_SIZE (-PAGE_OFFSET)
 
-#include <linux/string.h>
-#include <linux/pfn.h>
+#ifndef __ASSEMBLY__
 
-static inline void clear_page(void *page)
-{
-	memset(page, 0, PAGE_SIZE);
-}
+#define clear_page(pgaddr)			memset((pgaddr), 0, PAGE_SIZE)
+#define copy_page(to, from)			memcpy((to), (from), PAGE_SIZE)
 
-static inline void copy_page(void *to, const void *from)
-{
-	memcpy(to, from, PAGE_SIZE);
-}
+#define clear_user_page(pgaddr, vaddr, page)	memset((pgaddr), 0, PAGE_SIZE)
+#define copy_user_page(vto, vfrom, vaddr, topg) \
+			memcpy((vto), (vfrom), PAGE_SIZE)
 
-struct page;
+/*
+ * Use struct definitions to apply C type checking
+ */
 
-extern struct page *mem_map;
+/* Page Global Directory entry */
+typedef struct {
+	unsigned long pgd;
+} pgd_t;
+
+/* Page Table entry */
+typedef struct {
+	unsigned long pte;
+} pte_t;
+
+typedef struct {
+	unsigned long pgprot;
+} pgprot_t;
 
 typedef struct page *pgtable_t;
-typedef struct { unsigned long pte; } pte_t;
-typedef struct { unsigned long pgd; } pgd_t;
-typedef struct { unsigned long pgprot; } pgprot_t;
 
 #define pte_val(x)	((x).pte)
 #define pgd_val(x)	((x).pgd)
@@ -54,76 +86,109 @@ typedef struct { unsigned long pgprot; } pgprot_t;
 #define __pgd(x)	((pgd_t) { (x) })
 #define __pgprot(x)	((pgprot_t) { (x) })
 
-/*
- * NOMMU bring-up: no arch-specific page protection bits. Core code still
- * expects PAGE_KERNEL to exist (e.g. vmap()).
- */
+#ifdef CONFIG_64BIT
+#define PTE_FMT "%016lx"
+#else
+#define PTE_FMT "%08lx"
+#endif
+
 #ifdef CONFIG_MMU
-#define PAGE_KERNEL	__pgprot(LINX_PTE_AF | LINX_PTE_R | LINX_PTE_W | LINX_PTE_X | \
-				 ((unsigned long)LINX_MAIR_ATTR_NORMAL_WB << LINX_PTE_ATTRIDX_SHIFT))
+extern unsigned long riscv_pfn_base;
+#define ARCH_PFN_OFFSET		(riscv_pfn_base)
 #else
-#define PAGE_KERNEL	__pgprot(0)
+#define ARCH_PFN_OFFSET		(PAGE_OFFSET >> PAGE_SHIFT)
+#endif /* CONFIG_MMU */
+
+struct kernel_mapping {
+	unsigned long page_offset;
+	unsigned long virt_addr;
+	uintptr_t phys_addr;
+	uintptr_t size;
+	/* Offset between linear mapping virtual address and kernel load address */
+	unsigned long va_pa_offset;
+	/* Offset between kernel mapping virtual address and kernel load address */
+	unsigned long va_kernel_pa_offset;
+	unsigned long va_kernel_xip_pa_offset;
+#ifdef CONFIG_XIP_KERNEL
+	uintptr_t xiprom;
+	uintptr_t xiprom_sz;
+#endif
+};
+
+extern struct kernel_mapping kernel_map;
+extern phys_addr_t phys_ram_base;
+
+#define is_kernel_mapping(x)	\
+	((x) >= kernel_map.virt_addr && (x) < (kernel_map.virt_addr + kernel_map.size))
+
+#define is_linear_mapping(x)	\
+	((x) >= PAGE_OFFSET && (!IS_ENABLED(CONFIG_64BIT) || (x) < kernel_map.virt_addr))
+
+#define linear_mapping_pa_to_va(x)	((void *)((unsigned long)(x) + kernel_map.va_pa_offset))
+#define kernel_mapping_pa_to_va(y)	({						\
+	unsigned long _y = y;								\
+	(IS_ENABLED(CONFIG_XIP_KERNEL) && _y < phys_ram_base) ?					\
+		(void *)((unsigned long)(_y) + kernel_map.va_kernel_xip_pa_offset) :		\
+		(void *)((unsigned long)(_y) + kernel_map.va_kernel_pa_offset + XIP_OFFSET);	\
+	})
+#define __pa_to_va_nodebug(x)		linear_mapping_pa_to_va(x)
+
+#define linear_mapping_va_to_pa(x)	((unsigned long)(x) - kernel_map.va_pa_offset)
+#define kernel_mapping_va_to_pa(y) ({						\
+	unsigned long _y = y;							\
+	(IS_ENABLED(CONFIG_XIP_KERNEL) && _y < kernel_map.virt_addr + XIP_OFFSET) ?	\
+		((unsigned long)(_y) - kernel_map.va_kernel_xip_pa_offset) :		\
+		((unsigned long)(_y) - kernel_map.va_kernel_pa_offset - XIP_OFFSET);	\
+	})
+
+#define __va_to_pa_nodebug(x)	({						\
+	unsigned long _x = x;							\
+	is_linear_mapping(_x) ?							\
+		linear_mapping_va_to_pa(_x) : kernel_mapping_va_to_pa(_x);	\
+	})
+
+#ifdef CONFIG_DEBUG_VIRTUAL
+extern phys_addr_t __virt_to_phys(unsigned long x);
+extern phys_addr_t __phys_addr_symbol(unsigned long x);
+#else
+#define __virt_to_phys(x)	__va_to_pa_nodebug(x)
+#define __phys_addr_symbol(x)	__va_to_pa_nodebug(x)
+#endif /* CONFIG_DEBUG_VIRTUAL */
+
+#define __pa_symbol(x)	__phys_addr_symbol(RELOC_HIDE((unsigned long)(x), 0))
+#define __pa(x)		__virt_to_phys((unsigned long)(x))
+#define __va(x)		((void *)__pa_to_va_nodebug((phys_addr_t)(x)))
+
+#define phys_to_pfn(phys)	(PFN_DOWN(phys))
+#define pfn_to_phys(pfn)	(PFN_PHYS(pfn))
+
+#define virt_to_pfn(vaddr)	(phys_to_pfn(__pa(vaddr)))
+#define pfn_to_virt(pfn)	(__va(pfn_to_phys(pfn)))
+
+#define virt_to_page(vaddr)	(pfn_to_page(virt_to_pfn(vaddr)))
+#define page_to_virt(page)	(pfn_to_virt(page_to_pfn(page)))
+
+#define page_to_phys(page)	(pfn_to_phys(page_to_pfn(page)))
+#define page_to_bus(page)	(page_to_phys(page))
+#define phys_to_page(paddr)	(pfn_to_page(phys_to_pfn(paddr)))
+
+#define sym_to_pfn(x)           __phys_to_pfn(__pa_symbol(x))
+
+#ifdef CONFIG_FLATMEM
+#define pfn_valid(pfn) \
+	(((pfn) >= ARCH_PFN_OFFSET) && (((pfn) - ARCH_PFN_OFFSET) < max_mapnr))
 #endif
 
-#define __pa(x)		((phys_addr_t)(unsigned long)(x))
-#define __va(x)		((void *)(unsigned long)(x))
+#endif /* __ASSEMBLY__ */
 
-#define virt_to_page(addr)	pfn_to_page(PFN_DOWN(__pa(addr)))
+#define virt_addr_valid(vaddr)	({						\
+	unsigned long _addr = (unsigned long)vaddr;				\
+	(unsigned long)(_addr) >= PAGE_OFFSET && pfn_valid(virt_to_pfn(_addr));	\
+})
 
-/*
- * Bring-up uses a flat (virt==phys) mapping on QEMU `virt`.
- * Keep virt_addr_valid() conservative but functional for core helpers.
- */
-#define virt_addr_valid(kaddr)	pfn_valid(PFN_DOWN(__pa(kaddr)))
-
-/*
- * Early bring-up: avoid wiring up an actual shared zero page until the basic
- * memory model is in place.
- */
-#ifdef CONFIG_MMU
-extern unsigned long empty_zero_page[PAGE_SIZE / sizeof(unsigned long)];
-#define ZERO_PAGE(vaddr)	(virt_to_page(empty_zero_page))
-#else
-#define ZERO_PAGE(vaddr)	((struct page *)0)
-#endif
-
-static inline void clear_user_page(void *addr, unsigned long vaddr,
-				   struct page *page)
-{
-	(void)vaddr;
-	(void)page;
-	clear_page(addr);
-}
-
-static inline void copy_user_page(void *to, void *from, unsigned long vaddr,
-				  struct page *page)
-{
-	(void)vaddr;
-	(void)page;
-#if defined(__clang__)
-	uintptr_t d = (uintptr_t)to;
-	uintptr_t s = (uintptr_t)from;
-
-	for (unsigned long i = 0; i < (PAGE_SIZE / sizeof(uint64_t)); ++i) {
-		uint64_t v;
-
-		asm volatile("hl.ldi.po [%1, 8], ->%0, %1"
-			     : "=&r"(v), "+r"(s)
-			     :
-			     : "memory");
-		asm volatile("hl.sdi.po %1, [%0, 8], ->%0"
-			     : "+&r"(d)
-			     : "r"(v)
-			     : "memory");
-	}
-#else
-	copy_page(to, from);
-#endif
-}
+#define VM_DATA_DEFAULT_FLAGS	VM_DATA_FLAGS_NON_EXEC
 
 #include <asm-generic/memory_model.h>
 #include <asm-generic/getorder.h>
 
-#endif /* !__ASSEMBLER__ */
-
-#endif /* _ASM_LINX_PAGE_H */
+#endif /* _ASM_RISCV_PAGE_H */

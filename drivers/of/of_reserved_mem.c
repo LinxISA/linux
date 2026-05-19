@@ -29,6 +29,14 @@
 
 #include "of_private.h"
 
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_reserved_mark(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+
 static struct reserved_mem reserved_mem_array[MAX_RESERVED_REGIONS] __initdata;
 static struct reserved_mem *reserved_mem __refdata = reserved_mem_array;
 static int total_reserved_mem_cnt = MAX_RESERVED_REGIONS;
@@ -76,6 +84,7 @@ static void __init alloc_reserved_mem_array(void)
 	struct reserved_mem *new_array;
 	size_t alloc_size, copy_size, memset_size;
 
+	linx_reserved_mark('a');
 	alloc_size = array_size(total_reserved_mem_cnt, sizeof(*new_array));
 	if (alloc_size == SIZE_MAX) {
 		pr_err("Failed to allocate memory for reserved_mem array with err: %d", -EOVERFLOW);
@@ -102,6 +111,7 @@ static void __init alloc_reserved_mem_array(void)
 	memset(new_array + reserved_mem_count, 0, memset_size);
 
 	reserved_mem = new_array;
+	linx_reserved_mark('b');
 }
 
 static void __init fdt_init_reserved_mem_node(struct reserved_mem *rmem);
@@ -113,6 +123,7 @@ static void __init fdt_reserved_mem_save_node(unsigned long node, const char *un
 {
 	struct reserved_mem *rmem = &reserved_mem[reserved_mem_count];
 
+	linx_reserved_mark('c');
 	if (reserved_mem_count == total_reserved_mem_cnt) {
 		pr_err("not enough space for all defined regions.\n");
 		return;
@@ -124,7 +135,9 @@ static void __init fdt_reserved_mem_save_node(unsigned long node, const char *un
 	rmem->size = size;
 
 	/* Call the region specific initialization function */
+	linx_reserved_mark('d');
 	fdt_init_reserved_mem_node(rmem);
+	linx_reserved_mark('e');
 
 	reserved_mem_count++;
 	return;
@@ -237,31 +250,41 @@ void __init fdt_scan_reserved_mem_reg_nodes(void)
 	int node, child;
 	int len;
 
+	linx_reserved_mark('R');
 	if (!fdt)
 		return;
 
 	node = fdt_path_offset(fdt, "/reserved-memory");
+	linx_reserved_mark('S');
 	if (node < 0) {
+#ifndef CONFIG_LINX
 		pr_info("Reserved memory: No reserved-memory node in the DT\n");
+#endif
 		return;
 	}
 
 	/* Attempt dynamic allocation of a new reserved_mem array */
 	alloc_reserved_mem_array();
+	linx_reserved_mark('T');
 
 	if (__reserved_mem_check_root(node)) {
+#ifndef CONFIG_LINX
 		pr_err("Reserved memory: unsupported node format, ignoring\n");
+#endif
 		return;
 	}
+	linx_reserved_mark('U');
 
 	fdt_for_each_subnode(child, fdt, node) {
 		const char *uname;
 
+		linx_reserved_mark('0');
 		prop = of_get_flat_dt_prop(child, "reg", &len);
 		if (!prop)
 			continue;
 		if (!of_fdt_device_is_available(fdt, child))
 			continue;
+		linx_reserved_mark('1');
 
 		uname = fdt_get_name(fdt, child, NULL);
 		if (len && len % t_len != 0) {
@@ -277,12 +300,15 @@ void __init fdt_scan_reserved_mem_reg_nodes(void)
 		base = dt_mem_next_cell(dt_root_addr_cells, &prop);
 		size = dt_mem_next_cell(dt_root_size_cells, &prop);
 
+		linx_reserved_mark('2');
 		if (size)
 			fdt_reserved_mem_save_node(child, uname, base, size);
+		linx_reserved_mark('3');
 	}
 
 	/* check for overlapping reserved regions */
 	__rmem_check_for_overlap();
+	linx_reserved_mark('V');
 }
 
 static int __init __reserved_mem_alloc_size(unsigned long node, const char *uname);
@@ -583,9 +609,11 @@ static void __init fdt_init_reserved_mem_node(struct reserved_mem *rmem)
 	int err = 0;
 	bool nomap;
 
+	linx_reserved_mark('F');
 	nomap = of_get_flat_dt_prop(node, "no-map", NULL) != NULL;
 
 	err = __reserved_mem_init_node(rmem);
+	linx_reserved_mark('G');
 	if (err != 0 && err != -ENOENT) {
 		pr_info("node %s compatible matching fail\n", rmem->name);
 		if (nomap)

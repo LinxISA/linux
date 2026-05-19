@@ -1,13 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _ASM_LINX_IRQ_H
-#define _ASM_LINX_IRQ_H
-
 /*
- * LinxISA virt bring-up interrupt space:
- * keep enough static descriptors for ACR IPENDING[63:0].
+ * Copyright (C) 2012 Regents of the University of California
+ * Copyright (C) 2017 SiFive
  */
-#define NR_IRQS 64
+
+#ifndef _ASM_RISCV_IRQ_H
+#define _ASM_RISCV_IRQ_H
+
+#include <linux/interrupt.h>
+#include <linux/linkage.h>
 
 #include <asm-generic/irq.h>
 
-#endif /* _ASM_LINX_IRQ_H */
+extern void __init init_IRQ(void);
+
+#endif /* _ASM_RISCV_IRQ_H */

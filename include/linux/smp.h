@@ -31,7 +31,7 @@ struct __call_single_data {
 
 /* Use __aligned() to avoid to use 2 cache lines for 1 csd */
 typedef struct __call_single_data call_single_data_t
-	__aligned(sizeof(struct __call_single_data));
+	;
 
 #define INIT_CSD(_csd, _func, _info)		\
 do {						\

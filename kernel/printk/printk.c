@@ -1167,6 +1167,11 @@ void __init setup_log_buf(int early)
 	if (!early)
 		set_percpu_data_ready();
 
+#ifdef CONFIG_LINX
+	if (!early)
+		return;
+#endif
+
 	if (log_buf != __log_buf)
 		return;
 

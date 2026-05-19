@@ -1,261 +1,312 @@
-// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-License-Identifier: GPL-2.0-or-later
+/*
+ * Copyright (C) 2009 Sunplus Core Technology Co., Ltd.
+ *  Chen Liqin <liqin.chen@sunplusct.com>
+ *  Lennox Wu <lennox.wu@sunplusct.com>
+ * Copyright (C) 2012 Regents of the University of California
+ */
 
-#include <linux/errno.h>
-#include <linux/irqflags.h>
-#include <linux/linkage.h>
-#include <linux/ptrace.h>
-#include <linux/resume_user_mode.h>
-#include <linux/sched.h>
 #include <linux/signal.h>
-#include <linux/syscalls.h>
-#include <linux/unistd.h>
 #include <linux/uaccess.h>
+#include <linux/syscalls.h>
+#include <linux/tracehook.h>
+#include <linux/linkage.h>
 
-#include <asm/linx_ctx_tu_test.h>
-#include <asm/ptrace.h>
 #include <asm/ucontext.h>
+#include <asm/vdso.h>
+#include <asm/switch_to.h>
+#include <asm/trap.h>
+
+#define DEBUG_SIG 0
 
 struct rt_sigframe {
 	struct siginfo info;
 	struct ucontext uc;
 };
 
-static int linx_setup_sigcontext(struct sigcontext __user *sc,
-				 const struct pt_regs *regs)
+#ifdef CONFIG_FPU
+static long restore_fp_state(struct pt_regs *regs,
+			     union __riscv_fp_state __user *sc_fpregs)
 {
-	/*
-	 * LinxISA bring-up: user-visible register state is a flat array
-	 * `regs[NUM_PTRACE_REG]`, matching `struct user_pt_regs`.
-	 */
-	return __copy_to_user(sc->sc_regs.regs, regs->regs, sizeof(regs->regs));
+	long err;
+	struct __riscv_d_ext_state __user *state = &sc_fpregs->d;
+	size_t i;
+
+	err = __copy_from_user(&current->thread.fstate, state, sizeof(*state));
+	if (unlikely(err))
+		return err;
+
+	fstate_restore(current, regs);
+
+	/* We support no other extension state at this time. */
+	for (i = 0; i < ARRAY_SIZE(sc_fpregs->q.reserved); i++) {
+		u32 value;
+
+		err = __get_user(value, &sc_fpregs->q.reserved[i]);
+		if (unlikely(err))
+			break;
+		if (value != 0)
+			return -EINVAL;
+	}
+
+	return err;
 }
 
-static int linx_restore_sigcontext(struct pt_regs *regs,
-				   const struct sigcontext __user *sc)
+static long save_fp_state(struct pt_regs *regs,
+			  union __riscv_fp_state __user *sc_fpregs)
 {
-	return __copy_from_user(regs->regs, sc->sc_regs.regs, sizeof(regs->regs));
+	long err;
+	struct __riscv_d_ext_state __user *state = &sc_fpregs->d;
+	size_t i;
+
+	fstate_save(current, regs);
+	err = __copy_to_user(state, &current->thread.fstate, sizeof(*state));
+	if (unlikely(err))
+		return err;
+
+	/* We support no other extension state at this time. */
+	for (i = 0; i < ARRAY_SIZE(sc_fpregs->q.reserved); i++) {
+		err = __put_user(0, &sc_fpregs->q.reserved[i]);
+		if (unlikely(err))
+			break;
+	}
+
+	return err;
 }
+#else
+#define save_fp_state(task, regs) (0)
+#define restore_fp_state(task, regs) (0)
+#endif
 
-static inline void linx_sync_resume_pc_ebarg(struct pt_regs *regs)
+
+
+static long restore_sigcontext(struct pt_regs *regs,
+	struct sigcontext __user *sc)
 {
-	unsigned long pc = regs->regs[PTR_PC];
-
-	regs->ebarg_bpc_cur = pc;
-	regs->ebarg_bpc_tgt = pc;
-	regs->ebarg_tpc = pc;
+	long err;
+	/* sc_regs is structured the same as the start of pt_regs */
+	err = __copy_from_user(regs, &sc->sc_regs, sizeof(sc->sc_regs));
+	return err;
 }
 
 SYSCALL_DEFINE0(rt_sigreturn)
 {
 	struct pt_regs *regs = current_pt_regs();
 	struct rt_sigframe __user *frame;
+	struct task_struct *task;
 	sigset_t set;
 
-	/* Always make any pending restarted system calls return -EINTR. */
+	/* Always make any pending restarted system calls return -EINTR */
 	current->restart_block.fn = do_no_restart_syscall;
 
-	frame = (struct rt_sigframe __user *)user_stack_pointer(regs);
+	frame = (struct rt_sigframe __user *)regs->sp;
+
 	if (!access_ok(frame, sizeof(*frame)))
 		goto badframe;
 
 	if (__copy_from_user(&set, &frame->uc.uc_sigmask, sizeof(set)))
 		goto badframe;
+
 	set_current_blocked(&set);
 
-	if (linx_restore_sigcontext(regs, &frame->uc.uc_mcontext))
+	if (restore_sigcontext(regs, &frame->uc.uc_mcontext))
 		goto badframe;
+
 	if (restore_altstack(&frame->uc.uc_stack))
 		goto badframe;
 
-	/*
-	 * Disable syscall restart heuristics for the restored context.
-	 *
-	 * Linx pt_regs uses orig_a0 for syscall arg0 preservation; use -1 as
-	 * "not in syscall" (bring-up convention).
-	 */
-	regs->orig_a0 = (unsigned long)-1;
-	linx_sync_resume_pc_ebarg(regs);
-
-	return (long)regs->regs[PTR_R2];
+	return regs->a0;
 
 badframe:
+	task = current;
+	if (show_unhandled_signals) {
+		pr_info_ratelimited(
+			"%s[%d]: bad frame in %s: frame=%p bpc=%p tpc=%p sp=%p\n",
+			task->comm, task_pid_nr(task), __func__,
+			frame, (void*)regs->bpc, (void *)regs->tpc, (void *)regs->sp);
+	}
 	force_sig(SIGSEGV);
-	return -EFAULT;
+	return 0;
 }
 
-static void __user *get_sigframe(struct ksignal *ksig, struct pt_regs *regs,
-				 size_t frame_size)
+static long setup_sigcontext(struct rt_sigframe __user *frame,
+	struct pt_regs *regs)
 {
-	unsigned long sp = user_stack_pointer(regs);
+	struct sigcontext __user *sc = &frame->uc.uc_mcontext;
+	long err;
+	/* sc_regs is structured the same as the start of pt_regs */
+	err = __copy_to_user(&sc->sc_regs, regs, sizeof(sc->sc_regs));
+	return err;
+}
 
-	sp = sigsp(sp, ksig);
-	sp = round_down(sp - frame_size, 16);
+static inline void __user *get_sigframe(struct ksignal *ksig,
+	struct pt_regs *regs, size_t framesize)
+{
+	unsigned long sp;
+	/* Default to using normal stack */
+	sp = regs->sp;
+
+	/*
+	 * If we are on the alternate signal stack and would overflow it, don't.
+	 * Return an always-bogus address instead so we will die with SIGSEGV.
+	 */
+	if (on_sig_stack(sp) && !likely(on_sig_stack(sp - framesize)))
+		return (void __user __force *)(-1UL);
+
+	/* This is the X/Open sanctioned signal stack switching. */
+	sp = sigsp(sp, ksig) - framesize;
+
+	/* Align the stack frame. */
+	sp &= ~0xfUL;
+
 	return (void __user *)sp;
 }
 
-static int setup_rt_frame(struct ksignal *ksig, struct pt_regs *regs)
+static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
+	struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
-	sigset_t *set = sigmask_to_save();
-	int err = 0;
-
-	/*
-	 * Bring-up requirement: userspace must provide a restorer.
-	 * This keeps NOMMU/FDPIC bring-up simple and avoids vDSO dependencies.
-	 */
-	if (!(ksig->ka.sa.sa_flags & SA_RESTORER) || !ksig->ka.sa.sa_restorer)
-		return -EINVAL;
+	long err = 0;
 
 	frame = get_sigframe(ksig, regs, sizeof(*frame));
 	if (!access_ok(frame, sizeof(*frame)))
 		return -EFAULT;
 
-	if (ksig->ka.sa.sa_flags & SA_SIGINFO)
-		err |= copy_siginfo_to_user(&frame->info, &ksig->info);
+	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
 
 	/* Create the ucontext. */
 	err |= __put_user(0, &frame->uc.uc_flags);
 	err |= __put_user(NULL, &frame->uc.uc_link);
-	err |= __save_altstack(&frame->uc.uc_stack, user_stack_pointer(regs));
-	err |= linx_setup_sigcontext(&frame->uc.uc_mcontext, regs);
+	err |= __save_altstack(&frame->uc.uc_stack, regs->sp);
+	err |= setup_sigcontext(frame, regs);
 	err |= __copy_to_user(&frame->uc.uc_sigmask, set, sizeof(*set));
-
 	if (err)
 		return -EFAULT;
 
-	/* Set up registers for the signal handler. */
-	regs->regs[PTR_R1] = (unsigned long)frame;
-	regs->regs[PTR_R2] = (unsigned long)ksig->sig;
-	regs->regs[PTR_R3] = (unsigned long)&frame->info;
-	regs->regs[PTR_R4] = (unsigned long)&frame->uc;
-	regs->regs[PTR_R10] = (unsigned long)ksig->ka.sa.sa_restorer; /* ra */
-	regs->regs[PTR_PC] = (unsigned long)ksig->ka.sa.sa_handler;
-	linx_sync_resume_pc_ebarg(regs);
+	/* Set up to return from userspace. */
+#ifdef SA_RESTORER
+	regs->ra = ksig->ka.sa.sa_restorer;
+#else
+	regs->ra = (unsigned long)VDSO_SYMBOL(
+		current->mm->context.vdso, rt_sigreturn);
+#endif
+	/*
+	 * Set up registers for signal handler.
+	 * Registers that we don't modify keep the value they had from
+	 * user-space at the time we took the signal.
+	 * We always pass siginfo and mcontext, regardless of SA_SIGINFO,
+	 * since some things rely on this (e.g. glibc's debug/segfault.c).
+	 * Discard the bstate of the exception block as well.
+	 */
+	regs->bpc = (unsigned long)ksig->ka.sa.sa_handler;
+	regs->tpc = (unsigned long)ksig->ka.sa.sa_handler;
+	regs->sp = (unsigned long)frame;
+	regs->a0 = ksig->sig;                     /* a0: signal number */
+	regs->a1 = (unsigned long)(&frame->info); /* a1: siginfo pointer */
+	regs->a2 = (unsigned long)(&frame->uc);   /* a2: ucontext pointer */
+
+#if DEBUG_SIG
+	pr_info("SIG deliver (%s:%d): sig=%d pc=%p ra=%p sp=%p\n",
+		current->comm, task_pid_nr(current), ksig->sig,
+		(void *)regs->tpc, (void *)regs->ra, frame);
+#endif
 
 	return 0;
 }
 
+static void set_restart_syscall(struct pt_regs *regs)
+{
+	regs->bpc = regs->orig_bpc;
+	regs->tpc = regs->orig_tpc;
+}
+
 static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 {
-	int ret = setup_rt_frame(ksig, regs);
+	sigset_t *oldset = sigmask_to_save();
+	int ret;
+
+	/* Are we from a system call? */
+	if (is_syscall(regs->trapno)) {
+		/* Avoid additional syscall restarting via ret_from_exception */
+		regs->trapno = -1UL;
+		/* If so, check system call restarting.. */
+		switch (regs->a0) {
+		case -ERESTART_RESTARTBLOCK:
+		case -ERESTARTNOHAND:
+			regs->a0 = -EINTR;
+			break;
+
+		case -ERESTARTSYS:
+			if (!(ksig->ka.sa.sa_flags & SA_RESTART)) {
+				regs->a0 = -EINTR;
+				break;
+			}
+			fallthrough;
+		case -ERESTARTNOINTR:
+                        regs->a0 = regs->orig_a0;
+			set_restart_syscall(regs);
+			break;
+		}
+	}
+
+	/* Set up the stack frame */
+	ret = setup_rt_frame(ksig, oldset, regs);
 
 	signal_setup_done(ret, ksig, 0);
 }
 
-static void linx_do_signal_or_restart(struct pt_regs *regs)
+static void do_signal(struct pt_regs *regs)
 {
-	unsigned long continue_addr = 0;
-	unsigned long restart_addr = 0;
-	long retval = 0;
 	struct ksignal ksig;
-	const bool in_syscall = regs->orig_a0 != (unsigned long)-1;
-
-	/*
-	 * Mirror Linux arch restart handling:
-	 * - syscall return PC in pt_regs already points to the post-ACRC slot.
-	 * - ACRC is a 4-byte instruction in the current Linx userspace ABI.
-	 */
-	if (in_syscall) {
-		continue_addr = regs->regs[PTR_PC];
-		restart_addr = continue_addr - 4;
-		retval = (long)regs->regs[PTR_R2];
-
-		switch (retval) {
-		case -ERESTARTNOHAND:
-		case -ERESTARTSYS:
-		case -ERESTARTNOINTR:
-		case -ERESTART_RESTARTBLOCK:
-			regs->regs[PTR_R2] = regs->orig_a0;
-			regs->regs[PTR_PC] = restart_addr;
-			break;
-		default:
-			break;
-		}
-
-		/* Exit path consumed syscall context from this trap frame. */
-		regs->orig_a0 = (unsigned long)-1;
-		linx_sync_resume_pc_ebarg(regs);
-	}
 
 	if (get_signal(&ksig)) {
-		/*
-		 * If restart was prepared but this signal should interrupt it,
-		 * roll back to the post-syscall PC and report EINTR.
-		 */
-		if (in_syscall &&
-		    regs->regs[PTR_PC] == restart_addr &&
-		    (retval == -ERESTARTNOHAND ||
-		     retval == -ERESTART_RESTARTBLOCK ||
-		     (retval == -ERESTARTSYS &&
-		      !(ksig.ka.sa.sa_flags & SA_RESTART)))) {
-			regs->regs[PTR_R2] = (unsigned long)-EINTR;
-			regs->regs[PTR_PC] = continue_addr;
-		}
-
+		/* Actually deliver the signal */
 		handle_signal(&ksig, regs);
 		return;
 	}
 
-	/*
-	 * restart_block syscall switch for the RESTARTBLOCK class.
-	 * This keeps semantics aligned with generic Linux expectations.
-	 */
-	if (in_syscall &&
-	    regs->regs[PTR_PC] == restart_addr &&
-	    retval == -ERESTART_RESTARTBLOCK)
-		regs->regs[PTR_R9] = __NR_restart_syscall;
+	/* Did we come from a system call? */
+	if (is_syscall(regs->trapno)) {
+		/* Avoid additional syscall restarting via ret_from_exception */
+		regs->trapno = -1UL;
 
+		/* Restart the system call - no handlers present */
+		switch (regs->a0) {
+		case -ERESTARTNOHAND:
+		case -ERESTARTSYS:
+		case -ERESTARTNOINTR:
+                        regs->a0 = regs->orig_a0;
+			set_restart_syscall(regs);
+			break;
+		case -ERESTART_RESTARTBLOCK:
+                        regs->a0 = regs->orig_a0;
+			regs->x1 = __NR_restart_syscall;
+			set_restart_syscall(regs);
+			break;
+		}
+	}
+
+	/*
+	 * If there is no signal to deliver, we just put the saved
+	 * sigmask back.
+	 */
 	restore_saved_sigmask();
 }
 
-asmlinkage void do_notify_resume(struct pt_regs *regs)
+/*
+ * notification of userspace execution resumption
+ * - triggered by the _TIF_WORK_MASK flags
+ */
+asmlinkage __visible void do_notify_resume(struct pt_regs *regs,
+					   unsigned long thread_info_flags)
 {
-	enum linx_ctx_tu_test_pending_reason pending_reason;
+	if (thread_info_flags & _TIF_UPROBE)
+		uprobe_notify_resume(regs);
 
-	if (!user_mode(regs))
-		return;
+	/* Handle pending signal delivery */
+	if (thread_info_flags & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
+		do_signal(regs);
 
-	if (test_thread_flag(TIF_NOTIFY_RESUME))
-		resume_user_mode_work(regs);
-
-	/*
-	 * Always run signal/restart arbitration on user-return:
-	 * restart errno fixups must run even when no pending signal flags are set.
-	 */
-	linx_do_signal_or_restart(regs);
-
-	/*
-	 * Context-switch stress hook for t/u queue restore validation. Consume one
-	 * pending trigger and pollute manager-bank EBARG state before handing off:
-	 * - timer-irq mode: one timed sleep handoff
-	 * - step-trap mode: one unconditional schedule() handoff
-	 */
-	pending_reason = linx_ctx_tu_test_take_pending_reason();
-	if (pending_reason != LINX_CTX_TU_PENDING_NONE) {
-		bool irq_was_disabled = irqs_disabled();
-
-		if (irq_was_disabled)
-			local_irq_enable();
-		if (pending_reason == LINX_CTX_TU_PENDING_STEP_TRAP) {
-			set_current_state(TASK_RUNNING);
-			schedule();
-		} else {
-			/*
-			 * The timer-IRQ stress only needs one scheduler handoff
-			 * after the async user preemption. Using the generic
-			 * timeout path currently pulls in hrtimer state that is
-			 * not yet stable on Linx bring-up.
-			 */
-			set_current_state(TASK_RUNNING);
-			schedule();
-		}
-		if (irq_was_disabled)
-			local_irq_disable();
-		/*
-		 * Pollute manager-bank return state only after the scheduler
-		 * handoff has finished. entry.S will immediately overwrite it
-		 * from pt_regs before ACRE back to userspace.
-		 */
-		linx_ctx_tu_test_request_poison_on_user_return();
-	}
+	if (thread_info_flags & _TIF_NOTIFY_RESUME)
+		tracehook_notify_resume(regs);
 }

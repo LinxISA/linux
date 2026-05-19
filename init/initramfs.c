@@ -665,7 +665,11 @@ static int __init keepinitrd_setup(char *__unused)
 __setup("keepinitrd", keepinitrd_setup);
 #endif
 
+#ifdef CONFIG_LINX
+static bool __initdata initramfs_async = false;
+#else
 static bool __initdata initramfs_async = true;
+#endif
 static int __init initramfs_async_setup(char *str)
 {
 	return kstrtobool(str, &initramfs_async) == 0;
@@ -837,6 +841,7 @@ done:
 static ASYNC_DOMAIN_EXCLUSIVE(initramfs_domain);
 static async_cookie_t initramfs_cookie;
 
+#ifndef CONFIG_LINX
 void wait_for_initramfs(void)
 {
 	if (!initramfs_cookie) {
@@ -852,6 +857,7 @@ void wait_for_initramfs(void)
 	async_synchronize_cookie_domain(initramfs_cookie + 1, &initramfs_domain);
 }
 EXPORT_SYMBOL_GPL(wait_for_initramfs);
+#endif
 
 static int __init populate_rootfs(void)
 {

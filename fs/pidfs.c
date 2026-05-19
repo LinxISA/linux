@@ -915,7 +915,14 @@ int pidfs_register_pid(struct pid *pid)
 	if (attr)
 		return 0;
 
+#ifdef CONFIG_LINX
+	if (!pidfs_attr_cachep)
+		new_attr = kzalloc(sizeof(*new_attr), GFP_KERNEL);
+	else
+		new_attr = kmem_cache_zalloc(pidfs_attr_cachep, GFP_KERNEL);
+#else
 	new_attr = kmem_cache_zalloc(pidfs_attr_cachep, GFP_KERNEL);
+#endif
 	if (!new_attr)
 		return -ENOMEM;
 
@@ -986,7 +993,14 @@ static int pidfs_xattr_set(const struct xattr_handler *handler,
 
 	xattrs = READ_ONCE(attr->xattrs);
 	if (!xattrs) {
+#ifdef CONFIG_LINX
+		if (!pidfs_xattr_cachep)
+			xattrs = kzalloc(sizeof(*xattrs), GFP_KERNEL);
+		else
+			xattrs = kmem_cache_zalloc(pidfs_xattr_cachep, GFP_KERNEL);
+#else
 		xattrs = kmem_cache_zalloc(pidfs_xattr_cachep, GFP_KERNEL);
+#endif
 		if (!xattrs)
 			return -ENOMEM;
 
@@ -1069,6 +1083,14 @@ struct file *pidfs_alloc_file(struct pid *pid, unsigned int flags)
 
 void __init pidfs_init(void)
 {
+#ifdef CONFIG_LINX
+	/*
+	 * During smoke bring-up, keep pidfs on the generic heap so late
+	 * dedicated slab-cache creation does not block boot progress.
+	 */
+	pidfs_attr_cachep = NULL;
+	pidfs_xattr_cachep = NULL;
+#else
 	pidfs_attr_cachep = kmem_cache_create("pidfs_attr_cache", sizeof(struct pidfs_attr), 0,
 					 (SLAB_HWCACHE_ALIGN | SLAB_RECLAIM_ACCOUNT |
 					  SLAB_ACCOUNT | SLAB_PANIC), NULL);
@@ -1077,6 +1099,7 @@ void __init pidfs_init(void)
 					       sizeof(struct simple_xattrs), 0,
 					       (SLAB_HWCACHE_ALIGN | SLAB_RECLAIM_ACCOUNT |
 						SLAB_ACCOUNT | SLAB_PANIC), NULL);
+#endif
 
 	pidfs_mnt = kern_mount(&pidfs_type);
 	if (IS_ERR(pidfs_mnt))

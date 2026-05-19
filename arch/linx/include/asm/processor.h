@@ -1,129 +1,97 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-#ifndef _ASM_LINX_PROCESSOR_H
-#define _ASM_LINX_PROCESSOR_H
+/*
+ * Copyright (C) 2012 Regents of the University of California
+ */
+
+#ifndef _ASM_RISCV_PROCESSOR_H
+#define _ASM_RISCV_PROCESSOR_H
 
 #include <linux/const.h>
 
-#include <asm/page.h>
-#include <asm/thread_info.h>
+#include <vdso/processor.h>
+
 #include <asm/ptrace.h>
-#include <asm/ssr.h>
 
-#define STACK_ALIGN 16
-
-#ifdef CONFIG_MMU
 /*
- * v0.2 bring-up profile: 48-bit canonical VA, user space in the low half
- * (VA[47]=0). Keep kernel mappings at low addresses for now, but place user
- * mappings and stacks far from the kernel image by using the default mmap base
- * near TASK_SIZE/3.
+ * This decides where the kernel will search for a free chunk of vm
+ * space during mmap's.
  */
-#define TASK_SIZE	(UL(1) << 47)
 #define TASK_UNMAPPED_BASE	PAGE_ALIGN(TASK_SIZE / 3)
-#else
-/*
- * NOMMU: user mappings are allocated from available RAM and returned as
- * addresses in the flat address space. validate_mmap_request() rejects any
- * mapping with len > TASK_SIZE, so TASK_SIZE must be non-zero.
- */
-#define TASK_SIZE	(-PAGE_SIZE)
-#endif
 
-#define STACK_TOP	TASK_SIZE
-#define STACK_TOP_MAX	STACK_TOP
+#define STACK_TOP		TASK_SIZE
+#define STACK_TOP_MAX		STACK_TOP
+#define STACK_ALIGN		16
 
-#ifndef __ASSEMBLER__
+#ifndef __ASSEMBLY__
 
 struct task_struct;
 struct pt_regs;
 
+/* CPU-specific state of a task */
 struct thread_struct {
+	/* Callee-saved registers */
 	unsigned long ra;
-	unsigned long sp;
-	unsigned long s[9]; /* s0..s8 */
-	unsigned long ebarg0;
-	unsigned long ebarg_bpc_cur;
-	unsigned long ebarg_bpc_tgt;
-	unsigned long ebarg_tpc;
-	unsigned long ebarg_lra;
-	unsigned long ebarg_tq[4];
-	unsigned long ebarg_uq[4];
-	unsigned long ebarg_lb;
-	unsigned long ebarg_lc;
-	unsigned long ebarg_ext_ptr;
-	unsigned long ebarg_ext_meta;
-	unsigned long kthread_fn;
-	unsigned long kthread_arg;
+	unsigned long sp;	/* Kernel mode stack */
+	unsigned long s[9];	/* s[0]: frame pointer */
+	struct __riscv_d_ext_state fstate;
+	unsigned long bad_cause;
 };
 
-#define INIT_THREAD {			\
-	.ra = 0,			\
-	.sp = 0,			\
-	.s = { 0 },			\
-	.ebarg0 = 0,			\
-	.ebarg_bpc_cur = 0,		\
-	.ebarg_bpc_tgt = 0,		\
-	.ebarg_tpc = 0,			\
-	.ebarg_lra = 0,			\
-	.ebarg_tq = { 0 },		\
-	.ebarg_uq = { 0 },		\
-	.ebarg_lb = 0,			\
-	.ebarg_lc = 0,			\
-	.ebarg_ext_ptr = 0,		\
-	.ebarg_ext_meta = 0,		\
-	.kthread_fn = 0,		\
-	.kthread_arg = 0,		\
-}
-
-#define task_pt_regs(p) \
-	((struct pt_regs *)((unsigned long)task_stack_page(p) + THREAD_SIZE) - 1)
-
-#define KSTK_EIP(tsk)	(task_pt_regs(tsk)->regs[PTR_PC])
-#define KSTK_ESP(tsk)	(task_pt_regs(tsk)->regs[PTR_R1])
-
-static inline void start_thread(struct pt_regs *regs, unsigned long pc,
-				unsigned long sp)
+/* Whitelist the fstate from the task_struct for hardened usercopy */
+static inline void arch_thread_struct_whitelist(unsigned long *offset,
+						unsigned long *size)
 {
-	unsigned long ecstate;
-#ifdef CONFIG_BINFMT_ELF_FDPIC
-	unsigned long fdpic_exec_map = regs->regs[PTR_R3];
-	unsigned long fdpic_interp_map = regs->regs[PTR_R4];
-	unsigned long fdpic_dyn = regs->regs[PTR_R5];
-#endif
-
-	memset(regs, 0, sizeof(*regs));
-	regs->regs[PTR_PC] = pc;
-	regs->regs[PTR_R1] = sp;
-	/*
-	 * ACRE restore uses the branch context (BPC_CUR/BPC_TGT). Seed these
-	 * from the ELF entry so post-exec syscall return does not resume at 0.
-	 */
-	regs->ebarg_bpc_cur = pc;
-	regs->ebarg_bpc_tgt = pc;
-	regs->ebarg_tpc = pc;
-
-#ifdef CONFIG_BINFMT_ELF_FDPIC
-	/* Preserve FDPIC ABI registers set by ELF_FDPIC_PLAT_INIT(). */
-	regs->regs[PTR_R3] = fdpic_exec_map;
-	regs->regs[PTR_R4] = fdpic_interp_map;
-	regs->regs[PTR_R5] = fdpic_dyn;
-#endif
-
-	/*
-	 * Execve prepares a userspace pt_regs frame. Populate ECSTATE with a
-	 * user ACR level (2) so linx_enter_user() can transition with ACRE.
-	 */
-	ecstate = linx_ssr_read_cstate();
-	ecstate |= LINX_CSTATE_I_BIT;
-	ecstate = (ecstate & ~LINX_CSTATE_ACR_MASK) | LINX_CSTATE_ACR_USER;
-	regs->ecstate = ecstate;
-
+	*offset = offsetof(struct thread_struct, fstate);
+	*size = sizeof_field(struct thread_struct, fstate);
 }
 
-#define cpu_relax()	barrier()
+#define INIT_THREAD {					\
+	.sp = sizeof(init_stack) + (long)&init_stack,	\
+}
 
-unsigned long __get_wchan(struct task_struct *p);
+#define task_pt_regs(tsk)						\
+	((struct pt_regs *)(task_stack_page(tsk) + THREAD_SIZE		\
+			    - ALIGN(sizeof(struct pt_regs), STACK_ALIGN)))
 
-#endif /* !__ASSEMBLER__ */
+#define KSTK_EIP(tsk)		(task_pt_regs(tsk)->tpc)
+#define KSTK_ESP(tsk)		(task_pt_regs(tsk)->sp)
 
-#endif /* _ASM_LINX_PROCESSOR_H */
+
+/* Do necessary setup to start up a newly executed thread. */
+extern void start_thread(struct pt_regs *regs,
+			unsigned long pc, unsigned long sp);
+
+/* Free all resources held by a thread. */
+static inline void release_thread(struct task_struct *dead_task)
+{
+}
+
+extern unsigned long __get_wchan(struct task_struct *p);
+
+#if 0 /* TODO: 先注释掉，优先保证内核整体编译通过 */
+static inline void wait_for_interrupt(void)
+{
+	__asm__ __volatile__ ("wfi");
+}
+
+#else
+static inline void wait_for_interrupt(void)
+{
+	return;
+	__asm__ __volatile__(
+		"BSTART.sys fall\n" \
+			"bwi zero\n"
+		);
+}
+#endif
+
+struct device_node;
+int riscv_of_processor_hartid(struct device_node *node);
+int riscv_of_parent_hartid(struct device_node *node);
+
+extern void riscv_fill_hwcap(void);
+extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);
+
+#endif /* __ASSEMBLY__ */
+
+#endif /* _ASM_RISCV_PROCESSOR_H */

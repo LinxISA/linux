@@ -1,94 +1,77 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * LinxISA syscall register accessors.
+ * Copyright (C) 2008-2009 Red Hat, Inc.  All rights reserved.
+ * Copyright 2010 Tilera Corporation. All Rights Reserved.
+ * Copyright 2015 Regents of the University of California, Berkeley
  *
- * Bring-up convention (LP64):
- * - syscall nr: a7 (R9)
- * - args 0..5: a0..a5 (R2..R7)
- * - return value / errno: a0 (R2), negative errno on error
+ * See asm-generic/syscall.h for descriptions of what we must do here.
  */
-#ifndef _ASM_LINX_SYSCALL_H
-#define _ASM_LINX_SYSCALL_H
 
-#include <linux/err.h>
+#ifndef _ASM_RISCV_SYSCALL_H
+#define _ASM_RISCV_SYSCALL_H
+
+#include <uapi/linux/audit.h>
 #include <linux/sched.h>
+#include <linux/err.h>
 
-#include <asm/ptrace.h>
+/* The array of function pointers for syscalls. */
+extern void * const sys_call_table[];
 
-static inline int syscall_get_nr(struct task_struct *task, struct pt_regs *regs)
+/*
+ * Only the low 32 bits of orig_r0 are meaningful, so we return int.
+ * This importantly ignores the high bits on 64-bit, so comparisons
+ * sign-extend the low 32 bits.
+ */
+static inline int syscall_get_nr(struct task_struct *task,
+				 struct pt_regs *regs)
 {
-	(void)task;
-	return (int)regs->regs[PTR_R9];
-}
-
-static inline void syscall_set_nr(struct task_struct *task,
-				  struct pt_regs *regs, int nr)
-{
-	(void)task;
-	regs->regs[PTR_R9] = (unsigned long)(unsigned int)nr;
+	return regs->x1;
 }
 
 static inline void syscall_rollback(struct task_struct *task,
 				    struct pt_regs *regs)
 {
-	(void)task;
-	(void)regs;
+        regs->a0 = regs->orig_a0;
 }
 
 static inline long syscall_get_error(struct task_struct *task,
 				     struct pt_regs *regs)
 {
-	unsigned long error = regs->regs[PTR_R2];
+	unsigned long error = regs->a0;
 
-	(void)task;
-	return IS_ERR_VALUE(error) ? (long)error : 0;
+	return IS_ERR_VALUE(error) ? error : 0;
 }
 
 static inline long syscall_get_return_value(struct task_struct *task,
 					    struct pt_regs *regs)
 {
-	(void)task;
-	return (long)regs->regs[PTR_R2];
+	return regs->a0;
 }
 
 static inline void syscall_set_return_value(struct task_struct *task,
-					    struct pt_regs *regs, int error,
-					    long val)
+					    struct pt_regs *regs,
+					    int error, long val)
 {
-	(void)task;
-	regs->regs[PTR_R2] = error ? (unsigned long)(long)error : (unsigned long)val;
+	regs->a0 = (long) error ?: val;
 }
 
 static inline void syscall_get_arguments(struct task_struct *task,
 					 struct pt_regs *regs,
 					 unsigned long *args)
 {
-	(void)task;
-	args[0] = regs->regs[PTR_R2];
-	args[1] = regs->regs[PTR_R3];
-	args[2] = regs->regs[PTR_R4];
-	args[3] = regs->regs[PTR_R5];
-	args[4] = regs->regs[PTR_R6];
-	args[5] = regs->regs[PTR_R7];
-}
-
-static inline void syscall_set_arguments(struct task_struct *task,
-					 struct pt_regs *regs,
-					 const unsigned long *args)
-{
-	(void)task;
-	regs->regs[PTR_R2] = args[0];
-	regs->regs[PTR_R3] = args[1];
-	regs->regs[PTR_R4] = args[2];
-	regs->regs[PTR_R5] = args[3];
-	regs->regs[PTR_R6] = args[4];
-	regs->regs[PTR_R7] = args[5];
+	args[0] = regs->orig_a0;
+	args++;
+	memcpy(args, &regs->a1, 5 * sizeof(args[0]));
 }
 
 static inline int syscall_get_arch(struct task_struct *task)
 {
-	(void)task;
-	return 0;
+#ifdef CONFIG_64BIT
+	return AUDIT_ARCH_LINX64;
+#else
+	return AUDIT_ARCH_RISCV32;
+#endif
 }
 
-#endif /* _ASM_LINX_SYSCALL_H */
+asmlinkage long sys_riscv_flush_icache(uintptr_t, uintptr_t, uintptr_t);
+#endif	/* _ASM_RISCV_SYSCALL_H */

@@ -1,437 +1,660 @@
 /* SPDX-License-Identifier: GPL-2.0-only */
-
-#include <asm/asm-offsets.h>
-
 /*
- * LinxISA Linux bring-up: trap vector + userspace entry.
- *
- * The QEMU bring-up model does not automatically switch stacks on trap entry.
- * The kernel maintains the current task's kernel-stack-top in ETEMP0_ACR1.
- * Trap entry from ACR2 (userspace) switches to that kernel stack.
- *
- * The managing ACR's banked SSRs provide the trap metadata (ECSTATE/TRAPNO/
- * TRAPARG0/EBARG*). We snapshot them into pt_regs and then dispatch into C.
+ * Copyright (C) 2023 Huawei Technologies Co, Ltd.
  */
 
-/* ACR1 (kernel) banked SSR IDs (bring-up profile). */
-.set SSR_ECSTATE_ACR1,         0x1f00
-.set SSR_TRAPNO_ACR1,          0x1f02
-.set SSR_TRAPARG0_ACR1,        0x1f03
-.set SSR_ETEMP_ACR1,           0x1f05
-.set SSR_ETEMP0_ACR1,          0x1f06
+#include <linux/init.h>
+#include <linux/linkage.h>
 
-.set SSR_EBARG0_ACR1,          0x1f40
-.set SSR_EBARG_BPC_CUR_ACR1,   0x1f41
-.set SSR_EBARG_BPC_TGT_ACR1,   0x1f42
-.set SSR_EBARG_TPC_ACR1,       0x1f43
-.set SSR_EBARG_LRA_ACR1,       0x1f44
-.set SSR_EBARG_TQ0_ACR1,       0x1f45
-.set SSR_EBARG_TQ1_ACR1,       0x1f46
-.set SSR_EBARG_TQ2_ACR1,       0x1f47
-.set SSR_EBARG_TQ3_ACR1,       0x1f48
-.set SSR_EBARG_UQ0_ACR1,       0x1f49
-.set SSR_EBARG_UQ1_ACR1,       0x1f4a
-.set SSR_EBARG_UQ2_ACR1,       0x1f4b
-.set SSR_EBARG_UQ3_ACR1,       0x1f4c
-.set SSR_EBARG_LB_ACR1,        0x1f4d
-.set SSR_EBARG_LC_ACR1,        0x1f4e
-.set SSR_EBARG_EXT_PTR_ACR1,   0x1f4f
-.set SSR_EBARG_EXT_META_ACR1,  0x1f50
+#include <asm/asm.h>
+#include <asm/ssr.h>
+#include <asm/unistd.h>
+#include <asm/thread_info.h>
+#include <asm/asm-offsets.h>
+#include <asm/errata_list.h>
+#include <asm/block-def.h>
+#include <asm/block_head.h>
 
-	.text
+.set resume_kernel, restore_all
 
-	.globl linx_trap_vector_acr0
-	.type linx_trap_vector_acr0,@function
-linx_trap_vector_acr0:
-	/* ACR0 is not used by the Linux bring-up port; hang if vectored here. */
-	C.BSTART DIRECT, linx_trap_vector_acr0
-	C.BSTOP
+/*
+ * if (TASK_TI_FLAGS(SSR_TP) & flag) then BPC += branch
+ */
+.macro block_next_bnez_tif flag, branch
+	BSTART.std cond, \branch
+		ssrget SSR_TP, -> t
+		ldi [t#1, TASK_TI_FLAGS], -> t	/* TASK_TI_FLAGS(SSR_TP) */
+		andi t#1, \flag, -> t
+		setc.ne t#1, zero
+.endm
 
-	.globl linx_trap_vector
-	.type linx_trap_vector,@function
-linx_trap_vector:
-	/*
-	 * Decide whether we trapped from userspace (ACR2). ECSTATE_ACR1.ACR holds
-	 * the trapped-from ACR. Preserve the incoming SP in ETEMP_ACR1 while we
-	 * use SP as a scratch register for the decision.
+/*
+ * if (gpr[rs] & ECAUSE_TRAPNUM_MASK) == imm, then BPC += branch
+ */
+.macro block_next_beqi_trapnum rs, imm, branch
+	BSTART.std cond \branch
+		andi \rs, ECAUSE_TRAPNUM_MASK, -> t
+		addi zero, \imm, -> t
+		setc.eq t#1, t#2
+.endm
+
+/*
+ * mem[rd + offset2] = mem[rs + offset1]
+ */
+.macro load_and_store rs, offset1, rd, offset2
+	ldi [\rs, \offset1], -> t
+	sdi t#1, [\rd, \offset2]
+.endm
+
+ENTRY(handle_exception)
+    /*
+	 * If coming from userspace, preserve the user thread pointer and load
+	 * the kernel thread pointer. If we came from the kernel, the SSR_ETEMP
+	 * register will contain 0, and we should continue on the current SSR_TP.
 	 */
-	C.BSTART COND, .Llinx_trap_from_user
-	hl.ssrset sp, SSR_ETEMP_ACR1
-	hl.ssrget SSR_ECSTATE_ACR1, ->sp
-	andi sp, 15, ->sp
-	subi sp, 2, ->sp
-	c.setc.eq sp, zero
-	C.BSTOP
+    BSTART.std cond, from_kernel
+	ssrswap x1, SSR_A0_ETEMP, -> x1
+	setc.eqi x1, 0
 
-.Llinx_trap_from_kernel:
-	/* Trapped from kernel ACR1: restore original SP and jump to common path. */
-	C.BSTART DIRECT, .Llinx_trap_common
-	hl.ssrget SSR_ETEMP_ACR1, ->sp
-	C.BSTOP
+from_user:
+/*
+ * current state:
+ *	x1 hold (thread info)
+ *	tp hold (tls)
+ *	etemp hold (old x1)
+ *	sp hold (user sp)
+ */
+    BSTART.std direct, _save_context
+    sdi sp, [x1, TASK_TI_USER_SP]
+	ldi [x1, TASK_TI_KERNEL_SP], -> sp
 
-.Llinx_trap_from_user:
-	/* Trapped from userspace ACR2: switch to kernel stack top and continue. */
-	C.BSTART DIRECT, .Llinx_trap_common
-	hl.ssrget SSR_ETEMP0_ACR1, ->sp
-	C.BSTOP
+from_kernel:
+/*
+ * current state:
+ *	x1 hold (0)
+ *	tp hold (thread info)
+ *	etemp hold (old x1)
+ *	sp hold (kernel sp)
+ */
+    BSTART.sys fall
+	ssrswap x1, SSR_TP, -> x1
+	sdi sp, [x1, TASK_TI_KERNEL_SP]
+	sdi sp, [x1, TASK_TI_USER_SP]
 
-.Llinx_trap_common:
-	C.BSTART.STD
-	/* Allocate pt_regs on the (kernel) stack. */
-	subi sp, PT_REGS_SIZE, ->sp
+_save_context:
+/*
+ * current state:
+ *	x1 hold (thread info)
+ *	tp hold (0/tls)
+ *	etemp hold (old x1)
+ *	sp hold (kernel sp), old sp is saved
+ */
 
-	/* Save GPRs. (SP is captured separately from ETEMP_ACR1.) */
-	sdi zero, [sp, PT_REGS_R0]
-	sdi a0,   [sp, PT_REGS_R2]
-	sdi a1,   [sp, PT_REGS_R3]
-	sdi a2,   [sp, PT_REGS_R4]
-	sdi a3,   [sp, PT_REGS_R5]
-	sdi a4,   [sp, PT_REGS_R6]
-	sdi a5,   [sp, PT_REGS_R7]
-	sdi a6,   [sp, PT_REGS_R8]
-	sdi a7,   [sp, PT_REGS_R9]
-	sdi ra,   [sp, PT_REGS_R10]
-	sdi s0,   [sp, PT_REGS_R11]
-	sdi s1,   [sp, PT_REGS_R12]
-	sdi s2,   [sp, PT_REGS_R13]
-	sdi s3,   [sp, PT_REGS_R14]
-	sdi s4,   [sp, PT_REGS_R15]
-	sdi s5,   [sp, PT_REGS_R16]
-	sdi s6,   [sp, PT_REGS_R17]
-	sdi s7,   [sp, PT_REGS_R18]
-	sdi s8,   [sp, PT_REGS_R19]
-	sdi x0,   [sp, PT_REGS_R20]
-	sdi x1,   [sp, PT_REGS_R21]
-	sdi x2,   [sp, PT_REGS_R22]
-	sdi x3,   [sp, PT_REGS_R23]
+	BSTART.sys fall
+	ssrswap x1, SSR_TP, -> x1
+	ssrswap x1, SSR_A0_ETEMP, -> x1
 
-	/* Save trapped SP from ETEMP_ACR1 into pt_regs. */
-	hl.ssrget SSR_ETEMP_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_R1]
+/*
+ * current state:
+ *	x1 hold(old x1)
+ *	tp hold(ti)
+ *	etemp hold(0/tls)
+ */
 
-	/* Snapshot trap metadata from ACR1 banked SSRs into pt_regs. */
-	hl.ssrget SSR_ECSTATE_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_ECSTATE]
-	hl.ssrget SSR_TRAPNO_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_TRAPNO]
-	hl.ssrget SSR_TRAPARG0_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_TRAPARG0]
+	/* allocate pt_regs's space */
+	subi sp, PT_SIZE_ON_STACK, -> sp
 
-	hl.ssrget SSR_EBARG0_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG0]
-	hl.ssrget SSR_EBARG_BPC_CUR_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_BPC_CUR]
-	hl.ssrget SSR_EBARG_BPC_TGT_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_BPC_TGT]
-	hl.ssrget SSR_EBARG_TPC_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_TPC]
-	/* Bring-up: treat EBARG_TPC as the resume PC exposed via pt_regs->pc. */
-	sdi x0, [sp, PT_REGS_PC]
-	hl.ssrget SSR_EBARG_LRA_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_LRA]
+save_level2_state:
+/* 只有ecstate.bi == 1才需要保存，现在先不管，都一把保存了 */
+	BSTART.std fall
+	sdi t#1, [sp, PT_ELPR0]
+	sdi t#2, [sp, PT_ELPR1]
+	sdi t#3, [sp, PT_ELPR2]
+	sdi t#4, [sp, PT_ELPR3]
+	sdi u#1, [sp, PT_ELPR4]
+	sdi u#2, [sp, PT_ELPR5]
+	sdi u#3, [sp, PT_ELPR6]
+	sdi u#4, [sp, PT_ELPR7]
 
-	hl.ssrget SSR_EBARG_TQ0_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_TQ0]
-	hl.ssrget SSR_EBARG_TQ1_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_TQ1]
-	hl.ssrget SSR_EBARG_TQ2_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_TQ2]
-	hl.ssrget SSR_EBARG_TQ3_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_TQ3]
+save_level1_state:
+	/* directly copy from registers to pt_regs, only for necessary UL_GPRs */
+	BSTART.sys fall
+	ssrget SSR_TP, -> t
+	ldi [t#1, TASK_TI_USER_SP], -> t
+	sdi t#1, [sp, PT_SP]	/* PT_SP(sp) = user sp */
+	sdi a0, [sp, PT_A0]
+	sdi a1, [sp, PT_A1]
+	sdi a2, [sp, PT_A2]
+	sdi a3, [sp, PT_A3]
+	sdi a4, [sp, PT_A4]
+	sdi a5, [sp, PT_A5]
+	sdi a6, [sp, PT_A6]
+	sdi a7, [sp, PT_A7]
+	sdi ra, [sp, PT_RA]
+	sdi s0, [sp, PT_S0]
+	sdi s1, [sp, PT_S1]
+	sdi s2, [sp, PT_S2]
+	sdi s3, [sp, PT_S3]
+	sdi s4, [sp, PT_S4]
+	sdi s5, [sp, PT_S5]
+	sdi s6, [sp, PT_S6]
+	sdi s7, [sp, PT_S7]
+	sdi s8, [sp, PT_S8]
+	sdi x0, [sp, PT_X0]
+	sdi x1, [sp, PT_X1]
+	sdi x2, [sp, PT_X2]
+	sdi x3, [sp, PT_X3]
 
-	hl.ssrget SSR_EBARG_UQ0_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_UQ0]
-	hl.ssrget SSR_EBARG_UQ1_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_UQ1]
-	hl.ssrget SSR_EBARG_UQ2_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_UQ2]
-	hl.ssrget SSR_EBARG_UQ3_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_UQ3]
+	/* save BARGs and etpc */
+	hl.ssrget SSR_EBPC, -> t
+	sdi t#1, [sp, PT_BPC]
+	hl.ssrget SSR_EBPCN, -> t
+	sdi t#1, [sp, PT_BPCN]
+	hl.ssrget SSR_EBARG, -> t
+	sdi t#1, [sp, PT_EBARG]
+	hl.ssrget SSR_ETPC, -> t
+	sdi t#1, [sp, PT_TPC]
 
-	hl.ssrget SSR_EBARG_LB_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_LB]
-	hl.ssrget SSR_EBARG_LC_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_LC]
-	hl.ssrget SSR_EBARG_EXT_PTR_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_EXT_PTR]
-	hl.ssrget SSR_EBARG_EXT_META_ACR1, ->x0
-	sdi x0, [sp, PT_REGS_EBARG_EXT_META]
 
-	/* Default orig_a0 = -1 ("not in syscall") for generic core code. */
-	addi zero, -1, ->x0
-	sdi x0, [sp, PT_REGS_ORIG_A0]
+after_save_bstate:
+	BSTART.sys fall
+	ssrget SSR_GP, -> t
+	sdi t#1, [sp, PT_GP]	/* PT_GP(sp) = gp */
 
-	/* Dispatch into C trap handler: linx_do_trap(struct pt_regs *regs). */
-	BSTART CALL, linx_do_trap, ra=.Llinx_after_do_trap
-	c.movr sp, ->a0
-	C.BSTOP
-
-.Llinx_after_do_trap:
 	/*
-	 * Only user-mode traps need do_notify_resume() work. Kernel-mode traps/IRQs
-	 * return directly after restoring trap metadata.
-	 */
-	C.BSTART COND, .Llinx_after_notify
-	ldi [sp, PT_REGS_ECSTATE], ->x0
-	andi x0, 15, ->x0
-	subi x0, 2, ->x0
-	c.setc.eq x0, zero
-	C.BSTOP
-
-	C.BSTART DIRECT, .Llinx_return_restore
-	C.BSTOP
-
-.Llinx_after_notify:
-	C.BSTART.STD
-	BSTART CALL, do_notify_resume, ra=.Llinx_after_notify_done
-	c.movr sp, ->a0
-	C.BSTOP
-
-.Llinx_after_notify_done:
-	/*
-	 * Return to userspace via explicit RRAT_RESTORE. We always re-seed the
-	 * manager-bank ECSTATE/EBARG snapshot from pt_regs first.
-	 */
-	C.BSTART DIRECT, .Llinx_return_restore
-	C.BSTOP
-
-.Llinx_return_restore:
-	C.BSTART.STD
-	BSTART CALL, linx_ctx_tu_test_maybe_poison_return_state, ra=.Llinx_return_after_poison
-	C.BSTOP
-
-.Llinx_return_after_poison:
-	C.BSTART.STD
-	/* Restore registers from pt_regs and return via ACRE RRAT_RESTORE (1). */
-	c.movr sp, ->x3
-
-	/* Re-seed manager-bank trap snapshot from pt_regs before ACRE. */
-	ldi [x3, PT_REGS_ECSTATE], ->x1
-	hl.ssrset x1, SSR_ECSTATE_ACR1
-
-	ldi [x3, PT_REGS_EBARG0], ->x0
-	hl.ssrset x0, SSR_EBARG0_ACR1
-	ldi [x3, PT_REGS_EBARG_BPC_CUR], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
-	ldi [x3, PT_REGS_EBARG_BPC_TGT], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
-	ldi [x3, PT_REGS_EBARG_TPC], ->x0
-	hl.ssrset x0, SSR_EBARG_TPC_ACR1
-	ldi [x3, PT_REGS_EBARG_LRA], ->x0
-	hl.ssrset x0, SSR_EBARG_LRA_ACR1
-
-	ldi [x3, PT_REGS_EBARG_TQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
-
-	ldi [x3, PT_REGS_EBARG_UQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
-
-	ldi [x3, PT_REGS_EBARG_LB], ->x0
-	hl.ssrset x0, SSR_EBARG_LB_ACR1
-	ldi [x3, PT_REGS_EBARG_LC], ->x0
-	hl.ssrset x0, SSR_EBARG_LC_ACR1
-	ldi [x3, PT_REGS_EBARG_EXT_PTR], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
-	ldi [x3, PT_REGS_EBARG_EXT_META], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
-
-	ldi [x3, PT_REGS_R2],  ->a0
-	ldi [x3, PT_REGS_R3],  ->a1
-	ldi [x3, PT_REGS_R4],  ->a2
-	ldi [x3, PT_REGS_R5],  ->a3
-	ldi [x3, PT_REGS_R6],  ->a4
-	ldi [x3, PT_REGS_R7],  ->a5
-	ldi [x3, PT_REGS_R8],  ->a6
-	ldi [x3, PT_REGS_R9],  ->a7
-	ldi [x3, PT_REGS_R10], ->ra
-	ldi [x3, PT_REGS_R11], ->s0
-	ldi [x3, PT_REGS_R12], ->s1
-	ldi [x3, PT_REGS_R13], ->s2
-	ldi [x3, PT_REGS_R14], ->s3
-	ldi [x3, PT_REGS_R15], ->s4
-	ldi [x3, PT_REGS_R16], ->s5
-	ldi [x3, PT_REGS_R17], ->s6
-	ldi [x3, PT_REGS_R18], ->s7
-	ldi [x3, PT_REGS_R19], ->s8
-	ldi [x3, PT_REGS_R20], ->x0
-	ldi [x3, PT_REGS_R21], ->x1
-	ldi [x3, PT_REGS_R22], ->x2
-	ldi [x3, PT_REGS_R23], ->x3
-	ldi [sp, PT_REGS_R1],  ->sp
-	acre 1
-
-.Llinx_return_default:
-	C.BSTART.STD
-	/*
-	 * Debug fallback: explicit RRAT_DEFAULT path.
-	 * Re-seed ECSTATE/EBARG from pt_regs, then return via ACRE RRAT_DEFAULT (0).
-	 * IRQ/timer nesting can clobber restore state; restore the full EBARG group
-	 * to avoid architectural state pollution when returning to userspace.
-	 */
-	c.movr sp, ->x3
-	ldi [x3, PT_REGS_ECSTATE], ->x1
-	hl.ssrset x1, SSR_ECSTATE_ACR1
-
-	/* Restore full EBARG group from pt_regs snapshot. */
-	ldi [x3, PT_REGS_EBARG0], ->x0
-	hl.ssrset x0, SSR_EBARG0_ACR1
-	ldi [x3, PT_REGS_EBARG_BPC_CUR], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
-	ldi [x3, PT_REGS_EBARG_BPC_TGT], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
-	ldi [x3, PT_REGS_EBARG_TPC], ->x0
-	hl.ssrset x0, SSR_EBARG_TPC_ACR1
-	ldi [x3, PT_REGS_EBARG_LRA], ->x0
-	hl.ssrset x0, SSR_EBARG_LRA_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
-	ldi [x3, PT_REGS_EBARG_TQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
-	ldi [x3, PT_REGS_EBARG_UQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
-	ldi [x3, PT_REGS_EBARG_LB], ->x0
-	hl.ssrset x0, SSR_EBARG_LB_ACR1
-	ldi [x3, PT_REGS_EBARG_LC], ->x0
-	hl.ssrset x0, SSR_EBARG_LC_ACR1
-	ldi [x3, PT_REGS_EBARG_EXT_PTR], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
-	ldi [x3, PT_REGS_EBARG_EXT_META], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
-
-	ldi [x3, PT_REGS_R2],  ->a0
-	ldi [x3, PT_REGS_R3],  ->a1
-	ldi [x3, PT_REGS_R4],  ->a2
-	ldi [x3, PT_REGS_R5],  ->a3
-	ldi [x3, PT_REGS_R6],  ->a4
-	ldi [x3, PT_REGS_R7],  ->a5
-	ldi [x3, PT_REGS_R8],  ->a6
-	ldi [x3, PT_REGS_R9],  ->a7
-	ldi [x3, PT_REGS_R10], ->ra
-	ldi [x3, PT_REGS_R11], ->s0
-	ldi [x3, PT_REGS_R12], ->s1
-	ldi [x3, PT_REGS_R13], ->s2
-	ldi [x3, PT_REGS_R14], ->s3
-	ldi [x3, PT_REGS_R15], ->s4
-	ldi [x3, PT_REGS_R16], ->s5
-	ldi [x3, PT_REGS_R17], ->s6
-	ldi [x3, PT_REGS_R18], ->s7
-	ldi [x3, PT_REGS_R19], ->s8
-	ldi [x3, PT_REGS_R20], ->x0
-	ldi [x3, PT_REGS_R21], ->x1
-	ldi [x3, PT_REGS_R22], ->x2
-	ldi [x3, PT_REGS_R23], ->x3
-	ldi [sp, PT_REGS_R1],  ->sp
-	acre 0
-
-	.globl linx_enter_user
-	.type linx_enter_user,@function
-linx_enter_user:
-	/*
-	 * Transition from the kernel ring (ACR1) into the user ring (ACR2) using
-	 * a pt_regs frame prepared by execve()/start_thread() or fork/clone.
+	 * Disable user-mode memory access as it should only be set in the
+	 * actual user copy routines.
 	 *
-	 * The pt_regs pointer is passed in a0. We rebase SP to that frame so we
-	 * can restore registers without needing an extra base register, then we
-	 * seed ECSTATE/EBARG for ACRE and enter userspace via ACRE RRAT_DEFAULT.
+	 * Disable the FPU to detect illegal usage of floating point in kernel
+	 * space.
 	 */
-	C.BSTART.STD
-	c.movr a0, ->sp
 
-	/* Seed ACR-enter state from the pt_regs snapshot. */
-	ldi [sp, PT_REGS_ECSTATE], ->x0
-	hl.ssrset x0, SSR_ECSTATE_ACR1
+	BSTART.std fall
+	addi zero, CSTATE_P, -> t
+	ssrget SSR_CSTATE, -> t
+	and t#1, t#2.not -> t
+	ssrset t#1, SSR_CSTATE
 
-	/* Seed full EBARG group for deterministic entry into user ACR. */
-	ldi [sp, PT_REGS_EBARG0], ->x0
-	hl.ssrset x0, SSR_EBARG0_ACR1
-	ldi [sp, PT_REGS_EBARG_BPC_CUR], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_CUR_ACR1
-	ldi [sp, PT_REGS_EBARG_BPC_TGT], ->x0
-	hl.ssrset x0, SSR_EBARG_BPC_TGT_ACR1
-	ldi [sp, PT_REGS_EBARG_TPC], ->x0
-	hl.ssrset x0, SSR_EBARG_TPC_ACR1
-	ldi [sp, PT_REGS_EBARG_LRA], ->x0
-	hl.ssrset x0, SSR_EBARG_LRA_ACR1
-	ldi [sp, PT_REGS_EBARG_TQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ0_ACR1
-	ldi [sp, PT_REGS_EBARG_TQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ1_ACR1
-	ldi [sp, PT_REGS_EBARG_TQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ2_ACR1
-	ldi [sp, PT_REGS_EBARG_TQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_TQ3_ACR1
-	ldi [sp, PT_REGS_EBARG_UQ0], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ0_ACR1
-	ldi [sp, PT_REGS_EBARG_UQ1], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ1_ACR1
-	ldi [sp, PT_REGS_EBARG_UQ2], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ2_ACR1
-	ldi [sp, PT_REGS_EBARG_UQ3], ->x0
-	hl.ssrset x0, SSR_EBARG_UQ3_ACR1
-	ldi [sp, PT_REGS_EBARG_LB], ->x0
-	hl.ssrset x0, SSR_EBARG_LB_ACR1
-	ldi [sp, PT_REGS_EBARG_LC], ->x0
-	hl.ssrset x0, SSR_EBARG_LC_ACR1
-	ldi [sp, PT_REGS_EBARG_EXT_PTR], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_PTR_ACR1
-	ldi [sp, PT_REGS_EBARG_EXT_META], ->x0
-	hl.ssrset x0, SSR_EBARG_EXT_META_ACR1
+	hl.ssrget SSR_ECSTATE, -> s1
+	hl.ssrget SSR_TRAPARG0, -> s3	/* indicate different block trap when instruction permission exception */
+	hl.ssrget SSR_TRAPNO, -> s4
+	sdi s1, [sp, PT_CSTATE]
+	sdi s3, [sp, PT_TRAPARG0]
+	sdi s4, [sp, PT_TRAPNO]
 
-	/* Restore user GPRs from pt_regs and enter user ACR via ACRE. */
-	ldi [sp, PT_REGS_R2],  ->a0
-	ldi [sp, PT_REGS_R3],  ->a1
-	ldi [sp, PT_REGS_R4],  ->a2
-	ldi [sp, PT_REGS_R5],  ->a3
-	ldi [sp, PT_REGS_R6],  ->a4
-	ldi [sp, PT_REGS_R7],  ->a5
-	ldi [sp, PT_REGS_R8],  ->a6
-	ldi [sp, PT_REGS_R9],  ->a7
-	ldi [sp, PT_REGS_R10], ->ra
-	ldi [sp, PT_REGS_R11], ->s0
-	ldi [sp, PT_REGS_R12], ->s1
-	ldi [sp, PT_REGS_R13], ->s2
-	ldi [sp, PT_REGS_R14], ->s3
-	ldi [sp, PT_REGS_R15], ->s4
-	ldi [sp, PT_REGS_R16], ->s5
-	ldi [sp, PT_REGS_R17], ->s6
-	ldi [sp, PT_REGS_R18], ->s7
-	ldi [sp, PT_REGS_R19], ->s8
-	ldi [sp, PT_REGS_R20], ->x0
-	ldi [sp, PT_REGS_R21], ->x1
-	ldi [sp, PT_REGS_R22], ->x2
-	ldi [sp, PT_REGS_R23], ->x3
-	ldi [sp, PT_REGS_R1],  ->sp
-	acre 0
+/* construct PT_TP(sp) */
+ /*
+  * current state:
+  * tp hold(thread info)
+  *	etemp hold(0/tls)
+  */
+	BSTART.std cond, ETEMP_IS_TLS
+	hl.ssrget SSR_ETEMP, -> s5
+	setc.nei s5, 0
 
-	.globl linx_restore_user
-	.type linx_restore_user,@function
-linx_restore_user:
+ETEMP_IS_ZERO:
+	BSTART.std fall
+	ssrget SSR_TP, -> s5
+ETEMP_IS_TLS:
+ /*
+  * current state:
+  * etemp hold(0/tls)
+  *	s5 hold(thread info/tls), same as the old tp, so we put it in PT_TP(sp)
+  */
+	BSTART.sys fall
+	sdi s5, [sp, PT_TP] /* pt_regs(tp) keeps the old tp, which can be restored directly */
 	/*
-	 * Fork/clone children are resuming a saved user context and must use
-	 * RRAT_RESTORE semantics so branch-return state is restored too.
+	 * Set the ETEMP register to 0, so that if a recursive exception
+	 * occurs, the exception vector knows it came from the kernel
 	 */
-	C.BSTART DIRECT, .Llinx_return_restore
-	c.movr a0, ->sp
-	C.BSTOP
+	hl.ssrset zero, SSR_ETEMP // it's already zero
+
+	/* Load the global pointer */
+.option push
+.option norelax
+	1: addtpc %tpcrel_hi(__global_pointer$), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	ssrset t#1, SSR_GP
+.option pop
+
+	/*
+	 * MSB (SSR_TRAPNO.E) of SSR_TRAPNO
+	 * differentiates between interrupts and exceptions:
+	 * SSR_TRAPNO.E == 0: Interrupt
+	 * SSR_TRAPNO.E == 1: Exception
+	 */
+	block_next_bltz s4, handle_exceptions
+
+handle_interrupt:
+	BSTART.std fall
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(1b), -> ra
+
+	/* Handle interrupts, return to ret_from_exception */
+	BSTART.std ind
+	addi sp, 0 -> a0	/* pt_regs as the 1th argument */
+	1: addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	setc.tgt t#1
+
+handle_exceptions:
+	/*
+	 * Exceptions run with interrupts enabled or disabled depending on the
+	 * state of SSR_ECSTATE.I.
+	 */
+	BSTART.std cond, handle_syscalls
+	andi s1, CSTATE_I, -> t
+	setc.eqi t#1, 0
+
+	/* kprobes, entered via ebreak, must have interrupts disabled. */
+	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_BREAKPOINT_EXP, handle_syscalls
+
+	/* Enable interrupts */
+	BSTART.std fall
+	ssrget SSR_CSTATE, -> t
+	ori t#1, CSTATE_I, -> t
+	ssrset t#1, SSR_CSTATE
+
+handle_syscalls:
+	/* set return address for both branches */
+	BSTART.std fall
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(1b), -> ra
+
+	/* Handle syscalls, return to ret_from_exception */
+	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_SCALL_EXP, handle_syscall
+
+	/* Handle other exceptions, return to ret_from_exception */
+	/* if (&excp_vect_table[SSR_ECAUSE.trapnum] >= excp_vect_table_end) {
+	 * 	goto handle_unknown_exceptions;
+	 * } else {
+	 * 	call excp_vect_table[SSR_ECAUSE.trapnum];
+	 * }
+	 */
+	BSTART.std cond, handle_unknown_exceptions
+	addi sp, 0, -> a0
+	andi s4, ECAUSE_TRAPNUM_MASK, -> t	/* SSR_TRAPNO.trapnum */
+	slli t#1, RISCV_LGPTR, -> t
+	1: addtpc %tpcrel_hi(excp_vect_table), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	add t#3, t#1, -> x0	/* &excp_vect_table[SSR_TRAPNO.trapnum] */
+	1: addtpc %tpcrel_hi(excp_vect_table_end), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	/* Check if exception code lies within bounds */
+	setc.geu x0, t#1
+
+	/* jump to excp_vect_table[SSR_TRAPNO.trapnum] */
+	/* return to ret_from_exception */
+	BSTART.std ind
+	ldi [x0, 0], -> t
+	setc.tgt t#1
+
+handle_unknown_exceptions:
+	/* return to ret_from_exception */
+	block_next_ind do_trap_unknown
+
+handle_syscall:
+	/*
+	 * Save the initial A0 value (needed in signal handlers).
+	 * Advance tpc to avoid executing the original
+	 * syscall instruction on acri
+	 */
+	BSTART.std fall
+	sdi a0, [sp, PT_ORIG_A0]
+	/* preserve ebarg.ebpc and ebarg.etpc */
+	ldi [sp, PT_TPC], -> t
+	sdi t#1, [sp, PT_ORIG_TPC]
+	ldi [sp, PT_BPC], -> t
+	sdi t#1, [sp, PT_ORIG_BPC]
+	/* advance bpc and tpc with length of `acrc`, because it always ends a block */
+	addi t#2, 4, -> t
+	sdi t#1, [sp, PT_TPC]
+	sdi t#1, [sp, PT_BPC]
+
+	/* Trace syscalls, but only if requested by the user. */
+	/*
+	 * if (TASK_TI_FLAGS(SSR_TP) & _TIF_SYSCALL_WORK)
+	 * 	goto handle_syscall_trace_enter;
+	 */
+	block_next_bnez_tif _TIF_SYSCALL_WORK, handle_syscall_trace_enter
+
+check_syscall_nr:
+	/*
+	 * Check to make sure we don't jump to a bogus syscall number.
+	 * Syscall number held in x1.
+	 * If syscall number is above allowed value, redirect to ni_syscall.
+	 */
+	/*
+	 * if (x1 >= __NR_syscalls) {
+	 * 	s0 = sys_ni_syscall;
+	 * } else {
+	 * 	s0 = sys_call_table[x1];
+	 * }
+	 */
+	BSTART.std cond, call_syscall
+	1: addtpc %tpcrel_hi(sys_ni_syscall), -> t
+	addi t#1, %tpcrel_lo(1b), -> s0
+	addi zero, __NR_syscalls, -> t
+	setc.geu, x1, t#1
+
+	BSTART.std fall
+	1: addtpc %tpcrel_hi(sys_call_table), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	ld [t#1, x1<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[x1] */
+
+call_syscall:
+	/* Call syscall */
+	block_next_indcall_reg s0
+
+ret_from_syscall:
+	/* Set user a0 to kernel a0 */
+	BSTART.std fall
+	sdi a0, [sp, PT_A0]	/* save the syscall return value */
+
+	/*
+	 * We didn't execute the actual syscall.
+	 * Seccomp already set return value for the current task pt_regs.
+	 * (If it was configured with SECCOMP_RET_ERRNO/TRACE)
+	 */
+ret_from_syscall_rejected:
+	/*
+	 * if (TASK_TI_FLAGS(SSR_TP) & _TIF_SYSCALL_WORK)
+	 * 	goto handle_syscall_trace_exit;
+	 */
+	block_next_bnez_tif _TIF_SYSCALL_WORK, handle_syscall_trace_exit
+
+ret_from_exception:
+	/* clear SSR_CSTATE.I */
+	/* disable interrupt */
+	BSTART.sys fall
+	ssrget SSR_CSTATE, -> t
+	addi, zero, CSTATE_I, -> t
+	and t#2, t#1.not, -> t
+	ssrset t#1, SSR_CSTATE
+
+	/* if (SSR_ECSTATE.ACR == SSR_CSTATE.ACR) goto resume_kernel; */
+	BSTART.std cond resume_kernel
+	ldi [sp, PT_CSTATE], -> t	/* SSR_ECSTATE */
+	andi t#1, CSTATE_ACR_MASK, -> t
+	ssrget SSR_CSTATE, -> t
+	andi t#1, CSTATE_ACR_MASK, -> t
+	setc.eq t#1, t#3
+
+resume_userspace:
+	/* Interrupts must be disabled here so flags are checked atomically */
+	BSTART.std cond, work_pending
+	ssrget SSR_TP, -> t
+	ldi [t#1, TASK_TI_FLAGS], -> s0	/* s0 = TASK_TI_FLAGS(SSR_TP) */
+	andi s0, _TIF_WORK_MASK, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_WORK_MASK */
+	setc.nei s1, 0
+
+	/*
+	 * Save unwound kernel stack pointer in thread_info.
+	 * Save SSR_TP into the SSR_ETEMP register, so we can find the kernel data
+	 * structures again.
+	 */
+	/* restore ETEMP and thread_info(sp) */
+	BSTART.sys fall
+	ssrget SSR_TP, -> t
+	hl.ssrset t#1, SSR_ETEMP
+	addi sp, PT_SIZE_ON_STACK, -> t
+	sdi t#1, [t#2, TASK_TI_KERNEL_SP]	/* TASK_TI_KERNEL_SP(SSR_TP) = sp + PT_SIZE_ON_STACK */
+
+restore_all:
+	/*
+	 * The current load reservation is effectively part of the processor's
+	 * state, in the sense that load reservations cannot be shared between
+	 * different hart contexts.  We can't actually save and restore a load
+	 * reservation, so instead here we clear any existing reservation --
+	 * it's always legal for implementations to clear load reservations at
+	 * any point (as long as the forward progress guarantee is kept, but
+	 * we'll ignore that here).
+	 *
+	 * Dangling load reservations can be the result of taking a trap in the
+	 * middle of an LR/SC sequence, but can also be the result of a taken
+	 * forward branch around an SC -- which is how we implement CAS.  As a
+	 * result we need to clear reservations between the last CAS and the
+	 * jump back to the new context.  While it is unlikely the store
+	 * completes, implementations are allowed to expand reservations to be
+	 * arbitrarily large.
+	 */
+	/* clear load reservations */
+	BSTART.sys fall
+	addi sp, PT_BPC, -> t
+	ldi [t#1, 0], -> t	/* sp holds &pt_regs */
+	sc.d t#1, [t#2], -> t	/* this should't be optimized away */
+
+	/* restore register except ebstate */
+	/* restore gp, tp, ecstate */
+	ldi [sp, PT_GP], -> t
+	ssrset t#1, SSR_GP
+	ldi [sp, PT_TP], -> t
+	ssrset t#1, SSR_TP
+	ldi [sp, PT_CSTATE], -> t
+	hl.ssrset t#1, SSR_ECSTATE
+
+restore_level1_state:
+	BSTART.sys fall
+
+	/* restore necessary UL_GPRs */
+	ldi [sp, PT_A0], -> a0
+	ldi [sp, PT_A1], -> a1
+	ldi [sp, PT_A2], -> a2
+	ldi [sp, PT_A3], -> a3
+	ldi [sp, PT_A4], -> a4
+	ldi [sp, PT_A5], -> a5
+	ldi [sp, PT_A6], -> a6
+	ldi [sp, PT_A7], -> a7
+	ldi [sp, PT_RA], -> ra
+	ldi [sp, PT_S0], -> s0
+	ldi [sp, PT_S1], -> s1
+	ldi [sp, PT_S2], -> s2
+	ldi [sp, PT_S3], -> s3
+	ldi [sp, PT_S4], -> s4
+	ldi [sp, PT_S5], -> s5
+	ldi [sp, PT_S6], -> s6
+	ldi [sp, PT_S7], -> s7
+	ldi [sp, PT_S8], -> s8
+	ldi [sp, PT_X0], -> x0
+	ldi [sp, PT_X1], -> x1
+	ldi [sp, PT_X2], -> x2
+	ldi [sp, PT_X3], -> x3
+
+	/* restore BARGs */
+	ldi [sp, PT_TPC], -> t
+	hl.ssrset t#1, SSR_ETPC
+	ldi [sp, PT_BPC], -> t
+	hl.ssrset t#1, SSR_EBPC
+	ldi [sp, PT_BPCN], -> t
+	hl.ssrset t#1, SSR_EBPCN
+	ldi [sp, PT_EBARG], -> t
+	hl.ssrset t#1, SSR_EBARG
+
+	/* check ebstate status */
+	/* if cstate.bi == 0, don't need restore level2 */
+	BSTART.std cond, restore_level2_state
+	hl.ssrget SSR_ECSTATE, -> t
+	andi t#1, CSTATE_BI, -> t
+	setc.nei t#1, 0
+
+/* restored block-head exception */
+	BSTART.sys, fall
+	ldi [sp, PT_SP], -> sp
+	acre RRAT_DEFAULT
+
+
+restore_level2_state:
+	BSTART.sys fall
+	ldi [sp, PT_ELPR3], -> t
+	ldi [sp, PT_ELPR2], -> t
+	ldi [sp, PT_ELPR1], -> t
+	ldi [sp, PT_ELPR0], -> t
+	ldi [sp, PT_ELPR7], -> u
+	ldi [sp, PT_ELPR6], -> u
+	ldi [sp, PT_ELPR5], -> u
+	ldi [sp, PT_ELPR4], -> u
+
+	/* restore sp */
+	ldi [sp, PT_SP], -> sp
+	acre RRAT_RESTORE
+
+work_pending:
+	/* Enter slow path for supplementary processing */
+	/* if (s1 = (TASK_TI_FLAGS(SSR_TP) & _TIF_NEED_RESCHED))
+	 * 	goto work_resched;
+	 */
+	BSTART.std cond, work_resched
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(1b), -> ra
+	andi s0, _TIF_NEED_RESCHED, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_NEED_RESCHED */
+	setc.nei s1, 0
+
+work_notifysig:
+	/* Handle pending signals and notify-resume requests */
+
+	/* Enable interrupts for do_notify_resume(): SSR_CSTATE |= CSTATE_I */
+	BSTART.std fall
+	ssrget SSR_CSTATE, -> t
+	ori t#1, CSTATE_I, -> t
+	ssrset t#1, SSR_CSTATE
+
+	/* tail call do_notify_resume, and return to ret_from_exception */
+	BSTART.std ind
+	/* prepare arguments for do_notify_resume
+	 * 1: pointer to pt_regs
+	 * 2: thread_info_flags
+	 */
+	addi sp, 0, -> a0
+	addi s0, 0, -> a1
+	1: addtpc %tpcrel_hi(do_notify_resume), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	setc.tgt t#1
+
+work_resched:
+	/* tall call schedule, and return to ret_from_exception */
+	block_next_ind schedule
+
+/* before real syscall execution. Slow paths for ptrace. */
+handle_syscall_trace_enter:
+	BSTART.std fall
+	addi sp, 0, -> a0
+
+	block_next_indcall do_syscall_trace_enter
+
+	/* restore syscall argument registers */
+	BSTART.std cond, ret_from_syscall_rejected
+	setc.nei a0, 0
+	ldi [sp, PT_A0], -> a0
+	ldi [sp, PT_A1], -> a1
+	ldi [sp, PT_A2], -> a2
+	ldi [sp, PT_A3], -> a3
+	ldi [sp, PT_A4], -> a4
+	ldi [sp, PT_A5], -> a5
+	ldi [sp, PT_X1], -> x1
+
+	block_next_ind check_syscall_nr
+
+handle_syscall_trace_exit:
+	BSTART.std fall
+	addi sp, 0, -> a0
+
+	block_next_indcall do_syscall_trace_exit
+
+	block_next_ind ret_from_exception
+
+END(handle_exception)
+
+/* used in copy_thread */
+ENTRY(ret_from_fork)
+	BSTART.std ind
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(1b), -> ra
+	1: addtpc %tpcrel_hi(schedule_tail), -> t
+	addi t#1, %tpcrel_lo(1b), -> t
+	setc.tgt t#1
+ENDPROC(ret_from_fork)
+
+ENTRY(ret_from_kernel_thread)
+	block_next_indcall schedule_tail
+	BSTART.std ind
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(1b), -> ra
+	/* Call s0(s1) */
+	addi s1, 0, -> a0
+	setc.tgt s0
+ENDPROC(ret_from_kernel_thread)
+
+
+/*
+ * Integer register context switch
+ * The callee-saved registers must be saved and restored.
+ *
+ *   a0: previous task_struct (must be preserved across the switch)
+ *   a1: next task_struct
+ *
+ * The value of a0 and a1 must be preserved by this function, as that's how
+ * arguments are passed to schedule_tail.
+ */
+ENTRY(__switch_to)
+	BSTART.std fall
+	addi a0, TASK_THREAD_RA, -> t
+	addi a1, TASK_THREAD_RA, -> t
+
+	/* Save context into prev->thread */
+	/* save the callee-saved registers */
+	sdi ra, [t#2, TASK_THREAD_RA_RA]
+	sdi sp, [t#2, TASK_THREAD_SP_RA]
+	sdi s0, [t#2, TASK_THREAD_S0_RA]
+	sdi s1, [t#2, TASK_THREAD_S1_RA]
+	sdi s2, [t#2, TASK_THREAD_S2_RA]
+	sdi s3, [t#2, TASK_THREAD_S3_RA]
+	sdi s4, [t#2, TASK_THREAD_S4_RA]
+	sdi s5, [t#2, TASK_THREAD_S5_RA]
+	sdi s6, [t#2, TASK_THREAD_S6_RA]
+	sdi s7, [t#2, TASK_THREAD_S7_RA]
+	sdi s8, [t#2, TASK_THREAD_S8_RA]
+
+	/* Restore context from next->thread */
+	ldi [t#1, TASK_THREAD_RA_RA], -> ra
+	ldi [t#1, TASK_THREAD_SP_RA], -> sp
+	ldi [t#1, TASK_THREAD_S0_RA], -> s0
+	ldi [t#1, TASK_THREAD_S1_RA], -> s1
+	ldi [t#1, TASK_THREAD_S2_RA], -> s2
+	ldi [t#1, TASK_THREAD_S3_RA], -> s3
+	ldi [t#1, TASK_THREAD_S4_RA], -> s4
+	ldi [t#1, TASK_THREAD_S5_RA], -> s5
+	ldi [t#1, TASK_THREAD_S6_RA], -> s6
+	ldi [t#1, TASK_THREAD_S7_RA], -> s7
+	ldi [t#1, TASK_THREAD_S8_RA], -> s8
+
+	/* The offset of thread_info in task_struct is zero. */
+	ssrset a1, SSR_TP
+
+	block_next_ret
+
+ENDPROC(__switch_to)
+
+	.section ".rodata"
+	.align LGREG
+	/* Exception vector table */
+ENTRY(excp_vect_table)
+	RISCV_PTR do_trap_insn_exception
+	RISCV_PTR do_trap_data_exception
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_block_exception
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_unknown	/* not support yet */
+	RISCV_PTR do_trap_break
+excp_vect_table_end:
+END(excp_vect_table)

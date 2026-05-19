@@ -6250,6 +6250,16 @@ void __init setup_per_cpu_pageset(void)
 	struct zone *zone;
 	int __maybe_unused cpu;
 
+#ifdef CONFIG_LINX
+	/*
+	 * Linx smoke bring-up currently wedges during the late transition from
+	 * the boot pagesets to dynamically allocated per-cpu pagesets. Keep the
+	 * boot pagesets and zonestats active so boot can advance to the next
+	 * runtime blocker on the single-CPU virt machine.
+	 */
+	return;
+#endif
+
 	for_each_populated_zone(zone)
 		setup_zone_pageset(zone);
 

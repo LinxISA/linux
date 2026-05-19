@@ -93,6 +93,22 @@
 #include <asm/tlbflush.h>
 #include <asm/io.h>
 
+#ifdef CONFIG_LINX
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_percpu_mark(char c)
+{
+	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+		(unsigned char)c;
+}
+
+static __always_inline void linx_percpu_stage(char c)
+{
+	linx_percpu_mark('~');
+	linx_percpu_mark(c);
+}
+#endif
+
 #define CREATE_TRACE_POINTS
 #include <trace/events/percpu.h>
 
@@ -2572,6 +2588,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	}								\
 } while (0)
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('a');
+#endif
 	/* sanity checks */
 	PCPU_SETUP_BUG_ON(ai->nr_groups <= 0);
 #ifdef CONFIG_SMP
@@ -2590,6 +2609,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 			    IS_ALIGNED(PAGE_SIZE, PCPU_BITMAP_BLOCK_SIZE)));
 	PCPU_SETUP_BUG_ON(pcpu_verify_alloc_info(ai) < 0);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('b');
+#endif
 	/* process group information and build config tables accordingly */
 	alloc_size = ai->nr_groups * sizeof(group_offsets[0]);
 	group_offsets = memblock_alloc_or_panic(alloc_size, SMP_CACHE_BYTES);
@@ -2603,6 +2625,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	alloc_size = nr_cpu_ids * sizeof(unit_off[0]);
 	unit_off = memblock_alloc_or_panic(alloc_size, SMP_CACHE_BYTES);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('c');
+#endif
 	for (cpu = 0; cpu < nr_cpu_ids; cpu++)
 		unit_map[cpu] = UINT_MAX;
 
@@ -2641,9 +2666,14 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	for_each_possible_cpu(cpu)
 		PCPU_SETUP_BUG_ON(unit_map[cpu] == UINT_MAX);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('d');
+#endif
 	/* we're done parsing the input, undefine BUG macro and dump config */
 #undef PCPU_SETUP_BUG_ON
+#ifndef CONFIG_LINX
 	pcpu_dump_alloc_info(KERN_DEBUG, ai);
+#endif
 
 	pcpu_nr_groups = ai->nr_groups;
 	pcpu_group_offsets = group_offsets;
@@ -2677,6 +2707,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	for (i = 0; i < pcpu_nr_slots; i++)
 		INIT_LIST_HEAD(&pcpu_chunk_lists[i]);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('E');
+#endif
 	/*
 	 * The end of the static region needs to be aligned with the
 	 * minimum allocation size as this offsets the reserved and
@@ -2688,6 +2721,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	static_size = ALIGN(ai->static_size, PCPU_MIN_ALLOC_SIZE);
 	dyn_size = ai->dyn_size - (static_size - ai->static_size);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('e');
+#endif
 	/*
 	 * Initialize first chunk:
 	 * This chunk is broken up into 3 parts:
@@ -2703,9 +2739,15 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	if (ai->reserved_size)
 		pcpu_reserved_chunk = pcpu_alloc_first_chunk(tmp_addr,
 						ai->reserved_size);
+#ifdef CONFIG_LINX
+	linx_percpu_stage('f');
+#endif
 	tmp_addr = (unsigned long)base_addr + static_size + ai->reserved_size;
 	pcpu_first_chunk = pcpu_alloc_first_chunk(tmp_addr, dyn_size);
 
+#ifdef CONFIG_LINX
+	linx_percpu_stage('g');
+#endif
 	pcpu_nr_empty_pop_pages = pcpu_first_chunk->nr_empty_pop_pages;
 	pcpu_chunk_relocate(pcpu_first_chunk, -1);
 
@@ -2717,6 +2759,9 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 
 	/* we're done */
 	pcpu_base_addr = base_addr;
+#ifdef CONFIG_LINX
+	linx_percpu_stage('h');
+#endif
 }
 
 #ifdef CONFIG_SMP
@@ -3326,8 +3371,20 @@ void __init setup_per_cpu_areas(void)
 	struct pcpu_alloc_info *ai;
 	void *fc;
 
+#ifdef CONFIG_LINX
+	phys_addr_t fc_pa;
+
+	linx_percpu_mark('A');
+#endif
 	ai = pcpu_alloc_alloc_info(1, 1);
+#ifdef CONFIG_LINX
+	linx_percpu_mark('B');
+	fc_pa = memblock_phys_alloc(unit_size, PAGE_SIZE);
+	fc = fc_pa ? __va(fc_pa) : NULL;
+	linx_percpu_mark('C');
+#else
 	fc = memblock_alloc_from(unit_size, PAGE_SIZE, __pa(MAX_DMA_ADDRESS));
+#endif
 	if (!ai || !fc)
 		panic("Failed to allocate memory for percpu areas.");
 	/* kmemleak tracks the percpu allocations separately */
@@ -3341,18 +3398,16 @@ void __init setup_per_cpu_areas(void)
 	ai->groups[0].cpu_map[0] = 0;
 
 #ifdef CONFIG_LINX
-	{
-		phys_addr_t fc_pa = __pa(fc);
-
-		pr_emerg("linx percpu: ai=%px nr_groups=%d unit_size=%zu fc=%px fc_pa=%pa\n",
-			 ai, ai->nr_groups, unit_size, fc, &fc_pa);
-	}
-	pr_emerg("linx percpu: group0 nr_units=%d cpu0=%u\n",
-		 ai->groups[0].nr_units, ai->groups[0].cpu_map[0]);
+	linx_percpu_mark('D');
 #endif
-
 	pcpu_setup_first_chunk(ai, fc);
+#ifdef CONFIG_LINX
+	linx_percpu_mark('E');
+#endif
 	pcpu_free_alloc_info(ai);
+#ifdef CONFIG_LINX
+	linx_percpu_mark('F');
+#endif
 }
 
 #endif	/* CONFIG_SMP */

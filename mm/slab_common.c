@@ -6,6 +6,7 @@
  */
 #include <linux/slab.h>
 
+#include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/poison.h>
 #include <linux/interrupt.h>
@@ -36,6 +37,22 @@
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
+
+#ifdef CONFIG_LINX
+#define LINX_VIRT_UART_BASE 0x10000000UL
+
+static __always_inline void linx_slab_mark(const char *tag)
+{
+	while (*tag)
+		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+			(unsigned char)*tag++;
+}
+#else
+static __always_inline void linx_slab_mark(const char *tag)
+{
+	(void)tag;
+}
+#endif
 
 enum slab_state slab_state;
 LIST_HEAD(slab_caches);
@@ -225,6 +242,7 @@ static struct kmem_cache *create_cache(const char *name,
 				       slab_flags_t flags)
 {
 	struct kmem_cache *s;
+	bool early_cache_meta = false;
 	int err;
 
 	/* If a custom freelist pointer is requested make sure it's sane. */
@@ -236,19 +254,31 @@ static struct kmem_cache *create_cache(const char *name,
 		goto out;
 
 	err = -ENOMEM;
-	s = kmem_cache_zalloc(kmem_cache, GFP_KERNEL);
+	linx_slab_mark("CC0");
+	if (slab_state <= UP) {
+		s = memblock_alloc(sizeof(*s), SMP_CACHE_BYTES);
+		if (s)
+			memset(s, 0, sizeof(*s));
+		early_cache_meta = true;
+	} else {
+		s = kmem_cache_zalloc(kmem_cache, GFP_KERNEL);
+	}
 	if (!s)
 		goto out;
+	linx_slab_mark("CC1");
+	linx_slab_mark("CC2");
 	err = do_kmem_cache_create(s, name, object_size, args, flags);
 	if (err)
 		goto out_free_cache;
+	linx_slab_mark("CC3");
 
 	s->refcount = 1;
 	list_add(&s->list, &slab_caches);
 	return s;
 
 out_free_cache:
-	kmem_cache_free(kmem_cache, s);
+	if (!early_cache_meta)
+		kmem_cache_free(kmem_cache, s);
 out:
 	return ERR_PTR(err);
 }
@@ -305,12 +335,15 @@ struct kmem_cache *__kmem_cache_create_args(const char *name,
 	flags &= ~SLAB_DEBUG_FLAGS;
 #endif
 
+	linx_slab_mark("KC0");
 	mutex_lock(&slab_mutex);
+	linx_slab_mark("KC1");
 
 	err = kmem_cache_sanity_check(name, object_size);
 	if (err) {
 		goto out_unlock;
 	}
+	linx_slab_mark("KC2");
 
 	if (flags & ~SLAB_FLAGS_PERMITTED) {
 		err = -EINVAL;
@@ -337,16 +370,20 @@ struct kmem_cache *__kmem_cache_create_args(const char *name,
 	}
 
 	args->align = calculate_alignment(flags, args->align, object_size);
+	linx_slab_mark("KC3");
 	s = create_cache(cache_name, object_size, args, flags);
+	linx_slab_mark("KC4");
 	if (IS_ERR(s)) {
 		err = PTR_ERR(s);
 		kfree_const(cache_name);
 	}
 
 out_unlock:
+	linx_slab_mark("KC5");
 	mutex_unlock(&slab_mutex);
 
 	if (err) {
+		linx_slab_mark("KCE");
 		if (flags & SLAB_PANIC)
 			panic("%s: Failed to create slab '%s'. Error %d\n",
 				__func__, name, err);

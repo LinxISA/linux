@@ -806,7 +806,9 @@ void __init pid_idr_init(void)
 				  PIDS_PER_CPU_DEFAULT * num_possible_cpus()));
 	pid_max_min = max_t(int, pid_max_min,
 				PIDS_PER_CPU_MIN * num_possible_cpus());
+#ifndef CONFIG_LINX
 	pr_info("pid_max: default: %u minimum: %u\n", init_pid_ns.pid_max, pid_max_min);
+#endif
 
 	idr_init(&init_pid_ns.idr);
 

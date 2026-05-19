@@ -20,7 +20,11 @@ extern void free_initrd_mem(unsigned long, unsigned long);
 
 #ifdef CONFIG_BLK_DEV_INITRD
 extern void __init reserve_initrd_mem(void);
+#ifdef CONFIG_LINX
+static inline void wait_for_initramfs(void) {}
+#else
 extern void wait_for_initramfs(void);
+#endif
 #else
 static inline void __init reserve_initrd_mem(void) {}
 static inline void wait_for_initramfs(void) {}

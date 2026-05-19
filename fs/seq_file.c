@@ -60,7 +60,14 @@ int seq_open(struct file *file, const struct seq_operations *op)
 
 	WARN_ON(file->private_data);
 
+#ifdef CONFIG_LINX
+	if (!seq_file_cache)
+		p = kzalloc(sizeof(*p), GFP_KERNEL);
+	else
+		p = kmem_cache_zalloc(seq_file_cache, GFP_KERNEL);
+#else
 	p = kmem_cache_zalloc(seq_file_cache, GFP_KERNEL);
+#endif
 	if (!p)
 		return -ENOMEM;
 
@@ -353,7 +360,14 @@ int seq_release(struct inode *inode, struct file *file)
 {
 	struct seq_file *m = file->private_data;
 	kvfree(m->buf);
+#ifdef CONFIG_LINX
+	if (!seq_file_cache)
+		kfree(m);
+	else
+		kmem_cache_free(seq_file_cache, m);
+#else
 	kmem_cache_free(seq_file_cache, m);
+#endif
 	return 0;
 }
 EXPORT_SYMBOL(seq_release);
@@ -1139,5 +1153,9 @@ EXPORT_SYMBOL(seq_hlist_next_percpu);
 
 void __init seq_file_init(void)
 {
+#ifdef CONFIG_LINX
+	seq_file_cache = NULL;
+	return;
+#endif
 	seq_file_cache = KMEM_CACHE(seq_file, SLAB_ACCOUNT|SLAB_PANIC);
 }

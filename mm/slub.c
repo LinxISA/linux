@@ -11,6 +11,7 @@
  */
 
 #include <linux/mm.h>
+#include <linux/memblock.h>
 #include <linux/swap.h> /* mm_account_reclaimed_pages() */
 #include <linux/module.h>
 #include <linux/bit_spinlock.h>
@@ -53,11 +54,24 @@
 
 #ifdef CONFIG_LINX
 #include <asm/debug_uart.h>
+#define LINX_VIRT_UART_BASE 0x10000000UL
 
 static __always_inline bool linx_slub_watch_ptr(const void *p)
 {
 	(void)p;
 	return false;
+}
+
+static __always_inline void linx_slub_mark(const char *tag)
+{
+	while (*tag)
+		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
+			(unsigned char)*tag++;
+}
+#else
+static __always_inline void linx_slub_mark(const char *tag)
+{
+	(void)tag;
 }
 #endif
 
@@ -257,13 +271,7 @@ do {					\
 	void linx_slub_debug_dump_obj(void *object, const char *tag);
 	static __always_inline unsigned long linx_get_ra_entry(void)
 	{
-		unsigned long ra_entry = 0;
-
-		asm volatile("sdi ra, [%0, 0]"
-			     :
-			     : "r"(&ra_entry)
-			     : "memory");
-		return ra_entry;
+		return _RET_IP_;
 	}
 
 	void linx_slub_alloc_watch_set(void *ptr, const char *tag)
@@ -722,12 +730,7 @@ static inline void set_freepointer(struct kmem_cache *s, void *object, void *fp)
 
 #ifdef CONFIG_LINX
 	if (unlikely(object == fp)) {
-		unsigned long caller_ra_entry = 0;
-
-		asm volatile("sdi ra, [%0, 0]"
-			     :
-			     : "r"(&caller_ra_entry)
-			     : "memory");
+		unsigned long caller_ra_entry = _RET_IP_;
 
 		pr_emerg("LinxISA: set_freepointer self-loop cache=%s size=%u off=%u slab=%px obj=%px pid=%d comm=%s\n",
 			 s->name, s->size, s->offset, virt_to_slab(object), object,
@@ -8012,8 +8015,17 @@ static inline int alloc_kmem_cache_cpus(struct kmem_cache *s)
 	 * Must align to double word boundary for the double cmpxchg
 	 * instructions to work; see __pcpu_double_call_return_bool().
 	 */
-	s->cpu_slab = __alloc_percpu(sizeof(struct kmem_cache_cpu),
-				     2 * sizeof(void *));
+#ifdef CONFIG_LINX
+	if (!IS_ENABLED(CONFIG_SMP) && slab_state <= UP) {
+		s->cpu_slab = (struct kmem_cache_cpu __percpu *)
+			memblock_alloc(sizeof(struct kmem_cache_cpu),
+				       2 * sizeof(void *));
+	} else
+#endif
+	{
+		s->cpu_slab = __alloc_percpu(sizeof(struct kmem_cache_cpu),
+					     2 * sizeof(void *));
+	}
 
 	if (!s->cpu_slab)
 		return 0;
@@ -8934,6 +8946,7 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 {
 	int err = -EINVAL;
 
+	linx_slub_mark("DC0");
 	s->name = name;
 	s->size = s->object_size = size;
 
@@ -8950,6 +8963,7 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 
 	if (!calculate_sizes(args, s))
 		goto out;
+	linx_slub_mark("DC1");
 	if (disable_higher_order_debug) {
 		/*
 		 * Disable debugging flags that store metadata if the min slab
@@ -9002,9 +9016,11 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 
 	if (!init_kmem_cache_nodes(s))
 		goto out;
+	linx_slub_mark("DC2");
 
 	if (!alloc_kmem_cache_cpus(s))
 		goto out;
+	linx_slub_mark("DC3");
 
 	if (s->cpu_sheaves) {
 		err = init_percpu_sheaves(s);
@@ -9013,6 +9029,7 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 	}
 
 	err = 0;
+	linx_slub_mark("DC4");
 
 	/* Mutex is not taken during early boot */
 	if (slab_state <= UP)
@@ -9029,6 +9046,8 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 		debugfs_slab_add(s);
 
 out:
+	if (err)
+		linx_slub_mark("DCE");
 	if (err)
 		__kmem_cache_release(s);
 	return err;

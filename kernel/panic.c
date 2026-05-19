@@ -40,6 +40,37 @@
 #include <trace/events/error_report.h>
 #include <asm/sections.h>
 
+#ifdef CONFIG_LINX
+static void linx_panic_putc(char c)
+{
+	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+}
+
+static void linx_panic_puthex(unsigned long v)
+{
+	static const char hexdigits[] = "0123456789abcdef";
+	int i;
+
+	for (i = (int)(sizeof(v) * 2) - 1; i >= 0; i--)
+		linx_panic_putc(hexdigits[(v >> (i * 4)) & 0xf]);
+}
+
+static __always_inline unsigned long linx_panic_return_address(void)
+{
+	unsigned long v;
+
+	asm volatile("c.movr ra, ->%0" : "=r"(v) : : "memory");
+	return v;
+}
+
+static void linx_panic_mark(unsigned long caller)
+{
+	linx_panic_putc('!');
+	linx_panic_putc('P');
+	linx_panic_puthex(caller);
+}
+#endif
+
 #define PANIC_TIMER_STEP 100
 #define PANIC_BLINK_SPD 18
 
@@ -433,6 +464,10 @@ void vpanic(const char *fmt, va_list args)
 	int state = 0;
 	bool _crash_kexec_post_notifiers = crash_kexec_post_notifiers;
 
+#ifdef CONFIG_LINX
+	linx_panic_mark(linx_panic_return_address());
+#endif
+
 	if (panic_on_warn) {
 		/*
 		 * This thread may hit another WARN() in the panic path.
@@ -622,6 +657,10 @@ EXPORT_SYMBOL(vpanic);
 void panic(const char *fmt, ...)
 {
 	va_list args;
+
+#ifdef CONFIG_LINX
+	linx_panic_mark(linx_panic_return_address());
+#endif
 
 	va_start(args, fmt);
 	vpanic(fmt, args);

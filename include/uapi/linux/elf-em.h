@@ -48,12 +48,13 @@
 #define EM_MICROBLAZE	189	/* Xilinx MicroBlaze */
 #define EM_TILEGX	191	/* Tilera TILE-Gx */
 #define EM_ARCV2	195	/* ARCv2 Cores */
-#define EM_LINXISA	233	/* LinxISA */
 #define EM_RISCV	243	/* RISC-V */
 #define EM_BPF		247	/* Linux BPF - in-kernel virtual machine */
 #define EM_CSKY		252	/* C-SKY */
 #define EM_LOONGARCH	258	/* LoongArch */
 #define EM_FRV		0x5441	/* Fujitsu FR-V */
+#define EM_LINX		260
+#define EM_LINX_V5	261
 
 /*
  * This is an interim value that we will use until the committee comes
