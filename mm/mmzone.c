@@ -88,7 +88,12 @@ void lruvec_init(struct lruvec *lruvec)
 	 * (so that their lru fields can be reused to hold mlock_count).
 	 * Poison its list head, so that any operations on it would crash.
 	 */
+#if defined(__LINX__)
+	WRITE_ONCE(lruvec->lists[LRU_UNEVICTABLE].next, LIST_POISON1);
+	WRITE_ONCE(lruvec->lists[LRU_UNEVICTABLE].prev, LIST_POISON2);
+#else
 	list_del(&lruvec->lists[LRU_UNEVICTABLE]);
+#endif
 
 	lru_gen_init_lruvec(lruvec);
 }

@@ -40,7 +40,7 @@ struct wake_q_head {
 	struct wake_q_node **lastp;
 };
 
-#define WAKE_Q_TAIL ((struct wake_q_node *) 0x01)
+#define WAKE_Q_TAIL ((struct wake_q_node *)0x01)
 
 #define WAKE_Q_HEAD_INITIALIZER(name)				\
 	{ WAKE_Q_TAIL, &name.first }

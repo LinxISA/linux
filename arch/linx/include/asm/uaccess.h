@@ -99,13 +99,13 @@ do {								\
 		insn " [%[src], 0], -> t\n"				\
 		"addi t#1, 0, -> %[dst]\n"				\
 	"2:\n"							\
-	".section .fixup,\"ax\"\n"				\
+	"BSTART.std direct, 4f\n"					\
 	".balign 16\n"						\
 	"3:\n"							\
 	"BSTART.std direct, 2b\n"					\
 		"subi zero, %[errno], -> %[ret]\n"				\
 		"addi zero, 0, -> %[dst]\n"				\
-	".previous\n"						\
+	"4:\n"							\
 	: [ret] "+r" (err), [dst] "=&r" (__x)			\
 	: [src] "r" (ptr), [errno] "i" (EFAULT));		\
 	(x) = __x;						\
@@ -206,12 +206,12 @@ do {									\
 	"BSTART.std fall, 3f\n"						\
 		insn " %[src], [%[dst], 0]\n"					\
 	"2:\n"								\
-	".section .fixup,\"ax\"\n"					\
+	"BSTART.std direct, 4f\n"						\
 	".balign 16\n"							\
 	"3:\n"								\
 	"BSTART.std direct, 2b\n"						\
 		"subi zero, %[errno], -> %[ret]\n"			\
-	".previous\n"							\
+	"4:\n"								\
 	: [ret] "+r" (err)						\
 	: [dst] "r" (ptr), [src] "r" (__x), [errno] "i" (EFAULT));	\
 } while (0)
@@ -342,8 +342,13 @@ unsigned long __must_check clear_user(void __user *to, unsigned long n)
 #define __get_kernel_nofault(dst, src, type, err_label)			\
 do {									\
 	long __kr_err;							\
+	const void *__kr_src = (const void *)(src);				\
 									\
-	__get_user_nocheck(*((type *)(dst)), (type *)(src), __kr_err);	\
+	if (is_kernel_mapping((unsigned long)__kr_src) ||			\
+	    is_linear_mapping((unsigned long)__kr_src))			\
+		__kr_src = (const void *)(uintptr_t)__pa(__kr_src);		\
+									\
+	__get_user_nocheck(*((type *)(dst)), (type *)(__kr_src), __kr_err); \
 	if (unlikely(__kr_err))						\
 		goto err_label;						\
 } while (0)
@@ -351,8 +356,13 @@ do {									\
 #define __put_kernel_nofault(dst, src, type, err_label)			\
 do {									\
 	long __kr_err;							\
+	void *__kr_dst = (void *)(dst);					\
 									\
-	__put_user_nocheck(*((type *)(src)), (type *)(dst), __kr_err);	\
+	if (is_kernel_mapping((unsigned long)__kr_dst) ||			\
+	    is_linear_mapping((unsigned long)__kr_dst))			\
+		__kr_dst = (void *)(uintptr_t)__pa(__kr_dst);		\
+									\
+	__put_user_nocheck(*((type *)(src)), (type *)(__kr_dst), __kr_err); \
 	if (unlikely(__kr_err))						\
 		goto err_label;						\
 } while (0)

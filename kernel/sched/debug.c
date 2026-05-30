@@ -585,6 +585,9 @@ static void register_sd(struct sched_domain *sd, struct dentry *parent)
 
 void update_sched_domain_debugfs(void)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	int cpu, i;
 
 	/*

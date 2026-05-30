@@ -38,14 +38,35 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__)
 #define LINX_VIRT_UART_BASE 0x10000000UL
+
+/*
+ * Early slab cache metadata still gets created while slab_state <= UP, before
+ * the allocator is fully self-hosting. Keep a small static pool for those
+ * bootstrap kmem_cache objects so we do not recurse back through slab-backed
+ * allocation while trying to bring slab the rest of the way up.
+ */
+static char linx_boot_cache_meta_pool[256 * sizeof(struct kmem_cache)]
+	__initdata __aligned(SMP_CACHE_BYTES);
+static size_t linx_boot_cache_meta_used __initdata;
+
+static void *__init linx_boot_cache_meta_alloc(size_t size, size_t align)
+{
+	size_t off;
+
+	align = max_t(size_t, align, sizeof(void *));
+	off = ALIGN(linx_boot_cache_meta_used, align);
+	if (off + size > sizeof(linx_boot_cache_meta_pool))
+		return NULL;
+
+	linx_boot_cache_meta_used = off + size;
+	return linx_boot_cache_meta_pool + off;
+}
 
 static __always_inline void linx_slab_mark(const char *tag)
 {
-	while (*tag)
-		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-			(unsigned char)*tag++;
+	(void)tag;
 }
 #else
 static __always_inline void linx_slab_mark(const char *tag)
@@ -256,10 +277,17 @@ static struct kmem_cache *create_cache(const char *name,
 	err = -ENOMEM;
 	linx_slab_mark("CC0");
 	if (slab_state <= UP) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		s = linx_boot_cache_meta_alloc(sizeof(*s), SMP_CACHE_BYTES);
+		if (s)
+			memset(s, 0, sizeof(*s));
+		early_cache_meta = true;
+#else
 		s = memblock_alloc(sizeof(*s), SMP_CACHE_BYTES);
 		if (s)
 			memset(s, 0, sizeof(*s));
 		early_cache_meta = true;
+#endif
 	} else {
 		s = kmem_cache_zalloc(kmem_cache, GFP_KERNEL);
 	}
@@ -384,6 +412,10 @@ out_unlock:
 
 	if (err) {
 		linx_slab_mark("KCE");
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		pr_emerg("LinxISA: __kmem_cache_create_args(%s) failed err=%d object=%u flags=%#lx slab_state=%d\n",
+			 name, err, object_size, (unsigned long)flags, slab_state);
+#endif
 		if (flags & SLAB_PANIC)
 			panic("%s: Failed to create slab '%s'. Error %d\n",
 				__func__, name, err);
@@ -643,6 +675,18 @@ bool kmem_dump_obj(void *object)
 	/* Some arches consider ZERO_SIZE_PTR to be a valid address. */
 	if (object < (void *)PAGE_SIZE || !virt_addr_valid(object))
 		return false;
+
+#ifdef __LINX__
+	/*
+	 * Linx bring-up: warning/reporting paths can still reach here with
+	 * high kernel aliases that are valid for generic classification but
+	 * not stable for slab provenance walking in the current boot lane.
+	 * Skip the slab-specific dump so the original warning can continue
+	 * and expose the next functional boundary.
+	 */
+	return false;
+#endif
+
 	slab = virt_to_slab(object);
 	if (!slab)
 		return false;
@@ -724,7 +768,17 @@ static struct kmem_cache *__init create_kmalloc_cache(const char *name,
 						      unsigned int size,
 						      slab_flags_t flags)
 {
-	struct kmem_cache *s = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
+	struct kmem_cache *s;
+
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (slab_state == PARTIAL) {
+		s = memblock_alloc_or_panic(sizeof(*s), SMP_CACHE_BYTES);
+		memset(s, 0, sizeof(*s));
+	} else
+#endif
+	{
+		s = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
+	}
 
 	if (!s)
 		panic("Out of memory when creating slab %s\n", name);

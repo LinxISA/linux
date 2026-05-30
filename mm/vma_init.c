@@ -8,12 +8,10 @@
 #include "vma_internal.h"
 #include "vma.h"
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__)
 static __always_inline void linx_vma_mark(char c)
 {
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)'~';
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-	barrier();
+	(void)c;
 }
 #else
 static __always_inline void linx_vma_mark(char c)

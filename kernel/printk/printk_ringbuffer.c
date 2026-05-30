@@ -1735,10 +1735,22 @@ static void _prb_commit(struct prb_reserved_entry *e, unsigned long state_val)
 	 *       matching
 	 *    MB desc_reserve:D to desc_make_final:A
 	 */
+#ifdef __LINX__
+	/*
+	 * Current Linx LLVM inline-asm lowering still miscompiles some
+	 * atomic_long_try_cmpxchg() sites in printk_ringbuffer, even after the
+	 * cmpxchg operand-order workaround in asm/cmpxchg.h. This descriptor is
+	 * exclusively owned by the reserving writer, so an ordered store is
+	 * sufficient here until the backend contract is repaired.
+	 */
+	atomic_long_set_release(&d->state_var, DESC_SV(e->id, state_val));
+	smp_mb();
+#else
 	if (!atomic_long_try_cmpxchg(&d->state_var, &prev_state_val,
 			DESC_SV(e->id, state_val))) { /* LMM(_prb_commit:B) */
 		WARN_ON_ONCE(1);
 	}
+#endif
 
 	/* Restore interrupts, the reserve/commit window is finished. */
 	local_irq_restore(e->irqflags);

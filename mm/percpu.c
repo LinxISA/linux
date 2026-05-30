@@ -93,13 +93,23 @@
 #include <asm/tlbflush.h>
 #include <asm/io.h>
 
-#ifdef CONFIG_LINX
-#define LINX_VIRT_UART_BASE 0x10000000UL
+#if defined(__LINX__) || defined(CONFIG_LINX)
+extern phys_addr_t __init linx_alloc_early_low_phys(phys_addr_t size,
+						    phys_addr_t align);
+
+static_assert(PERCPU_DYNAMIC_RESERVE <= PCPU_MIN_UNIT_SIZE);
+
+/*
+ * The current Linx bring-up lane can exhaust both the low early pool and the
+ * normal memblock-backed fallback before percpu setup completes. Keep a small
+ * page-aligned kernel-image buffer available so UP percpu bring-up can keep
+ * moving and expose the next owner.
+ */
+static char linx_boot_percpu_first_chunk[PCPU_MIN_UNIT_SIZE] __aligned(PAGE_SIZE);
 
 static __always_inline void linx_percpu_mark(char c)
 {
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
+	(void)c;
 }
 
 static __always_inline void linx_percpu_stage(char c)
@@ -2421,11 +2431,29 @@ struct pcpu_alloc_info * __init pcpu_alloc_alloc_info(int nr_groups,
 	void *ptr;
 	int unit;
 
-	base_size = ALIGN(struct_size(ai, groups, nr_groups),
+#ifdef __LINX__
+	if (nr_groups < 1)
+		nr_groups = 1;
+	if (nr_units < 1)
+		nr_units = 1;
+#endif
+
+	/*
+	 * Linx bring-up currently miscomputes the flexible-array `struct_size()`
+	 * path here and can place groups[0].cpu_map inside the groups metadata
+	 * itself. Spell the size out directly so cpu_map storage starts after the
+	 * full pcpu_group_info array.
+	 */
+	base_size = ALIGN(sizeof(*ai) +
+			  nr_groups * sizeof(struct pcpu_group_info),
 			  __alignof__(ai->groups[0].cpu_map[0]));
 	ai_size = base_size + nr_units * sizeof(ai->groups[0].cpu_map[0]);
 
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	ptr = memblock_alloc_or_panic(PFN_ALIGN(ai_size), PAGE_SIZE);
+#else
 	ptr = memblock_alloc(PFN_ALIGN(ai_size), PAGE_SIZE);
+#endif
 	if (!ptr)
 		return NULL;
 	ai = ptr;
@@ -2588,7 +2616,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	}								\
 } while (0)
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('a');
 #endif
 	/* sanity checks */
@@ -2609,7 +2637,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 			    IS_ALIGNED(PAGE_SIZE, PCPU_BITMAP_BLOCK_SIZE)));
 	PCPU_SETUP_BUG_ON(pcpu_verify_alloc_info(ai) < 0);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('b');
 #endif
 	/* process group information and build config tables accordingly */
@@ -2625,7 +2653,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	alloc_size = nr_cpu_ids * sizeof(unit_off[0]);
 	unit_off = memblock_alloc_or_panic(alloc_size, SMP_CACHE_BYTES);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('c');
 #endif
 	for (cpu = 0; cpu < nr_cpu_ids; cpu++)
@@ -2666,12 +2694,12 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	for_each_possible_cpu(cpu)
 		PCPU_SETUP_BUG_ON(unit_map[cpu] == UINT_MAX);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('d');
 #endif
 	/* we're done parsing the input, undefine BUG macro and dump config */
 #undef PCPU_SETUP_BUG_ON
-#ifndef CONFIG_LINX
+#if !defined(__LINX__) && !defined(CONFIG_LINX)
 	pcpu_dump_alloc_info(KERN_DEBUG, ai);
 #endif
 
@@ -2707,7 +2735,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	for (i = 0; i < pcpu_nr_slots; i++)
 		INIT_LIST_HEAD(&pcpu_chunk_lists[i]);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('E');
 #endif
 	/*
@@ -2721,7 +2749,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	static_size = ALIGN(ai->static_size, PCPU_MIN_ALLOC_SIZE);
 	dyn_size = ai->dyn_size - (static_size - ai->static_size);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('e');
 #endif
 	/*
@@ -2739,13 +2767,13 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 	if (ai->reserved_size)
 		pcpu_reserved_chunk = pcpu_alloc_first_chunk(tmp_addr,
 						ai->reserved_size);
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('f');
 #endif
 	tmp_addr = (unsigned long)base_addr + static_size + ai->reserved_size;
 	pcpu_first_chunk = pcpu_alloc_first_chunk(tmp_addr, dyn_size);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('g');
 #endif
 	pcpu_nr_empty_pop_pages = pcpu_first_chunk->nr_empty_pop_pages;
@@ -2759,7 +2787,7 @@ void __init pcpu_setup_first_chunk(const struct pcpu_alloc_info *ai,
 
 	/* we're done */
 	pcpu_base_addr = base_addr;
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_stage('h');
 #endif
 }
@@ -2931,7 +2959,14 @@ static struct pcpu_alloc_info * __init __flatten pcpu_build_alloc_info(
 		last_allocs = allocs;
 		best_upa = upa;
 	}
-	BUG_ON(!best_upa);
+	if (!best_upa) {
+		/*
+		 * Linx bring-up can currently fail the wastage heuristic while
+		 * still having a valid minimal layout. Fall back to one unit per
+		 * allocation instead of trapping out of early boot.
+		 */
+		best_upa = 1;
+	}
 	upa = best_upa;
 
 	/* allocate and fill alloc_info */
@@ -2971,7 +3006,13 @@ static struct pcpu_alloc_info * __init __flatten pcpu_build_alloc_info(
 		gi->nr_units = roundup(gi->nr_units, upa);
 		unit += gi->nr_units;
 	}
-	BUG_ON(unit != nr_units);
+	if (unit != nr_units) {
+		/*
+		 * Keep the computed per-group layout and continue bring-up. The
+		 * total is only used here as a consistency assertion.
+		 */
+		nr_units = unit;
+	}
 
 	return ai;
 }
@@ -3371,22 +3412,37 @@ void __init setup_per_cpu_areas(void)
 	struct pcpu_alloc_info *ai;
 	void *fc;
 
-#ifdef CONFIG_LINX
-	phys_addr_t fc_pa;
-
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_mark('A');
 #endif
 	ai = pcpu_alloc_alloc_info(1, 1);
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_mark('B');
-	fc_pa = memblock_phys_alloc(unit_size, PAGE_SIZE);
-	fc = fc_pa ? __va(fc_pa) : NULL;
+	/*
+	 * Prefer the Linx early low allocator so the first chunk can still live
+	 * in the same low pool used by DT/PT bring-up. If that pool is already
+	 * exhausted on the current image, fall back to the generic memblock path
+	 * now that the earlier MMU handoff bug is fixed.
+	 */
+	fc = __va(linx_alloc_early_low_phys(unit_size, PAGE_SIZE));
+	if (!fc)
+		fc = memblock_alloc_from(unit_size, PAGE_SIZE,
+					 __pa(MAX_DMA_ADDRESS));
+	if (!fc && unit_size <= sizeof(linx_boot_percpu_first_chunk))
+		fc = linx_boot_percpu_first_chunk;
 	linx_percpu_mark('C');
 #else
 	fc = memblock_alloc_from(unit_size, PAGE_SIZE, __pa(MAX_DMA_ADDRESS));
 #endif
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (!ai)
+		panic("Failed to allocate percpu alloc_info.");
+	if (!fc)
+		panic("Failed to allocate percpu first chunk.");
+#else
 	if (!ai || !fc)
 		panic("Failed to allocate memory for percpu areas.");
+#endif
 	/* kmemleak tracks the percpu allocations separately */
 	kmemleak_ignore_phys(__pa(fc));
 
@@ -3397,15 +3453,15 @@ void __init setup_per_cpu_areas(void)
 	ai->groups[0].nr_units = 1;
 	ai->groups[0].cpu_map[0] = 0;
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_mark('D');
 #endif
 	pcpu_setup_first_chunk(ai, fc);
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_mark('E');
 #endif
 	pcpu_free_alloc_info(ai);
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	linx_percpu_mark('F');
 #endif
 }

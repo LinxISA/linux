@@ -160,11 +160,17 @@
  *     optional instruction atomic.order attribute, e.g. .rl
  * @ret, @new, @old, @ptr:
  *     ret = *ptr, if (old == ret) *ptr = new, return @ret
+ *
+ * Current Linx LLVM inline-asm lowering rotates these named operands when
+ * materializing the final textual instruction, so the source string must be
+ * spelled as [%[n]], %[p], %[o] to emit the intended machine-order
+ * "[ptr], old, new". Keep this workaround local to the asm string until the
+ * backend contract is repaired.
  */
 #define ASM_CMPXCHG(type, order, ret, new, old, ptr)			\
 	__asm__ __volatile__ (					\
 		"BSTART.sys fall\n" \
-			"hl.cas" #type #order " [%[p]], %[o], %[n], -> %[r]\n" \
+			"hl.cas" #type #order " [%[n]], %[p], %[o], -> %[r]\n" \
 		: [r] "=&r" (ret)				\
 		: [p] "r" (ptr), [o] "r" (old), [n] "r" (new)	\
 		: "memory")

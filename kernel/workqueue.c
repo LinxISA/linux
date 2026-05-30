@@ -6303,6 +6303,14 @@ EXPORT_SYMBOL_GPL(set_worker_desc);
  */
 void print_worker_info(const char *log_lvl, struct task_struct *task)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Early Linx bring-up is still unstable in the generic debug-reporting
+	 * path, and chasing worker metadata here can recurse into nofault string
+	 * helpers instead of exposing the original failure.
+	 */
+	return;
+#endif
 	work_func_t *fn = NULL;
 	char name[WQ_NAME_LEN] = { };
 	char desc[WORKER_DESC_LEN] = { };
@@ -7848,6 +7856,15 @@ static void bh_pool_kick_highpri(struct irq_work *irq_work)
 static void __init restrict_unbound_cpumask(const char *name, const struct cpumask *mask)
 {
 	if (!cpumask_intersects(wq_unbound_cpumask, mask)) {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+		/*
+		 * Linx early boot still spends disproportionate time in this
+		 * warning path before consoles and later housekeeping state are
+		 * fully settled. Keep the same fallback semantics without the
+		 * warning churn so workqueue early init can progress.
+		 */
+		return;
+#endif
 		pr_warn("workqueue: Restricting unbound_cpumask (%*pb) with %s (%*pb) leaves no CPU, ignoring\n",
 			cpumask_pr_args(wq_unbound_cpumask), name, cpumask_pr_args(mask));
 		return;
@@ -8001,6 +8018,30 @@ void __init workqueue_init_early(void)
 		ordered_wq_attrs[i] = attrs;
 	}
 	linx_virt_uart_mark_wq('6');
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up still gets stuck constructing the full matrix of early
+	 * system workqueues. Bootstrap with the minimal singleton set and alias
+	 * the remaining globals so boot can advance to the next boundary.
+	 */
+	linx_virt_uart_mark_wq('a');
+	system_wq = alloc_workqueue("events", WQ_PERCPU, 0);
+	linx_virt_uart_mark_wq('k');
+	BUG_ON(!system_wq);
+	system_percpu_wq = system_wq;
+	system_highpri_wq = system_wq;
+	system_long_wq = system_wq;
+	system_unbound_wq = system_wq;
+	system_dfl_wq = system_wq;
+	system_freezable_wq = system_wq;
+	system_power_efficient_wq = system_wq;
+	system_freezable_power_efficient_wq = system_wq;
+	system_bh_wq = system_wq;
+	system_bh_highpri_wq = system_wq;
+	linx_virt_uart_mark_wq('7');
+	return;
+#endif
 
 	linx_virt_uart_mark_wq('a');
 	system_wq = alloc_workqueue("events", WQ_PERCPU, 0);

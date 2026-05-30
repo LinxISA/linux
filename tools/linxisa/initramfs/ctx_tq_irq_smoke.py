@@ -77,6 +77,8 @@ def main() -> int:
         "-append",
         append,
     ]
+    if "-bios" not in cmd:
+        cmd += ["-bios", "none"]
 
     proc = subprocess.Popen(
         cmd,

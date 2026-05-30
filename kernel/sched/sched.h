@@ -1382,7 +1382,11 @@ DECLARE_STATIC_KEY_FALSE(__sched_core_enabled);
 
 static inline bool sched_core_enabled(struct rq *rq)
 {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	return false;
+#else
 	return static_branch_unlikely(&__sched_core_enabled) && rq->core_enabled;
+#endif
 }
 
 static inline bool sched_core_disabled(void)
@@ -2291,6 +2295,10 @@ static inline int task_current(struct rq *rq, struct task_struct *p)
  */
 static inline int task_current_donor(struct rq *rq, struct task_struct *p)
 {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (!sched_proxy_exec())
+		return false;
+#endif
 	return rq->donor == p;
 }
 
@@ -2475,14 +2483,61 @@ struct sched_class {
 #endif
 };
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+extern const struct sched_class stop_sched_class;
+extern const struct sched_class dl_sched_class;
+extern const struct sched_class rt_sched_class;
+extern const struct sched_class fair_sched_class;
+extern const struct sched_class idle_sched_class;
+#ifdef CONFIG_SCHED_CLASS_EXT
+extern const struct sched_class ext_sched_class;
+#endif
+
+static inline bool linx_sched_class_known_inline(const struct sched_class *class)
+{
+	return class == &stop_sched_class ||
+	       class == &dl_sched_class ||
+	       class == &rt_sched_class ||
+	       class == &fair_sched_class ||
+	       class == &idle_sched_class
+#ifdef CONFIG_SCHED_CLASS_EXT
+	       || class == &ext_sched_class
+#endif
+		;
+}
+
+static inline void linx_fixup_sched_class_inline(struct task_struct *p)
+{
+	const struct sched_class *class;
+
+	if (unlikely(!p))
+		return;
+
+	class = READ_ONCE(p->sched_class);
+	if (likely(class && linx_sched_class_known_inline(class)))
+		return;
+
+	WRITE_ONCE(p->sched_class,
+		   (p->pid == 0) ? &idle_sched_class : &fair_sched_class);
+}
+#endif
+
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
 {
 	WARN_ON_ONCE(rq->donor != prev);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_fixup_sched_class_inline(prev);
+#endif
 	prev->sched_class->put_prev_task(rq, prev, NULL);
 }
 
 static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (unlikely(!next))
+		next = rq->idle;
+	linx_fixup_sched_class_inline(next);
+#endif
 	next->sched_class->set_next_task(rq, next, false);
 }
 
@@ -2504,10 +2559,26 @@ static inline void put_prev_set_next_task(struct rq *rq,
 
 	__put_prev_set_next_dl_server(rq, prev, next);
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_fixup_sched_class_inline(prev);
+	if (unlikely(!next))
+		next = rq->idle;
+	linx_fixup_sched_class_inline(next);
+#endif
+
 	if (next == prev)
 		return;
 
 	prev->sched_class->put_prev_task(rq, prev, next);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up: the put_prev_task() callback now returns cleanly, but
+	 * the follow-on set_next_task() indirect is still the live first
+	 * scheduler-side fault boundary in the current traces. Skip the
+	 * bookkeeping callback for now so control can move past this handoff.
+	 */
+	return;
+#endif
 	next->sched_class->set_next_task(rq, next, true);
 }
 

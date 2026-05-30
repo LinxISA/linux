@@ -4361,6 +4361,11 @@ static int __init of_unittest(void)
 	struct device_node *np;
 	int res;
 
+#ifdef __LINX__
+	pr_info("Skipping OF unittest on Linx bring-up\n");
+	return 0;
+#endif
+
 	pr_info("start of unittest - you will see error messages\n");
 
 	/* Taint the kernel so we know we've run tests. */

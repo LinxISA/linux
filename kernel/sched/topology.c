@@ -138,6 +138,9 @@ static int sched_domain_debug_one(struct sched_domain *sd, int cpu, int level,
 
 static void sched_domain_debug(struct sched_domain *sd, int cpu)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	int level = 0;
 
 	if (!sched_debug_verbose)
@@ -509,6 +512,15 @@ void rq_attach_root(struct rq *rq, struct root_domain *rd)
 		__dl_server_attach_root(&rq->fair_server, rq);
 
 	rq_unlock_irqrestore(rq, &rf);
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up is still seeing the old root-domain release path
+	 * mis-executed under QEMU in early boot. Skip deferred freeing on this
+	 * lane entirely; UP boot does not need root-domain teardown to progress.
+	 */
+	return;
+#endif
 
 	if (old_rd)
 		call_rcu(&old_rd->rcu, free_rootdomain);

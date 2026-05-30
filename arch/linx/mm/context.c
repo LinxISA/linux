@@ -33,6 +33,16 @@ static unsigned long *context_asid_map;
 static DEFINE_PER_CPU(atomic_long_t, active_context);
 static DEFINE_PER_CPU(unsigned long, reserved_context);
 
+static unsigned long linx_pgd_pfn(pgd_t *pgd)
+{
+	unsigned long va = (unsigned long)pgd;
+
+	if (IS_ENABLED(CONFIG_64BIT) && va >= KERNEL_LINK_ADDR)
+		return PFN_DOWN(va - KERNEL_LINK_ADDR);
+
+	return virt_to_pfn(pgd);
+}
+
 static bool check_update_reserved_context(unsigned long cntx,
 					  unsigned long newcntx)
 {
@@ -190,7 +200,7 @@ static void set_mm_asid(struct mm_struct *mm, unsigned int cpu)
 	raw_spin_unlock_irqrestore(&context_lock, flags);
 
 switch_mm_fast:
-	ssr_write(SSR_MMTBASE, (virt_to_pfn(mm->pgd) << MMTBASE_PPN_SHIFT) |
+	ssr_write(SSR_MMTBASE, (linx_pgd_pfn(mm->pgd) << MMTBASE_PPN_SHIFT) |
 		  ((cntx & asid_mask) << MMTBASE_ASID_SHIFT));
 
 	if (need_flush_tlb)
@@ -200,7 +210,7 @@ switch_mm_fast:
 static void set_mm_noasid(struct mm_struct *mm)
 {
 	/* Switch the page table and blindly nuke entire local TLB */
-	ssr_write(SSR_MMTBASE, (virt_to_pfn(mm->pgd) << MMTBASE_PPN_SHIFT));
+	ssr_write(SSR_MMTBASE, (linx_pgd_pfn(mm->pgd) << MMTBASE_PPN_SHIFT));
 	local_flush_tlb_all();
 }
 

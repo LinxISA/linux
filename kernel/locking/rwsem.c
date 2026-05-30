@@ -250,8 +250,13 @@ static inline bool rwsem_read_trylock(struct rw_semaphore *sem, long *cntp)
 {
 	*cntp = atomic_long_add_return_acquire(RWSEM_READER_BIAS, &sem->count);
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (unlikely(*cntp < 0))
+		rwsem_set_nonspinnable(sem);
+#else
 	if (WARN_ON_ONCE(*cntp < 0))
 		rwsem_set_nonspinnable(sem);
+#endif
 
 	if (!(*cntp & RWSEM_READ_FAILED_MASK)) {
 		rwsem_set_reader_owned(sem);
@@ -1289,7 +1294,9 @@ static inline int __down_read_trylock(struct rw_semaphore *sem)
 	int ret = 0;
 	long tmp;
 
+#if !defined(CONFIG_LINX) && !defined(__LINX__)
 	DEBUG_RWSEMS_WARN_ON(sem->magic != sem, sem);
+#endif
 
 	preempt_disable();
 	tmp = atomic_long_read(&sem->count);

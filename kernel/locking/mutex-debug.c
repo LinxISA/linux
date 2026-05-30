@@ -36,30 +36,55 @@ void debug_mutex_lock_common(struct mutex *lock, struct mutex_waiter *waiter)
 
 void debug_mutex_wake_waiter(struct mutex *lock, struct mutex_waiter *waiter)
 {
+#if defined(__LINX__)
+	(void)lock;
+	(void)waiter;
+	return;
+#else
 	lockdep_assert_held(&lock->wait_lock);
 	DEBUG_LOCKS_WARN_ON(list_empty(&lock->wait_list));
 	DEBUG_LOCKS_WARN_ON(waiter->magic != waiter);
 	DEBUG_LOCKS_WARN_ON(list_empty(&waiter->list));
+#endif
 }
 
 void debug_mutex_free_waiter(struct mutex_waiter *waiter)
 {
+#if defined(__LINX__)
+	(void)waiter;
+	return;
+#else
 	DEBUG_LOCKS_WARN_ON(!list_empty(&waiter->list));
 	memset(waiter, MUTEX_DEBUG_FREE, sizeof(*waiter));
+#endif
 }
 
 void debug_mutex_add_waiter(struct mutex *lock, struct mutex_waiter *waiter,
 			    struct task_struct *task)
 {
+#if defined(__LINX__)
+	(void)lock;
+	(void)waiter;
+	(void)task;
+	return;
+#else
 	lockdep_assert_held(&lock->wait_lock);
 
 	/* Current thread can't be already blocked (since it's executing!) */
 	DEBUG_LOCKS_WARN_ON(__get_task_blocked_on(task));
+#endif
 }
 
 void debug_mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter,
 			 struct task_struct *task)
 {
+#if defined(__LINX__)
+	(void)lock;
+	INIT_LIST_HEAD(&waiter->list);
+	waiter->task = NULL;
+	(void)task;
+	return;
+#else
 	struct mutex *blocked_on = __get_task_blocked_on(task);
 
 	DEBUG_LOCKS_WARN_ON(list_empty(&waiter->list));
@@ -68,14 +93,20 @@ void debug_mutex_remove_waiter(struct mutex *lock, struct mutex_waiter *waiter,
 
 	INIT_LIST_HEAD(&waiter->list);
 	waiter->task = NULL;
+#endif
 }
 
 void debug_mutex_unlock(struct mutex *lock)
 {
+#if defined(__LINX__)
+	(void)lock;
+	return;
+#else
 	if (likely(debug_locks)) {
 		DEBUG_LOCKS_WARN_ON(lock->magic != lock);
 		DEBUG_LOCKS_WARN_ON(!lock->wait_list.prev && !lock->wait_list.next);
 	}
+#endif
 }
 
 void debug_mutex_init(struct mutex *lock, const char *name,
@@ -112,8 +143,13 @@ EXPORT_SYMBOL_GPL(__devm_mutex_init);
  */
 void mutex_destroy(struct mutex *lock)
 {
+#if defined(__LINX__)
+	lock->magic = NULL;
+	return;
+#else
 	DEBUG_LOCKS_WARN_ON(mutex_is_locked(lock));
 	lock->magic = NULL;
+#endif
 }
 
 EXPORT_SYMBOL_GPL(mutex_destroy);

@@ -144,12 +144,19 @@ static int __init linx_timer_init_dt(struct device_node *np)
 		pr_err("registering percpu irq failed [%d]\n", rc);
 		return rc;
 	}
-	rc = cpuhp_setup_state(CPUHP_AP_LINX_TIMER_STARTING,
-				"clockevents/linx/timer:starting",
-				linx_timer_starting_cpu,
-				linx_timer_dying_cpu);
+	rc = cpuhp_setup_state_nocalls(CPUHP_AP_LINX_TIMER_STARTING,
+				       "clockevents/linx/timer:starting",
+				       linx_timer_starting_cpu,
+				       linx_timer_dying_cpu);
 	if (rc) {
 		pr_err("%pOFP: cpuhp setup state failed [%d]\n", np, rc);
+		goto fail_free_irq;
+	}
+
+	rc = linx_timer_starting_cpu(smp_processor_id());
+	if (rc) {
+		pr_err("%pOFP: boot cpu timer startup failed [%d]\n", np, rc);
+		cpuhp_remove_state_nocalls(CPUHP_AP_LINX_TIMER_STARTING);
 		goto fail_free_irq;
 	}
 

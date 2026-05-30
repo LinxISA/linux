@@ -21,6 +21,7 @@
 #include <linux/smp.h>
 #include <linux/efi.h>
 #include <linux/crash_dump.h>
+#include <linux/libfdt.h>
 
 #include <asm/cpu_ops.h>
 #include <asm/early_ioremap.h>
@@ -34,6 +35,12 @@
 #include <asm/efi.h>
 
 #include "head.h"
+
+#if defined(__LINX__)
+extern phys_addr_t __init linx_alloc_early_low_phys(phys_addr_t size,
+						    phys_addr_t align);
+extern void __init linx_guard_null_page(void);
+#endif
 
 #if defined(CONFIG_DUMMY_CONSOLE) || defined(CONFIG_EFI)
 struct screen_info screen_info __section(".data") = {
@@ -72,6 +79,12 @@ static struct resource rodata_res = { .name = "Kernel rodata", };
 static struct resource bss_res = { .name = "Kernel bss", };
 #ifdef CONFIG_CRASH_DUMP
 static struct resource elfcorehdr_res = { .name = "ELF Core hdr", };
+#endif
+
+#if defined(__LINX__)
+#define LINX_INIT_RESOURCE_SCRATCH 128
+static struct resource linx_init_resources_scratch[LINX_INIT_RESOURCE_SCRATCH]
+	__initdata;
 #endif
 
 static int __init add_resource(struct resource *parent,
@@ -143,19 +156,45 @@ static int __init add_kernel_resources(void)
 
 static void __init init_resources(void)
 {
+#if defined(__LINX__)
+	/*
+	 * Linx bring-up still reaches a non-boot-critical panic in the early
+	 * resource-tree construction path. Skip iomem resource population for
+	 * now so boot can progress and expose the next real runtime owner.
+	 */
+	return;
+#else
 	struct memblock_region *region = NULL;
 	struct resource *res = NULL;
 	struct resource *mem_res = NULL;
+	struct resource *mem_res_alloc = NULL;
 	size_t mem_res_sz = 0;
 	int num_resources = 0, res_idx = 0;
 	int ret = 0;
+#if defined(__LINX__)
+	struct memblock_region *reserved_regions;
+	struct memblock_region *memory_regions;
+	unsigned long reserved_cnt;
+	unsigned long memory_cnt;
+	unsigned long idx;
+#endif
 
 	/* + 1 as memblock_alloc() might increase memblock.reserved.cnt */
 	num_resources = memblock.memory.cnt + memblock.reserved.cnt + 1;
 	res_idx = num_resources - 1;
 
 	mem_res_sz = num_resources * sizeof(*mem_res);
+#if defined(__LINX__)
+	if (num_resources <= LINX_INIT_RESOURCE_SCRATCH) {
+		mem_res = linx_init_resources_scratch;
+		memset(mem_res, 0, mem_res_sz);
+	} else {
+		mem_res_alloc = memblock_alloc(mem_res_sz, SMP_CACHE_BYTES);
+		mem_res = mem_res_alloc;
+	}
+#else
 	mem_res = memblock_alloc(mem_res_sz, SMP_CACHE_BYTES);
+#endif
 	if (!mem_res)
 		panic("%s: Failed to allocate %zu bytes\n", __func__, mem_res_sz);
 
@@ -185,7 +224,14 @@ static void __init init_resources(void)
 	}
 #endif
 
+#if defined(__LINX__)
+	reserved_regions = READ_ONCE(memblock.reserved.regions);
+	reserved_cnt = READ_ONCE(memblock.reserved.cnt);
+	for (idx = 0; idx < reserved_cnt; idx++) {
+		region = &reserved_regions[idx];
+#else
 	for_each_reserved_mem_region(region) {
+#endif
 		res = &mem_res[res_idx--];
 
 		res->name = "Reserved";
@@ -209,7 +255,14 @@ static void __init init_resources(void)
 	}
 
 	/* Add /memory regions to the resource tree */
+#if defined(__LINX__)
+	memory_regions = READ_ONCE(memblock.memory.regions);
+	memory_cnt = READ_ONCE(memblock.memory.cnt);
+	for (idx = 0; idx < memory_cnt; idx++) {
+		region = &memory_regions[idx];
+#else
 	for_each_mem_region(region) {
+#endif
 		res = &mem_res[res_idx--];
 
 		if (unlikely(memblock_is_nomap(region))) {
@@ -229,21 +282,37 @@ static void __init init_resources(void)
 	}
 
 	/* Clean-up any unused pre-allocated resources */
-	if (res_idx >= 0)
-		memblock_free(mem_res, (res_idx + 1) * sizeof(*mem_res));
+	if (res_idx >= 0 && mem_res_alloc)
+		memblock_free(mem_res_alloc, (res_idx + 1) * sizeof(*mem_res));
 	return;
 
  error:
 	/* Better an empty resource tree than an inconsistent one */
 	release_child_resources(&iomem_resource);
-	memblock_free(mem_res, mem_res_sz);
+	if (mem_res_alloc)
+		memblock_free(mem_res_alloc, mem_res_sz);
+#endif
 }
 
 
 static void __init parse_dtb(void)
 {
-	/* Early scan of device tree from init memory */
-	if (early_init_dt_scan(dtb_early_va, dtb_early_pa)) {
+	void *dt_virt = dtb_early_va;
+	phys_addr_t dt_phys = dtb_early_pa;
+
+#if defined(CONFIG_64BIT) && !defined(CONFIG_BUILTIN_DTB)
+	/*
+	 * The early DTB VA is a derived alias of dtb_early_pa. Recompute it here
+	 * instead of trusting the saved __initdata slot, which is still unstable
+	 * on Linx bring-up. Use the already-established kernel mapping alias from
+	 * the physical DTB address instead of reconstructing the old high alias,
+	 * which has been observed to fault in early FDT accessors.
+	 */
+	dt_virt = kernel_mapping_pa_to_va(XIP_FIXUP(dtb_early_pa));
+#endif
+
+		/* Early scan of device tree from init memory */
+	if (early_init_dt_scan(dt_virt, dt_phys)) {
 		const char *name = of_flat_dt_get_machine_name();
 
 		if (name) {
@@ -273,8 +342,18 @@ void __init setup_arch(char **cmdline_p)
 
 	efi_init();
 	paging_init();
+#if defined(__LINX__)
+	if (initial_boot_params_pa)
+		initial_boot_params = __va(initial_boot_params_pa);
+#endif
 #if IS_ENABLED(CONFIG_BUILTIN_DTB)
 	unflatten_and_copy_device_tree();
+#else
+#if defined(__LINX__)
+	if (initial_boot_params)
+		unflatten_device_tree();
+	else
+		pr_err("No DTB found in kernel mappings\n");
 #else
 	if (early_init_dt_verify(__va(XIP_FIXUP(dtb_early_pa)),
 				 XIP_FIXUP(dtb_early_pa)))
@@ -282,7 +361,11 @@ void __init setup_arch(char **cmdline_p)
 	else
 		pr_err("No DTB found in kernel mappings\n");
 #endif
+#endif
 	misc_mem_init();
+#if defined(__LINX__)
+	linx_guard_null_page();
+#endif
 
 	init_resources();
 

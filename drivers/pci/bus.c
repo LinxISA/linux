@@ -128,25 +128,24 @@ int devm_request_pci_bus_resources(struct device *dev,
 				   struct list_head *resources)
 {
 	struct resource_entry *win;
-	struct resource *parent, *res;
+	struct resource *res;
 	int err;
 
 	resource_list_for_each_entry(win, resources) {
 		res = win->res;
-		switch (resource_type(res)) {
-		case IORESOURCE_IO:
-			parent = &ioport_resource;
-			break;
-		case IORESOURCE_MEM:
-			parent = &iomem_resource;
-			break;
-		default:
+		if (resource_type(res) == IORESOURCE_IO) {
+			err = devm_request_resource(dev, &ioport_resource, res);
+			if (err)
+				return err;
 			continue;
 		}
 
-		err = devm_request_resource(dev, parent, res);
-		if (err)
-			return err;
+		if (resource_type(res) == IORESOURCE_MEM) {
+			err = devm_request_resource(dev, &iomem_resource, res);
+			if (err)
+				return err;
+			continue;
+		}
 	}
 
 	return 0;

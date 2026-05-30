@@ -39,6 +39,13 @@
 #define INIT_MEMBLOCK_MEMORY_REGIONS		INIT_MEMBLOCK_REGIONS
 #endif
 
+#if defined(__LINX__)
+#define LINX_MEMBLOCK_PANIC_FALLBACK_SIZE	SZ_8M
+static char linx_memblock_panic_fallback[LINX_MEMBLOCK_PANIC_FALLBACK_SIZE]
+	__initdata __aligned(SMP_CACHE_BYTES);
+static phys_addr_t linx_memblock_panic_fallback_next __initdata;
+#endif
+
 /**
  * DOC: memblock overview
  *
@@ -1501,9 +1508,20 @@ phys_addr_t __init memblock_alloc_range_nid(phys_addr_t size,
 	}
 
 	if (!align) {
+#if defined(__LINX__)
+		/*
+		 * Linx bring-up still hits a late boot path that requests zero
+		 * alignment repeatedly. The generic dump_stack() diagnostic turns
+		 * that into sustained udelay()/ratelimit churn and obscures the next
+		 * functional owner. Keep the existing fallback alignment policy but
+		 * skip the stack dump on Linx so boot can progress.
+		 */
+		align = SMP_CACHE_BYTES;
+#else
 		/* Can't use WARNs this early in boot on powerpc */
 		dump_stack();
 		align = SMP_CACHE_BYTES;
+#endif
 	}
 
 again:
@@ -1625,17 +1643,51 @@ static void * __init memblock_alloc_internal(
 {
 	phys_addr_t alloc;
 
+#if defined(__LINX__)
+	/*
+	 * Linx deliberately leaves the first linear-mapping page unmapped to
+	 * turn NULL / near-NULL kernel accesses into real faults. Any early
+	 * virtual-returning memblock allocation landing on kernel_map.phys_addr
+	 * comes back as PAGE_OFFSET and immediately reintroduces the same
+	 * masked-fault class. Keep generic memblock allocations above that
+	 * page for Linx bring-up.
+	 */
+	min_addr = max_t(phys_addr_t, min_addr, kernel_map.phys_addr + PAGE_SIZE);
+#endif
 
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	/*
+	 * Linx may need a one-shot retry above memblock.current_limit for
+	 * early boot metadata such as mem_map once the linear mapping is up.
+	 * Preserve the generic "accessible" clamp, but do not collapse an
+	 * explicit MEMBLOCK_ALLOC_ANYWHERE retry back to the current limit.
+	 */
+	if (max_addr != MEMBLOCK_ALLOC_ANYWHERE &&
+	    max_addr > memblock.current_limit)
+		max_addr = memblock.current_limit;
+#else
 	if (max_addr > memblock.current_limit)
 		max_addr = memblock.current_limit;
+#endif
 
 	alloc = memblock_alloc_range_nid(size, align, min_addr, max_addr, nid,
 					exact_nid);
 
-	/* retry allocation without lower limit */
-	if (!alloc && min_addr)
+	/* retry allocation without the original lower limit */
+	if (!alloc && min_addr) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		/*
+		 * Physical address 0 doubles as the memblock failure sentinel and
+		 * Linx deliberately keeps the first page unusable. Retry from the
+		 * first real page instead of dropping all the way to 0.
+		 */
+		alloc = memblock_alloc_range_nid(size, align, PAGE_SIZE, max_addr,
+						nid, exact_nid);
+#else
 		alloc = memblock_alloc_range_nid(size, align, 0, max_addr, nid,
 						exact_nid);
+#endif
+	}
 
 	if (!alloc)
 		return NULL;
@@ -1756,8 +1808,22 @@ void *__init __memblock_alloc_or_panic(phys_addr_t size, phys_addr_t align,
 {
 	void *addr = memblock_alloc(size, align);
 
-	if (unlikely(!addr))
+	if (unlikely(!addr)) {
+#if defined(__LINX__)
+		phys_addr_t off;
+
+		align = max_t(phys_addr_t, align, SMP_CACHE_BYTES);
+		size = ALIGN(size, SMP_CACHE_BYTES);
+		off = ALIGN(linx_memblock_panic_fallback_next, align);
+		if (off + size <= LINX_MEMBLOCK_PANIC_FALLBACK_SIZE) {
+			addr = &linx_memblock_panic_fallback[off];
+			memset(addr, 0, size);
+			linx_memblock_panic_fallback_next = off + size;
+			return addr;
+		}
+#endif
 		panic("%s: Failed to allocate %pap bytes\n", func, &size);
+	}
 	return addr;
 }
 

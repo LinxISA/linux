@@ -2420,6 +2420,17 @@ int __cpuhp_state_add_instance_cpuslocked(enum cpuhp_state state,
 	if (!invoke || !sp->startup.multi)
 		goto add_node;
 
+#if defined(__LINX__)
+	/*
+	 * Linx bring-up still hits recursive cpuhp_state_mutex stalls when a
+	 * multi-instance state invokes startup callbacks while the instance
+	 * registration lock is held. Keep the instance registration itself
+	 * serialized, but defer callback execution to the unlocked wrapper.
+	 */
+	ret = 0;
+	goto unlock;
+#endif
+
 	/*
 	 * Try to call the startup callback for each present cpu
 	 * depending on the hotplug state of the cpu.
@@ -2450,9 +2461,37 @@ int __cpuhp_state_add_instance(enum cpuhp_state state, struct hlist_node *node,
 			       bool invoke)
 {
 	int ret;
+#if defined(__LINX__)
+	int cpu;
+	struct cpuhp_step *sp = cpuhp_get_step(state);
+#endif
 
 	cpus_read_lock();
 	ret = __cpuhp_state_add_instance_cpuslocked(state, node, invoke);
+
+#if defined(__LINX__)
+	if (!ret && invoke && sp->startup.multi) {
+		for_each_present_cpu(cpu) {
+			struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+			int cpustate = st->state;
+
+			if (cpustate < state)
+				continue;
+
+			ret = cpuhp_issue_call(cpu, state, true, node);
+			if (ret) {
+				if (sp->teardown.multi)
+					cpuhp_rollback_install(cpu, state, node);
+
+				mutex_lock(&cpuhp_state_mutex);
+				hlist_del(node);
+				mutex_unlock(&cpuhp_state_mutex);
+				break;
+			}
+		}
+	}
+#endif
+
 	cpus_read_unlock();
 	return ret;
 }
@@ -2490,6 +2529,27 @@ int __cpuhp_setup_state_cpuslocked(enum cpuhp_state state,
 	if (cpuhp_cb_check(state) || !name)
 		return -EINVAL;
 
+#if defined(__LINX__)
+	/*
+	 * Early single-CPU Linx boot registers several nocalls hotplug states
+	 * before the scheduler/kthread world is fully up. Keep that setup on a
+	 * simple single-threaded path so the bring-up lane does not depend on
+	 * cpuhp_state_mutex owner transitions before runtime locking is proven.
+	 */
+	if (!invoke && system_state < SYSTEM_SCHEDULING && num_possible_cpus() == 1) {
+		ret = cpuhp_store_callbacks(state, name, startup, teardown,
+					    multi_instance);
+		dynstate = state == CPUHP_AP_ONLINE_DYN || state == CPUHP_BP_PREPARE_DYN;
+		if (ret > 0 && dynstate) {
+			state = ret;
+			ret = 0;
+		}
+		if (!ret && dynstate)
+			return state;
+		return ret;
+	}
+#endif
+
 	mutex_lock(&cpuhp_state_mutex);
 
 	ret = cpuhp_store_callbacks(state, name, startup, teardown,
@@ -2503,6 +2563,17 @@ int __cpuhp_setup_state_cpuslocked(enum cpuhp_state state,
 
 	if (ret || !invoke || !startup)
 		goto out;
+
+#if defined(__LINX__)
+	/*
+	 * Linx bring-up repeatedly wedges the init thread on
+	 * cpuhp_state_mutex when invoke-enabled state installation runs the
+	 * startup callback synchronously under the registration lock. Keep the
+	 * callback registered, but defer the startup invocation to the unlocked
+	 * wrapper path below.
+	 */
+	goto out;
+#endif
 
 	/*
 	 * Try to call the startup callback for each present cpu
@@ -2542,11 +2613,37 @@ int __cpuhp_setup_state(enum cpuhp_state state,
 			bool multi_instance)
 {
 	int ret;
+#if defined(__LINX__)
+	enum cpuhp_state invoke_state = state;
+	int cpu;
+#endif
 
 	cpus_read_lock();
 	ret = __cpuhp_setup_state_cpuslocked(state, name, invoke, startup,
 					     teardown, multi_instance);
 	cpus_read_unlock();
+
+#if defined(__LINX__)
+	if (ret > 0 &&
+	    (state == CPUHP_AP_ONLINE_DYN || state == CPUHP_BP_PREPARE_DYN))
+		invoke_state = ret;
+
+	if ((!ret || ret > 0) && invoke && startup) {
+		for_each_present_cpu(cpu) {
+			struct cpuhp_cpu_state *st = per_cpu_ptr(&cpuhp_state, cpu);
+			int cpustate = st->state;
+
+			if (cpustate < invoke_state)
+				continue;
+
+			ret = startup(cpu);
+			if (ret) {
+				__cpuhp_remove_state(invoke_state, false);
+				break;
+			}
+		}
+	}
+#endif
 	return ret;
 }
 EXPORT_SYMBOL(__cpuhp_setup_state);

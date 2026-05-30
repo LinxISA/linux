@@ -552,7 +552,18 @@ void vpanic(const char *fmt, va_list args)
 	 * Run any panic handlers, including those that might need to
 	 * add information to the kmsg dump output.
 	 */
+#if defined(__LINX__)
+	/*
+	 * Linx early bring-up is still corrupting the panic notifier chain
+	 * before normal runtime is established. Skip early panic notifiers so
+	 * we can expose the original panic owner instead of faulting inside the
+	 * notifier walk itself.
+	 */
+	if (system_state >= SYSTEM_RUNNING)
+		atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
+#else
 	atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
+#endif
 
 	sys_info(panic_print);
 

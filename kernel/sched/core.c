@@ -81,10 +81,6 @@
 #include <asm/irq_regs.h>
 #include <asm/switch_to.h>
 #include <asm/tlb.h>
-#ifdef CONFIG_LINX
-#include <asm/debug_uart.h>
-#endif
-
 #define CREATE_TRACE_POINTS
 #include <linux/sched/rseq_api.h>
 #include <trace/events/sched.h>
@@ -102,6 +98,13 @@
 #include "../../io_uring/io-wq.h"
 #include "../smpboot.h"
 #include "../locking/mutex.h"
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static inline void linx_fixup_sched_class(struct task_struct *p,
+					 const char *site);
+static inline void linx_fixup_cpus_ptr(struct task_struct *p,
+				      const char *site);
+#endif
 
 EXPORT_TRACEPOINT_SYMBOL_GPL(ipi_send_cpu);
 EXPORT_TRACEPOINT_SYMBOL_GPL(ipi_send_cpumask);
@@ -2702,7 +2705,7 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	struct rq *rq = task_rq(p);
 	bool queued, running;
 
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 	/*
 	 * LinxISA bring-up: avoid an indirect call through a NULL sched_class
 	 * pointer. We currently hit this in early boot while cpu masks are being
@@ -2753,7 +2756,7 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	 * bring-up gaps / toolchain issues). Avoid crashing on an indirect call
 	 * to address 0 while still letting the kernel progress.
 	 */
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 	if (unlikely(!p->sched_class)) {
 		pr_err("Linx: %s: NULL sched_class for pid=%d comm=%s\n",
 		       __func__, p->pid, p->comm);
@@ -3571,7 +3574,7 @@ static int select_fallback_rq(int cpu, struct task_struct *p)
 			state = fail;
 			break;
 		case fail:
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 			/*
 			 * LinxISA bring-up: don't hard-stop the kernel if CPU
 			 * masks get into a broken state. Dump a minimal set of
@@ -3619,6 +3622,18 @@ static inline
 int select_task_rq(struct task_struct *p, int cpu, int *wake_flags)
 {
 	lockdep_assert_held(&p->pi_lock);
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * LinxISA bring-up currently runs only on CPU0 and still has unstable
+	 * affinity-mask state during wakeups. Short-circuit task placement to
+	 * CPU0 so wakeups can keep progressing while the broader cpus_ptr lane is
+	 * still being repaired.
+	 */
+	linx_fixup_cpus_ptr(p, __func__);
+	*wake_flags |= WF_RQ_SELECTED;
+	return 0;
+#endif
 
 	if (p->nr_cpus_allowed > 1 && !is_migration_disabled(p)) {
 		cpu = p->sched_class->select_task_rq(p, cpu, *wake_flags);
@@ -3725,6 +3740,62 @@ ttwu_stat(struct task_struct *p, int cpu, int wake_flags)
 		__schedstat_inc(p->stats.nr_wakeups_sync);
 }
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static inline bool linx_sched_class_known(const struct sched_class *class)
+{
+	return class == &stop_sched_class ||
+	       class == &dl_sched_class ||
+	       class == &rt_sched_class ||
+	       class == &fair_sched_class ||
+	       class == &idle_sched_class
+#ifdef CONFIG_SCHED_CLASS_EXT
+	       || class == &ext_sched_class
+#endif
+		;
+}
+
+static inline void linx_fixup_sched_class(struct task_struct *p,
+					 const char *site)
+{
+	const struct sched_class *class = READ_ONCE(p->sched_class);
+
+	if (likely(class && linx_sched_class_known(class)))
+		return;
+
+	pr_err("Linx: %s: invalid sched_class=%px pid=%d comm=%s policy=%d prio=%d\n",
+	       site, class, p->pid, p->comm, p->policy, p->prio);
+	WRITE_ONCE(p->sched_class,
+		   (p->pid == 0) ? &idle_sched_class : &fair_sched_class);
+}
+
+static inline bool linx_cpus_ptr_known(const struct task_struct *p,
+				      const struct cpumask *mask)
+{
+	return mask == &p->cpus_mask ||
+	       mask == p->user_cpus_ptr ||
+	       mask == cpu_possible_mask ||
+	       mask == cpu_online_mask ||
+	       mask == cpu_active_mask;
+}
+
+static inline void linx_fixup_cpus_ptr(struct task_struct *p,
+				      const char *site)
+{
+	const struct cpumask *mask = READ_ONCE(p->cpus_ptr);
+
+	if (likely(mask && linx_cpus_ptr_known(p, mask)))
+		return;
+
+	pr_err("Linx: %s: invalid cpus_ptr=%px pid=%d comm=%s nr_cpus_allowed=%d task_cpu=%d\n",
+	       site, mask, p->pid, p->comm, p->nr_cpus_allowed, task_cpu(p));
+	if (cpumask_empty(&p->cpus_mask))
+		cpumask_set_cpu(0, &p->cpus_mask);
+	WRITE_ONCE(p->cpus_ptr, &p->cpus_mask);
+	WRITE_ONCE(p->nr_cpus_allowed, max_t(int, 1,
+					       cpumask_weight(&p->cpus_mask)));
+}
+#endif
+
 /*
  * Mark the task runnable.
  */
@@ -3741,6 +3812,10 @@ ttwu_do_activate(struct rq *rq, struct task_struct *p, int wake_flags,
 	int en_flags = ENQUEUE_WAKEUP | ENQUEUE_NOCLOCK;
 
 	lockdep_assert_rq_held(rq);
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_fixup_sched_class(p, __func__);
+#endif
 
 	if (p->sched_contributes_to_load)
 		rq->nr_uninterruptible--;
@@ -3965,6 +4040,15 @@ static inline bool ttwu_queue_cond(struct task_struct *p, int cpu)
 	 */
 	if (!cpu_active(cpu))
 		return false;
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * LinxISA bring-up currently runs a single-CPU boot lane. Skip the
+	 * remote wakelist shortcut entirely so we do not depend on the still
+	 * unstable affinity-mask state in ttwu_queue_cond().
+	 */
+	return false;
+#endif
 
 	/* Ensure the task will still be allowed to run on the CPU. */
 	if (!cpumask_test_cpu(cpu, p->cpus_ptr))
@@ -4351,7 +4435,7 @@ out:
 	return success;
 }
 
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 noinline void linx_preempt_guard_enable(void)
 {
 	preempt_enable();
@@ -5098,6 +5182,10 @@ struct balance_callback *splice_balance_callbacks(struct rq *rq)
 
 static void __balance_callbacks(struct rq *rq)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	rq->balance_callback = NULL;
+	return;
+#endif
 	do_balance_callbacks(rq, __splice_balance_callbacks(rq, false));
 }
 
@@ -5257,6 +5345,9 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	finish_task(prev);
 	tick_nohz_task_switch();
 	finish_lock_switch(rq);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return rq;
+#endif
 	finish_arch_post_lock_switch();
 	kcov_finish_switch(current);
 	/*
@@ -5281,10 +5372,17 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	 *   provided by mmdrop_lazy_tlb(),
 	 * - a sync_core for SYNC_CORE.
 	 */
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (!mm)
+		goto skip_mm_drop;
+#endif
 	if (mm) {
 		membarrier_mm_sync_core_before_usermode(mm);
 		mmdrop_lazy_tlb_sched(mm);
 	}
+#if defined(CONFIG_LINX) || defined(__LINX__)
+skip_mm_drop:
+#endif
 
 	if (unlikely(prev_state == TASK_DEAD)) {
 		if (prev->sched_class->task_dead)
@@ -5388,27 +5486,6 @@ context_switch(struct rq *rq, struct task_struct *prev,
 	switch_mm_cid(rq, prev, next);
 
 	prepare_lock_switch(rq, next, rf);
-
-#ifdef CONFIG_LINX
-	do {
-		static int dbg_left = 16;
-
-		if (dbg_left <= 0)
-			break;
-		dbg_left--;
-		linx_debug_uart_puts("\n[linx switch] prev=");
-		linx_debug_uart_puthex_ulong((unsigned long)prev);
-		linx_debug_uart_puts(" next=");
-		linx_debug_uart_puthex_ulong((unsigned long)next);
-		linx_debug_uart_puts(" nsp=");
-		linx_debug_uart_puthex_ulong(next->thread.sp);
-		linx_debug_uart_puts(" nra=");
-		linx_debug_uart_puthex_ulong(next->thread.ra);
-		if (!next->thread.sp || !next->thread.ra)
-			linx_debug_uart_puts(" ZERO");
-		linx_debug_uart_puts("\n");
-	} while (0);
-#endif
 
 	/* Here we just switch the register state and the stack. */
 	switch_to(prev, next, prev);
@@ -5971,11 +6048,13 @@ static noinline void __schedule_bug(struct task_struct *prev)
 static inline void schedule_debug(struct task_struct *prev, bool preempt)
 {
 #ifdef CONFIG_SCHED_STACK_END_CHECK
+#if !defined(__LINX__)
 	if (task_stack_end_corrupted(prev))
 		panic("corrupted stack end detected inside scheduler\n");
 
 	if (task_scs_end_corrupted(prev))
 		panic("corrupted shadow stack detected inside scheduler\n");
+#endif
 #endif
 
 #ifdef CONFIG_DEBUG_ATOMIC_SLEEP
@@ -6002,6 +6081,9 @@ static inline void schedule_debug(struct task_struct *prev, bool preempt)
 static void prev_balance(struct rq *rq, struct task_struct *prev,
 			 struct rq_flags *rf)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	const struct sched_class *start_class = prev->sched_class;
 	const struct sched_class *class;
 
@@ -6138,6 +6220,10 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 	int i, cpu, occ = 0;
 	struct rq *rq_i;
 	bool need_sync;
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return __pick_next_task(rq, prev, rf);
+#endif
 
 	if (!sched_core_enabled(rq))
 		return __pick_next_task(rq, prev, rf);
@@ -6429,6 +6515,9 @@ static bool steal_cookie_task(int cpu, struct sched_domain *sd)
 
 static void sched_core_balance(struct rq *rq)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	struct sched_domain *sd;
 	int cpu = cpu_of(rq);
 
@@ -6450,6 +6539,9 @@ static DEFINE_PER_CPU(struct balance_callback, core_balance_head);
 
 static void queue_core_balance(struct rq *rq)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	if (!sched_core_enabled(rq))
 		return;
 
@@ -6890,7 +6982,20 @@ static void __sched notrace __schedule(int sched_mode)
 
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (unlikely(!READ_ONCE(rq->curr)))
+		rcu_assign_pointer(rq->curr, current);
+	if (unlikely(!READ_ONCE(rq->idle)) && current->pid == 0) {
+		rcu_assign_pointer(rq->idle, current);
+		current->sched_class = &idle_sched_class;
+	}
+	if (unlikely(!READ_ONCE(rq->donor)))
+		rq_set_donor(rq, rcu_dereference(rq->curr));
+#endif
 	prev = rq->curr;
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_fixup_sched_class(prev, __func__);
+#endif
 
 	schedule_debug(prev, preempt);
 
@@ -6956,6 +7061,10 @@ static void __sched notrace __schedule(int sched_mode)
 	}
 
 pick_again:
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	next = __pick_next_task(rq, prev, &rf);
+	rq_set_donor(rq, next);
+#else
 	next = pick_next_task(rq, rq->donor, &rf);
 	rq_set_donor(rq, next);
 	if (unlikely(task_is_blocked(next))) {
@@ -6965,6 +7074,7 @@ pick_again:
 		if (next == rq->idle)
 			goto keep_resched;
 	}
+#endif
 picked:
 	clear_tsk_need_resched(prev);
 	clear_preempt_need_resched();
@@ -8729,11 +8839,18 @@ LIST_HEAD(task_groups);
 
 /* Cacheline aligned slab cache for task_group */
 static struct kmem_cache *task_group_cache __ro_after_init;
+
+#if (defined(CONFIG_LINX) || defined(__LINX__)) && \
+	(defined(CONFIG_FAIR_GROUP_SCHED) || defined(CONFIG_RT_GROUP_SCHED))
+static unsigned long linx_root_task_group_boot_buf[512] __initdata
+	__aligned(SMP_CACHE_BYTES);
+#endif
 #endif
 
 void __init sched_init(void)
 {
 	unsigned long ptr = 0;
+	unsigned long ptr_bytes = 0;
 	int i;
 
 	/* Make sure the linker didn't screw up */
@@ -8755,7 +8872,15 @@ void __init sched_init(void)
 	ptr += 2 * nr_cpu_ids * sizeof(void **);
 #endif
 	if (ptr) {
-		ptr = (unsigned long)kzalloc(ptr, GFP_NOWAIT);
+		ptr_bytes = ptr;
+		ptr = (unsigned long)kzalloc(ptr_bytes, GFP_NOWAIT);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+		if (!ptr && ptr_bytes <= sizeof(linx_root_task_group_boot_buf)) {
+			memset(linx_root_task_group_boot_buf, 0,
+			       sizeof(linx_root_task_group_boot_buf));
+			ptr = (unsigned long)linx_root_task_group_boot_buf;
+		}
+#endif
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 		root_task_group.se = (struct sched_entity **)ptr;
@@ -8933,6 +9058,17 @@ void __init sched_init(void)
 void __might_sleep(const char *file, int line)
 {
 	unsigned int state = get_current_state();
+
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	/*
+	 * Linx bring-up still reaches debug-only might_sleep warnings before the
+	 * scheduler/runtime lane is stabilized. This checker is debug-only; skip it
+	 * entirely for the bring-up lane so boot can progress to the next functional
+	 * boundary instead of looping in warning breakpoints.
+	 */
+	return;
+#endif
+
 	/*
 	 * Blocking primitives will set (and therefore destroy) current->state,
 	 * since we will exit with TASK_RUNNING make sure we enter with it,

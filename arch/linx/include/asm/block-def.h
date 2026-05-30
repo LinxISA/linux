@@ -293,7 +293,7 @@
 .macro block_next_ind symbol
 	bstart.std ind
 	1: addtpc %tpcrel_hi(\symbol), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(\symbol), -> t
 	setc.tgt t#1
 	bstop
 .endm
@@ -304,7 +304,7 @@
 .macro block_next_indcall symbol
 	bstart.std icall
 	1: addtpc %tpcrel_hi(\symbol), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(\symbol), -> t
 	setc.tgt t#1
 	setret 2f, -> ra
 	bstop

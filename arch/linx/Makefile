@@ -18,11 +18,18 @@ export BITS
 ifeq ($(CONFIG_ARCH_RV64I),y)
 	BITS := 64
 	UTS_MACHINE := linx64
-
-	KBUILD_LDFLAGS += -melf64llinxv5
 else
 	BITS := 32
 	UTS_MACHINE := linx32
+endif
+
+ifeq ($(CONFIG_LD_IS_LLD),y)
+	# The in-tree Linx LLD backend links ELF Linx objects correctly but does
+	# not accept GNU emulation strings like -melf64llinxv5. Let it infer the
+	# target from the input objects.
+else ifeq ($(CONFIG_ARCH_RV64I),y)
+	KBUILD_LDFLAGS += -melf64llinxv5
+else
 	KBUILD_LDFLAGS += -melf32llinxv5
 endif
 
@@ -40,6 +47,11 @@ linx-march-$(CONFIG_FPU)		:= $(linx-march-y)fd
 linx-march-$(CONFIG_RISCV_ISA_C)	:= $(linx-march-y)c
 KBUILD_CFLAGS += -march=$(subst fd,,$(linx-march-y))
 KBUILD_AFLAGS += -march=$(linx-march-y)
+
+# Current Linx backend bring-up is not stable enough for large generic kernel
+# loop/SLP vectorization. Disable those passes globally so unrelated drivers do
+# not block serial-boot closure with backend crashes.
+KBUILD_CFLAGS += -fno-vectorize -fno-slp-vectorize
 
 KBUILD_CFLAGS += -DCONFIG_PAGE_OFFSET=$(CONFIG_PAGE_OFFSET)
 ifeq ($(CONFIG_PERF_EVENTS),y)
@@ -71,8 +83,6 @@ KBUILD_IMAGE := $(boot)/xipImage
 else
 KBUILD_IMAGE	:= $(boot)/Image.gz
 endif
-
-head-y := arch/linx/kernel/head.o
 
 libs-y += arch/linx/lib/
 libs-$(CONFIG_EFI_STUB) += $(objtree)/drivers/firmware/efi/libstub/lib.a

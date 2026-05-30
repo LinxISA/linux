@@ -82,7 +82,11 @@ static inline void unlock_wait_lock(struct mutex *lock, unsigned long *flags)
 
 static inline void lockdep_assert_wait_lock_held(struct mutex *lock)
 {
+#if defined(__LINX__)
+	(void)lock;
+#else
 	lockdep_assert_held(&lock->wait_lock);
+#endif
 }
 
 #else /* WW_RT */
@@ -161,6 +165,12 @@ static inline void lockdep_assert_wait_lock_held(struct rt_mutex *lock)
 
 #endif /* WW_RT */
 
+#if defined(__LINX__)
+#define LINX_DEBUG_WW_WARN_ON(cond) do { (void)(cond); } while (0)
+#else
+#define LINX_DEBUG_WW_WARN_ON(cond) DEBUG_LOCKS_WARN_ON(cond)
+#endif
+
 /*
  * Wait-Die:
  *   The newer transactions are killed when:
@@ -187,32 +197,32 @@ ww_mutex_lock_acquired(struct ww_mutex *ww, struct ww_acquire_ctx *ww_ctx)
 	 *
 	 * This should never happen, always use ww_mutex_unlock.
 	 */
-	DEBUG_LOCKS_WARN_ON(ww->ctx);
+	LINX_DEBUG_WW_WARN_ON(ww->ctx);
 
 	/*
 	 * Not quite done after calling ww_acquire_done() ?
 	 */
-	DEBUG_LOCKS_WARN_ON(ww_ctx->done_acquire);
+	LINX_DEBUG_WW_WARN_ON(ww_ctx->done_acquire);
 
 	if (ww_ctx->contending_lock) {
 		/*
 		 * After -EDEADLK you tried to
 		 * acquire a different ww_mutex? Bad!
 		 */
-		DEBUG_LOCKS_WARN_ON(ww_ctx->contending_lock != ww);
+		LINX_DEBUG_WW_WARN_ON(ww_ctx->contending_lock != ww);
 
 		/*
 		 * You called ww_mutex_lock after receiving -EDEADLK,
 		 * but 'forgot' to unlock everything else first?
 		 */
-		DEBUG_LOCKS_WARN_ON(ww_ctx->acquired > 0);
+		LINX_DEBUG_WW_WARN_ON(ww_ctx->acquired > 0);
 		ww_ctx->contending_lock = NULL;
 	}
 
 	/*
 	 * Naughty, using a different class will lead to undefined behavior!
 	 */
-	DEBUG_LOCKS_WARN_ON(ww_ctx->ww_class != ww->ww_class);
+	LINX_DEBUG_WW_WARN_ON(ww_ctx->ww_class != ww->ww_class);
 #endif
 	ww_ctx->acquired++;
 	ww->ctx = ww_ctx;
@@ -441,7 +451,7 @@ __ww_mutex_kill(struct MUTEX *lock, struct ww_acquire_ctx *ww_ctx)
 		struct ww_mutex *ww;
 
 		ww = container_of(lock, struct ww_mutex, base);
-		DEBUG_LOCKS_WARN_ON(ww_ctx->contending_lock);
+		LINX_DEBUG_WW_WARN_ON(ww_ctx->contending_lock);
 		ww_ctx->contending_lock = ww;
 #endif
 		return -EDEADLK;
@@ -585,7 +595,7 @@ static inline void __ww_mutex_unlock(struct ww_mutex *lock)
 {
 	if (lock->ctx) {
 #ifdef DEBUG_WW_MUTEXES
-		DEBUG_LOCKS_WARN_ON(!lock->ctx->acquired);
+		LINX_DEBUG_WW_WARN_ON(!lock->ctx->acquired);
 #endif
 		if (lock->ctx->acquired > 0)
 			lock->ctx->acquired--;

@@ -366,6 +366,27 @@ static inline unsigned long *get_pageblock_bitmap(const struct page *page,
 #ifdef CONFIG_SPARSEMEM
 	return section_to_usemap(__pfn_to_section(pfn));
 #else
+#if defined(__LINX__)
+	struct zone *zone = NULL;
+	int zid;
+
+	for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+		struct zone *cand = &contig_page_data.node_zones[zid];
+
+		if (!cand->spanned_pages)
+			continue;
+		if (pfn >= cand->zone_start_pfn &&
+		    pfn < cand->zone_start_pfn + cand->spanned_pages) {
+			zone = cand;
+			break;
+		}
+	}
+
+	if (zone)
+		return zone->pageblock_flags;
+
+	page = pfn_to_page(pfn);
+#endif
 	return page_zone(page)->pageblock_flags;
 #endif /* CONFIG_SPARSEMEM */
 }
@@ -375,6 +396,29 @@ static inline int pfn_to_bitidx(const struct page *page, unsigned long pfn)
 #ifdef CONFIG_SPARSEMEM
 	pfn &= (PAGES_PER_SECTION-1);
 #else
+#if defined(__LINX__)
+	struct zone *zone = NULL;
+	int zid;
+
+	for (zid = 0; zid < MAX_NR_ZONES; zid++) {
+		struct zone *cand = &contig_page_data.node_zones[zid];
+
+		if (!cand->spanned_pages)
+			continue;
+		if (pfn >= cand->zone_start_pfn &&
+		    pfn < cand->zone_start_pfn + cand->spanned_pages) {
+			zone = cand;
+			break;
+		}
+	}
+
+	if (zone) {
+		pfn = pfn - pageblock_start_pfn(zone->zone_start_pfn);
+		return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
+	}
+
+	page = pfn_to_page(pfn);
+#endif
 	pfn = pfn - pageblock_start_pfn(page_zone(page)->zone_start_pfn);
 #endif /* CONFIG_SPARSEMEM */
 	return (pfn >> pageblock_order) * NR_PAGEBLOCK_BITS;
@@ -391,6 +435,9 @@ get_pfnblock_bitmap_bitidx(const struct page *page, unsigned long pfn,
 {
 	unsigned long *bitmap;
 	unsigned long word_bitidx;
+#if defined(__LINX__) && !defined(CONFIG_SPARSEMEM)
+	page = pfn_to_page(pfn);
+#endif
 
 #ifdef CONFIG_MEMORY_ISOLATION
 	BUILD_BUG_ON(NR_PAGEBLOCK_BITS != 8);
@@ -407,6 +454,23 @@ get_pfnblock_bitmap_bitidx(const struct page *page, unsigned long pfn,
 	*bitmap_word = &bitmap[word_bitidx];
 }
 
+#if defined(__LINX__) && !defined(CONFIG_SPARSEMEM)
+static __always_inline unsigned long linx_zone_usemap_words(const struct zone *zone)
+{
+	unsigned long usemapsize;
+	unsigned long zonesize = zone->spanned_pages;
+	unsigned long zone_start_pfn = zone->zone_start_pfn;
+
+	zonesize += zone_start_pfn & (pageblock_nr_pages - 1);
+	usemapsize = round_up(zonesize, pageblock_nr_pages);
+	usemapsize = usemapsize >> pageblock_order;
+	usemapsize *= NR_PAGEBLOCK_BITS;
+	usemapsize = round_up(usemapsize, BITS_PER_LONG);
+
+	return usemapsize / BITS_PER_BYTE / sizeof(unsigned long);
+}
+#endif
+
 
 /**
  * __get_pfnblock_flags_mask - Return the requested group of flags for
@@ -421,6 +485,29 @@ static unsigned long __get_pfnblock_flags_mask(const struct page *page,
 					       unsigned long pfn,
 					       unsigned long mask)
 {
+#if defined(__LINX__)
+	unsigned long *bitmap;
+	unsigned long bitidx;
+	unsigned long word_bitidx;
+	unsigned long word;
+	struct zone *zone = page_zone(pfn_to_page(pfn));
+
+	/*
+	 * Linx bring-up currently observes corrupted stack/out-parameter state
+	 * in the shared bitmap_word/bitidx helper path here. Keep the logic
+	 * identical, but compute the bitmap slot directly in this function so
+	 * the compiler emits a simpler data path.
+	 */
+	VM_BUG_ON_PAGE(!zone_spans_pfn(page_zone(page), pfn), page);
+	bitmap = get_pageblock_bitmap(page, pfn);
+	bitidx = pfn_to_bitidx(page, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	if (unlikely(word_bitidx >= linx_zone_usemap_words(zone)))
+		return 0;
+	bitidx &= (BITS_PER_LONG - 1);
+	word = READ_ONCE(bitmap[word_bitidx]);
+	return (word >> bitidx) & mask;
+#else
 	unsigned long *bitmap_word;
 	unsigned long bitidx;
 	unsigned long word;
@@ -433,6 +520,7 @@ static unsigned long __get_pfnblock_flags_mask(const struct page *page,
 	 */
 	word = READ_ONCE(*bitmap_word);
 	return (word >> bitidx) & mask;
+#endif
 }
 
 /**
@@ -446,6 +534,25 @@ static unsigned long __get_pfnblock_flags_mask(const struct page *page,
 bool get_pfnblock_bit(const struct page *page, unsigned long pfn,
 		      enum pageblock_bits pb_bit)
 {
+#if defined(__LINX__)
+	unsigned long *bitmap;
+	unsigned long bitidx;
+	unsigned long word_bitidx;
+	struct zone *zone = page_zone(pfn_to_page(pfn));
+
+	if (WARN_ON_ONCE(!is_standalone_pb_bit(pb_bit)))
+		return false;
+
+	VM_BUG_ON_PAGE(!zone_spans_pfn(page_zone(page), pfn), page);
+	bitmap = get_pageblock_bitmap(page, pfn);
+	bitidx = pfn_to_bitidx(page, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	if (unlikely(word_bitidx >= linx_zone_usemap_words(zone)))
+		return false;
+	bitidx &= (BITS_PER_LONG - 1);
+
+	return test_bit(bitidx + pb_bit, &bitmap[word_bitidx]);
+#else
 	unsigned long *bitmap_word;
 	unsigned long bitidx;
 
@@ -455,6 +562,7 @@ bool get_pfnblock_bit(const struct page *page, unsigned long pfn,
 	get_pfnblock_bitmap_bitidx(page, pfn, &bitmap_word, &bitidx);
 
 	return test_bit(bitidx + pb_bit, bitmap_word);
+#endif
 }
 
 /**
@@ -493,6 +601,28 @@ get_pfnblock_migratetype(const struct page *page, unsigned long pfn)
 static void __set_pfnblock_flags_mask(struct page *page, unsigned long pfn,
 				      unsigned long flags, unsigned long mask)
 {
+#if defined(__LINX__)
+	unsigned long *bitmap;
+	unsigned long bitidx;
+	unsigned long word_bitidx;
+	unsigned long word;
+	struct zone *zone = page_zone(pfn_to_page(pfn));
+
+	VM_BUG_ON_PAGE(!zone_spans_pfn(page_zone(page), pfn), page);
+	bitmap = get_pageblock_bitmap(page, pfn);
+	bitidx = pfn_to_bitidx(page, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	if (unlikely(word_bitidx >= linx_zone_usemap_words(zone)))
+		return;
+	bitidx &= (BITS_PER_LONG - 1);
+	mask <<= bitidx;
+	flags <<= bitidx;
+
+	word = READ_ONCE(bitmap[word_bitidx]);
+	do {
+	} while (!try_cmpxchg(&bitmap[word_bitidx], &word,
+			      (word & ~mask) | flags));
+#else
 	unsigned long *bitmap_word;
 	unsigned long bitidx;
 	unsigned long word;
@@ -505,6 +635,7 @@ static void __set_pfnblock_flags_mask(struct page *page, unsigned long pfn,
 	word = READ_ONCE(*bitmap_word);
 	do {
 	} while (!try_cmpxchg(bitmap_word, &word, (word & ~mask) | flags));
+#endif
 }
 
 /**
@@ -516,6 +647,25 @@ static void __set_pfnblock_flags_mask(struct page *page, unsigned long pfn,
 void set_pfnblock_bit(const struct page *page, unsigned long pfn,
 		      enum pageblock_bits pb_bit)
 {
+#if defined(__LINX__)
+	unsigned long *bitmap;
+	unsigned long bitidx;
+	unsigned long word_bitidx;
+	struct zone *zone = page_zone(pfn_to_page(pfn));
+
+	if (WARN_ON_ONCE(!is_standalone_pb_bit(pb_bit)))
+		return;
+
+	VM_BUG_ON_PAGE(!zone_spans_pfn(page_zone(page), pfn), page);
+	bitmap = get_pageblock_bitmap(page, pfn);
+	bitidx = pfn_to_bitidx(page, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	if (unlikely(word_bitidx >= linx_zone_usemap_words(zone)))
+		return;
+	bitidx &= (BITS_PER_LONG - 1);
+
+	set_bit(bitidx + pb_bit, &bitmap[word_bitidx]);
+#else
 	unsigned long *bitmap_word;
 	unsigned long bitidx;
 
@@ -525,6 +675,7 @@ void set_pfnblock_bit(const struct page *page, unsigned long pfn,
 	get_pfnblock_bitmap_bitidx(page, pfn, &bitmap_word, &bitidx);
 
 	set_bit(bitidx + pb_bit, bitmap_word);
+#endif
 }
 
 /**
@@ -536,6 +687,25 @@ void set_pfnblock_bit(const struct page *page, unsigned long pfn,
 void clear_pfnblock_bit(const struct page *page, unsigned long pfn,
 			enum pageblock_bits pb_bit)
 {
+#if defined(__LINX__)
+	unsigned long *bitmap;
+	unsigned long bitidx;
+	unsigned long word_bitidx;
+	struct zone *zone = page_zone(pfn_to_page(pfn));
+
+	if (WARN_ON_ONCE(!is_standalone_pb_bit(pb_bit)))
+		return;
+
+	VM_BUG_ON_PAGE(!zone_spans_pfn(page_zone(page), pfn), page);
+	bitmap = get_pageblock_bitmap(page, pfn);
+	bitidx = pfn_to_bitidx(page, pfn);
+	word_bitidx = bitidx / BITS_PER_LONG;
+	if (unlikely(word_bitidx >= linx_zone_usemap_words(zone)))
+		return;
+	bitidx &= (BITS_PER_LONG - 1);
+
+	clear_bit(bitidx + pb_bit, &bitmap[word_bitidx]);
+#else
 	unsigned long *bitmap_word;
 	unsigned long bitidx;
 
@@ -545,6 +715,7 @@ void clear_pfnblock_bit(const struct page *page, unsigned long pfn,
 	get_pfnblock_bitmap_bitidx(page, pfn, &bitmap_word, &bitidx);
 
 	clear_bit(bitidx + pb_bit, bitmap_word);
+#endif
 }
 
 /**

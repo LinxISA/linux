@@ -72,10 +72,6 @@
 #include <linux/uaccess.h>
 #include <asm/mmu_context.h>
 #include <asm/tlb.h>
-#ifdef CONFIG_LINX
-#include <asm/debug_uart.h>
-#endif
-
 #include <trace/events/task.h>
 #include "internal.h"
 
@@ -85,6 +81,13 @@
 #include "../mm/internal.h"
 
 static int bprm_creds_from_file(struct linux_binprm *bprm);
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static __always_inline void linx_exec_boot_mark(char c)
+{
+	(void)c;
+}
+#endif
 
 #if defined(CONFIG_LINX) && defined(CONFIG_BINFMT_ELF_FDPIC)
 extern int load_elf_fdpic_binary(struct linux_binprm *bprm);
@@ -792,10 +795,19 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 	if (flags & AT_EMPTY_PATH)
 		open_exec_flags.lookup_flags |= LOOKUP_EMPTY;
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('p');
+#endif
 	file = do_filp_open(fd, name, &open_exec_flags);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('P');
+#endif
 	if (IS_ERR(file))
 		return file;
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('x');
+#endif
 	if (path_noexec(&file->f_path))
 		return ERR_PTR(-EACCES);
 
@@ -807,6 +819,9 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 	if (WARN_ON_ONCE(!S_ISREG(file_inode(file)->i_mode)))
 		return ERR_PTR(-EACCES);
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('y');
+#endif
 	err = exe_file_deny_write_access(file);
 #ifdef CONFIG_LINX_DEBUG
 	if (err && file->f_path.dentry &&
@@ -820,6 +835,9 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 	if (err)
 		return ERR_PTR(err);
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('z');
+#endif
 	return no_free_ptr(file);
 }
 
@@ -1448,11 +1466,23 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 	struct file *file;
 	int retval = -ENOMEM;
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('o');
+#endif
 	file = do_open_execat(fd, filename, flags);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('O');
+#endif
 	if (IS_ERR(file))
 		return ERR_CAST(file);
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('k');
+#endif
 	bprm = kzalloc(sizeof(*bprm), GFP_KERNEL);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('K');
+#endif
 	if (!bprm) {
 		do_close_execat(file);
 		return ERR_PTR(-ENOMEM);
@@ -1505,6 +1535,9 @@ static struct linux_binprm *alloc_bprm(int fd, struct filename *filename, int fl
 	bprm->is_check = !!(flags & AT_EXECVE_CHECK);
 
 	retval = bprm_mm_init(bprm);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('M');
+#endif
 	if (!retval)
 		return bprm;
 
@@ -1981,23 +2014,20 @@ int kernel_execve(const char *kernel_filename,
 	int fd = AT_FDCWD;
 	int retval;
 
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('E');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('E');
 #endif
-	/* It is non-sense for kernel threads to call execve */
-	if (WARN_ON_ONCE(current->flags & PF_KTHREAD))
-		return -EINVAL;
 
 	filename = getname_kernel(kernel_filename);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('n');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('n');
 #endif
 	if (IS_ERR(filename))
 		return PTR_ERR(filename);
 
 	bprm = alloc_bprm(fd, filename, 0);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('b');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('b');
 #endif
 	if (IS_ERR(bprm)) {
 		retval = PTR_ERR(bprm);
@@ -2017,40 +2047,40 @@ int kernel_execve(const char *kernel_filename,
 	bprm->envc = retval;
 
 	retval = bprm_stack_limits(bprm);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('s');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('s');
 #endif
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_string_kernel(bprm->filename, bprm);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('f');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('f');
 #endif
 	if (retval < 0)
 		goto out_free;
 	bprm->exec = bprm->p;
 
 	retval = copy_strings_kernel(bprm->envc, envp, bprm);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('v');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('v');
 #endif
 	if (retval < 0)
 		goto out_free;
 
 	retval = copy_strings_kernel(bprm->argc, argv, bprm);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('a');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('a');
 #endif
 	if (retval < 0)
 		goto out_free;
 
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('X');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('X');
 #endif
 	retval = bprm_execve(bprm);
-#ifdef CONFIG_LINX
-	linx_debug_uart_putc('R');
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_exec_boot_mark('R');
 #endif
 out_free:
 	free_bprm(bprm);

@@ -35,8 +35,7 @@
 #define LINX_VIRT_UART_BASE 0x10000000UL
 static inline void linx_virt_uart_putc(char c)
 {
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
+	(void)c;
 }
 
 static inline void linx_virt_uart_puthex_u64(u64 v)
@@ -50,6 +49,8 @@ static inline void linx_virt_uart_puthex_u64(u64 v)
 	}
 }
 #define LINX_EARLY_MARK(c) linx_virt_uart_putc(c)
+
+static inline void *linx_fdt_blob(void);
 
 /*
  * __dtb_empty_root_begin[] and __dtb_empty_root_end[] magically created by
@@ -73,14 +74,14 @@ void __init of_fdt_limit_memory(int limit)
 	const void *val;
 	int cell_size = sizeof(uint32_t)*(dt_root_addr_cells + dt_root_size_cells);
 
-	memory = fdt_path_offset(initial_boot_params, "/memory");
+	memory = fdt_path_offset(linx_fdt_blob(), "/memory");
 	if (memory > 0) {
-		val = fdt_getprop(initial_boot_params, memory, "reg", &len);
+		val = fdt_getprop(linx_fdt_blob(), memory, "reg", &len);
 		if (len > limit*cell_size) {
 			len = limit*cell_size;
 			pr_debug("Limiting number of entries to %d\n", limit);
-			fdt_setprop(initial_boot_params, memory, "reg", val,
-					len);
+			fdt_setprop(linx_fdt_blob(), memory, "reg", val,
+				    len);
 		}
 	}
 }
@@ -494,6 +495,18 @@ int __initdata dt_root_size_cells;
 void *initial_boot_params __ro_after_init;
 phys_addr_t initial_boot_params_pa __ro_after_init;
 
+#if defined(__LINX__)
+static inline void *linx_fdt_blob(void)
+{
+	return initial_boot_params;
+}
+#else
+static inline void *linx_fdt_blob(void)
+{
+	return initial_boot_params;
+}
+#endif
+
 #ifdef CONFIG_OF_EARLY_FLATTREE
 
 static u32 of_fdt_crc32;
@@ -543,7 +556,7 @@ void __init early_init_fdt_scan_reserved_mem(void)
 
 	/* Process header /memreserve/ fields */
 	for (n = 0; ; n++) {
-		res = fdt_get_mem_rsv(initial_boot_params, n, &base, &size);
+		res = fdt_get_mem_rsv(linx_fdt_blob(), n, &base, &size);
 		if (res) {
 			pr_err("Invalid memory reservation block index %d\n", n);
 			break;
@@ -563,8 +576,8 @@ void __init early_init_fdt_reserve_self(void)
 		return;
 
 	/* Reserve the dtb region */
-	memblock_reserve(__pa(initial_boot_params),
-			 fdt_totalsize(initial_boot_params));
+	memblock_reserve(initial_boot_params_pa,
+			 fdt_totalsize(linx_fdt_blob()));
 }
 
 /**
@@ -581,7 +594,7 @@ int __init of_scan_flat_dt(int (*it)(unsigned long node,
 				     void *data),
 			   void *data)
 {
-	const void *blob = initial_boot_params;
+	const void *blob = linx_fdt_blob();
 	const char *pathp;
 	int offset, rc = 0, depth = -1;
 
@@ -612,7 +625,7 @@ int __init of_scan_flat_dt_subnodes(unsigned long parent,
 					      void *data),
 				    void *data)
 {
-	const void *blob = initial_boot_params;
+	const void *blob = linx_fdt_blob();
 	int node;
 
 	fdt_for_each_subnode(node, blob, parent) {
@@ -637,7 +650,7 @@ int __init of_scan_flat_dt_subnodes(unsigned long parent,
 
 int __init of_get_flat_dt_subnode_by_name(unsigned long node, const char *uname)
 {
-	return fdt_subnode_offset(initial_boot_params, node, uname);
+	return fdt_subnode_offset(linx_fdt_blob(), node, uname);
 }
 
 /*
@@ -657,7 +670,7 @@ unsigned long __init of_get_flat_dt_root(void)
 const void *__init of_get_flat_dt_prop(unsigned long node, const char *name,
 				       int *size)
 {
-	return fdt_getprop(initial_boot_params, node, name, size);
+	return fdt_getprop(linx_fdt_blob(), node, name, size);
 }
 
 const __be32 *__init of_flat_dt_get_addr_size_prop(unsigned long node,
@@ -740,7 +753,7 @@ static int of_fdt_is_compatible(const void *blob,
  */
 int __init of_flat_dt_is_compatible(unsigned long node, const char *compat)
 {
-	return of_fdt_is_compatible(initial_boot_params, node, compat);
+	return of_fdt_is_compatible(linx_fdt_blob(), node, compat);
 }
 
 /*
@@ -754,7 +767,7 @@ static int __init of_flat_dt_match(unsigned long node, const char *const *compat
 		return 0;
 
 	while (*compat) {
-		tmp = of_fdt_is_compatible(initial_boot_params, node, *compat);
+		tmp = of_fdt_is_compatible(linx_fdt_blob(), node, *compat);
 		if (tmp && (score == 0 || (tmp < score)))
 			score = tmp;
 		compat++;
@@ -768,7 +781,7 @@ static int __init of_flat_dt_match(unsigned long node, const char *const *compat
  */
 uint32_t __init of_get_flat_dt_phandle(unsigned long node)
 {
-	return fdt_get_phandle(initial_boot_params, node);
+	return fdt_get_phandle(linx_fdt_blob(), node);
 }
 
 const char * __init of_flat_dt_get_machine_name(void)
@@ -1016,7 +1029,7 @@ static void __init linx_fdt_check_for_initrd(unsigned long node)
 	if (!IS_ENABLED(CONFIG_BLK_DEV_INITRD))
 		return;
 
-	prop = linx_fdt_getprop(initial_boot_params, node, "linux,initrd-start",
+	prop = linx_fdt_getprop(linx_fdt_blob(), node, "linux,initrd-start",
 				&len);
 	LINX_EARLY_MARK('8');
 	if (!prop || len <= 0)
@@ -1024,7 +1037,7 @@ static void __init linx_fdt_check_for_initrd(unsigned long node)
 	start = of_read_number(prop, len / 4);
 	LINX_EARLY_MARK('9');
 
-	prop = linx_fdt_getprop(initial_boot_params, node, "linux,initrd-end",
+	prop = linx_fdt_getprop(linx_fdt_blob(), node, "linux,initrd-end",
 				&len);
 	LINX_EARLY_MARK('A');
 	if (!prop || len <= 0)
@@ -1118,7 +1131,7 @@ int __init early_init_dt_scan_chosen_stdout(void)
 	const char *p, *q, *options = NULL;
 	int l;
 	const struct earlycon_id *match;
-	const void *fdt = initial_boot_params;
+	const void *fdt = linx_fdt_blob();
 	int ret;
 
 	offset = fdt_path_offset(fdt, "/chosen");
@@ -1166,18 +1179,25 @@ int __init early_init_dt_scan_chosen_stdout(void)
 int __init early_init_dt_scan_root(void)
 {
 	const __be32 *prop;
-	const void *fdt = initial_boot_params;
-	int node = fdt_path_offset(fdt, "/");
+	const void *fdt = linx_fdt_blob();
+	int node;
 	bool linx_root_fallback = false;
 
 	LINX_EARLY_MARK('R');
 #ifdef CONFIG_LINX
-	if (node < 0) {
-		node = 0;
-		linx_root_fallback = true;
-	}
+	/*
+	 * Current Linx bring-up still faults in the generic root-node walk
+	 * before any meaningful DT-derived override is needed. The default
+	 * root cell sizes are already the generic fallback contract, so keep
+	 * those defaults and skip the fragile root-property traversal for now.
+	 */
+	(void)fdt;
+	node = -FDT_ERR_NOTFOUND;
+	linx_root_fallback = true;
+#else
+	node = fdt_path_offset(fdt, "/");
 #endif
-	if (node < 0)
+	if (node < 0 && !linx_root_fallback)
 		return -ENODEV;
 
 	dt_root_size_cells = OF_ROOT_NODE_SIZE_CELLS_DEFAULT;
@@ -1225,7 +1245,7 @@ u64 __init dt_mem_next_cell(int s, const __be32 **cellp)
 int __init early_init_dt_scan_memory(void)
 {
 	int node, found_memory = 0;
-	const void *fdt = initial_boot_params;
+	const void *fdt = linx_fdt_blob();
 
 	LINX_EARLY_MARK('M');
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
@@ -1361,7 +1381,7 @@ int __init early_init_dt_scan_chosen(char *cmdline)
 	int l, node;
 	const char *p;
 	const void *rng_seed;
-	const void *fdt = initial_boot_params;
+	const void *fdt = linx_fdt_blob();
 
 	LINX_EARLY_MARK('C');
 	node = fdt_path_offset(fdt, "/chosen");
@@ -1396,11 +1416,11 @@ int __init early_init_dt_scan_chosen(char *cmdline)
 		add_bootloader_randomness(rng_seed, l);
 
 		/* try to clear seed so it won't be found. */
-		fdt_nop_property(initial_boot_params, node, "rng-seed");
+		fdt_nop_property(linx_fdt_blob(), node, "rng-seed");
 
 		/* update CRC check value */
-		of_fdt_crc32 = crc32_be(~0, initial_boot_params,
-				fdt_totalsize(initial_boot_params));
+		of_fdt_crc32 = crc32_be(~0, linx_fdt_blob(),
+				fdt_totalsize(linx_fdt_blob()));
 #endif
 	}
 
@@ -1533,11 +1553,16 @@ bool __init early_init_dt_verify(void *dt_virt, phys_addr_t dt_phys)
 	/* Setup flat device-tree pointer */
 	initial_boot_params = dt_virt;
 	initial_boot_params_pa = dt_phys;
-	of_fdt_crc32 = crc32_be(~0, initial_boot_params,
-				fdt_totalsize(initial_boot_params));
+	of_fdt_crc32 = crc32_be(~0, linx_fdt_blob(),
+				fdt_totalsize(linx_fdt_blob()));
 
 	/* Initialize {size,address}-cells info */
+#ifdef CONFIG_LINX
+	dt_root_size_cells = OF_ROOT_NODE_SIZE_CELLS_DEFAULT;
+	dt_root_addr_cells = OF_ROOT_NODE_ADDR_CELLS_DEFAULT;
+#else
 	early_init_dt_scan_root();
+#endif
 
 	return true;
 }
@@ -1599,7 +1624,7 @@ static void *__init copy_device_tree(void *fdt)
  */
 void __init unflatten_device_tree(void)
 {
-	void *fdt = initial_boot_params;
+	void *fdt = linx_fdt_blob();
 
 	LINX_EARLY_MARK('u');
 	/* Save the statically-placed regions in the reserved_mem array */

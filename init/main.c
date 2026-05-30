@@ -90,6 +90,8 @@
 #include <linux/sched/task.h>
 #include <linux/sched/task_stack.h>
 #include <linux/context_tracking.h>
+#include <linux/fs_struct.h>
+#include <linux/mnt_namespace.h>
 #include <linux/random.h>
 #include <linux/moduleloader.h>
 #include <linux/list.h>
@@ -109,6 +111,7 @@
 #include <net/net_namespace.h>
 
 #include <asm/io.h>
+#include <asm/qemu_debug.h>
 #include <asm/setup.h>
 #include <asm/sections.h>
 #include <asm/cacheflush.h>
@@ -124,22 +127,19 @@
 static int kernel_init(void *);
 static char *static_command_line;
 
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
 						 unsigned long flags,
 						 const char *name, bool kthread);
 static noinline void linx_call_void_indirect(void (*fn)(void));
 static noinline void __noreturn linx_call_noreturn_indirect(void (*fn)(void));
+static noinline int linx_run_ramdisk_init_process(void);
 #endif
 
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
 static __always_inline void linx_boot_mark(char c)
 {
-#ifdef CONFIG_LINX_DEBUG
-	linx_debug_uart_putc(c);
-#else
 	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-#endif
 }
 
 static __always_inline void linx_boot_mark_hex_u8(unsigned char v)
@@ -942,7 +942,11 @@ core_param(initcall_debug, initcall_debug, bool, 0644);
 #ifdef CONFIG_LINX_VIRT_UART_MARKERS
 static __always_inline void linx_virt_uart_putc(char c)
 {
-	*(volatile unsigned char *)(0x10000000UL) = (unsigned char)c;
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_boot_mark(c);
+#else
+	(void)c;
+#endif
 }
 
 static __always_inline void linx_virt_uart_mark(char c)
@@ -1464,9 +1468,7 @@ void start_kernel(void)
 	 * we've done PCI setups etc, and console_init() must be aware of
 	 * this. But we do want output early, in case something goes wrong.
 	 */
-#ifndef CONFIG_LINX
 	console_init();
-#endif
 #ifdef CONFIG_LINX
 	linx_boot_mark('K');
 #endif
@@ -2031,16 +2033,21 @@ static int run_init_process(const char *init_filename)
 	{
 		int ret = kernel_execve(init_filename, argv_init, envp_init);
 		linx_boot_mark('x');
-#ifdef CONFIG_LINX
 		if (ret) {
 			linx_boot_mark('[');
-			linx_debug_uart_puthex_ulong((unsigned long)ret);
+			linx_boot_mark_hex_u8((unsigned char)ret);
 			linx_boot_mark(']');
 		}
-#endif
 		return ret;
 	}
 }
+
+#if defined(__LINX__)
+static noinline int linx_run_ramdisk_init_process(void)
+{
+	return run_init_process(ramdisk_execute_command);
+}
+#endif
 
 static int try_to_run_init_process(const char *init_filename)
 {
@@ -2057,6 +2064,22 @@ static int try_to_run_init_process(const char *init_filename)
 }
 
 static noinline void __init kernel_init_freeable(void);
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static void __init linx_ensure_init_fs_root(void)
+{
+	struct path root;
+
+	if (!current->fs || current->fs->root.mnt)
+		return;
+
+	if (!init_mnt_ns_root_path(&root))
+		return;
+
+	current->fs->pwd = root;
+	current->fs->root = root;
+}
+#endif
 
 #if defined(CONFIG_STRICT_KERNEL_RWX) || defined(CONFIG_STRICT_MODULE_RWX)
 bool rodata_enabled __ro_after_init = true;
@@ -2170,14 +2193,29 @@ static int __ref kernel_init(void *unused)
 #endif
 	linx_boot_mark('S');
 
-	if (ramdisk_execute_command) {
+	/*
+	 * Keep the init pathname in a simple local so the call site below
+	 * lowers as an ordinary argument reload instead of reusing stale
+	 * call-result state across the earlier initramfs checks.
+	 */
+	const char *rdinit = ramdisk_execute_command;
+
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	linx_ensure_init_fs_root();
+#endif
+
+	if (rdinit) {
 		linx_boot_mark('r');
-		ret = run_init_process(ramdisk_execute_command);
+#if defined(__LINX__)
+		ret = linx_run_ramdisk_init_process();
+#else
+		ret = run_init_process(rdinit);
+#endif
 		linx_boot_mark(ret ? 'E' : '0');
 		if (!ret)
 			return 0;
 		pr_err("Failed to execute %s (error %d)\n",
-		       ramdisk_execute_command, ret);
+		       rdinit, ret);
 	}
 
 	/*
@@ -2187,7 +2225,12 @@ static int __ref kernel_init(void *unused)
 	 * trying to recover a really broken machine.
 	 */
 	if (execute_command) {
+#if defined(__LINX__)
+		register const char *exec_a0 asm("a0") = execute_command;
+		ret = run_init_process(exec_a0);
+#else
 		ret = run_init_process(execute_command);
+#endif
 		if (!ret)
 			return 0;
 		panic("Requested init %s failed (error %d).",
@@ -2195,7 +2238,12 @@ static int __ref kernel_init(void *unused)
 	}
 
 	if (CONFIG_DEFAULT_INIT[0] != '\0') {
+#if defined(__LINX__)
+		register const char *default_init_a0 asm("a0") = CONFIG_DEFAULT_INIT;
+		ret = run_init_process(default_init_a0);
+#else
 		ret = run_init_process(CONFIG_DEFAULT_INIT);
+#endif
 		if (ret)
 			pr_err("Default init %s failed (error %d)\n",
 			       CONFIG_DEFAULT_INIT, ret);
@@ -2241,6 +2289,9 @@ void __init console_on_rootfs(void)
 
 static noinline void __init kernel_init_freeable(void)
 {
+#if defined(CONFIG_HAVE_QEMU_DEBUG)
+	qemu_debug_hit(0x4b1f);
+#endif
 	linx_boot_mark('f');
 #if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: kernel_init_freeable start\n");
@@ -2298,9 +2349,12 @@ static noinline void __init kernel_init_freeable(void)
 	linx_boot_mark('R');
 #ifdef CONFIG_LINX
 	/*
-	 * LinxISA bring-up: let userspace open its own console once /dev is
-	 * populated; opening /dev/console here can wedge early boot.
+	 * LinxISA bring-up: keep the rootfs console handoff narrow. The
+	 * initramfs smoke path needs stdio on /dev/console, but the broader
+	 * Linx boot path previously wedged when this was always done.
 	 */
+	if (ramdisk_execute_command)
+		console_on_rootfs();
 #else
 	console_on_rootfs();
 #endif
@@ -2311,12 +2365,18 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 	int ramdisk_command_access;
 	ramdisk_command_access = init_eaccess(ramdisk_execute_command);
+#if defined(__LINX__)
+	if (ramdisk_command_access != 0)
+		pr_warn("check access for rdinit=%s failed: %i, attempting exec anyway on Linx\n",
+			ramdisk_execute_command, ramdisk_command_access);
+#else
 	if (ramdisk_command_access != 0) {
 		pr_warn("check access for rdinit=%s failed: %i, ignoring\n",
 			ramdisk_execute_command, ramdisk_command_access);
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
 	}
+#endif
 	linx_boot_mark('N');
 
 	/*

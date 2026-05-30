@@ -10,7 +10,8 @@
  * Ruan Jinjie (ruanjinjie@huawei.com)
  */
 #define pr_fmt(fmt) "lxintc: " fmt
-#include <linux/dma-iommu.h>
+#include <linux/iommu.h>
+#include <linux/cpuhotplug.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
@@ -396,7 +397,8 @@ static int lxic_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		if (ret)
 			return ret;
 
-		cpumask_copy(irq_get_affinity_mask(virq + i), &cpumask);
+		irq_data_update_effective_affinity(irq_get_irq_data(virq + i),
+						   cpumask_of(cpu));
 
 		priv->wbi_msi_flag[cpu][vector + i] = true;
 		handler = per_cpu_ptr(&lxic_handlers, cpu);
@@ -431,7 +433,7 @@ const struct riscv_ipi_ops lxic_ipi_ops = {
 	.ipi_inject = lxic_send_ipi,
 };
 
-void lxic_handle_irq(struct irq_desc *desc)
+static void lxic_handle_irq(struct irq_desc *desc)
 {
 	int err;
 	struct irq_chip *chip = irq_desc_get_chip(desc);
@@ -528,7 +530,6 @@ static void lxic_irq_compose_msi_msg(struct irq_data *d,
 
 	pr_info("lxic_irq_compose_msi_msg, cpu: 0x%x, addr_hi: 0x%x, addr_lo: 0x%x, data: 0x%x\n", cpu, msg->address_hi, msg->address_lo, msg->data);
 
-	iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
 }
 
 static struct irq_chip lxic_irq_base_chip = {
@@ -567,9 +568,11 @@ static int lxic_irq_base_domain_alloc(struct irq_domain *domain,
 
 	pr_info("virq: 0x%x, target cpu: 0x%x, msi_addr: 0x%llx, vector: 0x%x\n", virq, cpu, msi_addr, vector);
 
+#ifdef CONFIG_IRQ_MSI_IOMMU
 	err = iommu_dma_prepare_msi(info->desc, msi_addr);
 	if (err)
 		goto fail;
+#endif
 
 	for (i = 0; i < nr_irqs; i++) {
 		lxic_virq_set_target(priv, virq + i, vector + i, cpu);
@@ -659,17 +662,17 @@ static int lxic_allocate_msi_domains(struct lxic_priv *priv, struct irq_domain *
 	return 0;
 }
 
-void irq_domain_cleanup(struct lxic_priv *priv)
+static void irq_domain_cleanup(struct lxic_priv *priv)
 {
 	irq_domain_remove(priv->pci_domain);
 	irq_domain_remove(priv->base_domain);
 	irq_domain_remove(priv->irqdomain);
 }
 
-static void setup_lxic(struct device_node *node, u32 *nvec, u32 *ndev,
-		       struct lxic_priv *priv)
+static int setup_lxic(struct device_node *node, u32 *nvec, u32 *ndev,
+		      struct lxic_priv *priv)
 {
-	int interrupts, i, cpu, hart;
+	int interrupts, i, cpu, hart, ret = 0;
 	struct of_phandle_args parent;
 	struct lxic_handler *handler;
 	bool alloc_failed = false;
@@ -758,13 +761,27 @@ static void setup_lxic(struct device_node *node, u32 *nvec, u32 *ndev,
 	 */
 	handler = this_cpu_ptr(&lxic_handlers);
 	if (handler->present && !lxic_cpuhp_setup_done) {
-		cpuhp_setup_state(CPUHP_AP_IRQ_LINX_INTC_STARTING,
-				  "irqchip/linx/intc:starting",
-				  lxic_starting_cpu, lxic_dying_cpu);
+		ret = cpuhp_setup_state_nocalls(CPUHP_AP_IRQ_LINX_INTC_STARTING,
+						"irqchip/linx/intc:starting",
+						lxic_starting_cpu, lxic_dying_cpu);
+		if (ret) {
+			pr_err("%pOFP: cpuhp setup state failed [%d]\n",
+			       node, ret);
+			goto out;
+		}
+
+		ret = lxic_starting_cpu(smp_processor_id());
+		if (ret) {
+			pr_err("%pOFP: boot cpu startup failed [%d]\n",
+			       node, ret);
+			cpuhp_remove_state_nocalls(CPUHP_AP_IRQ_LINX_INTC_STARTING);
+			goto out;
+		}
 		lxic_cpuhp_setup_done = true;
 	}
 
-	if(alloc_failed) {
+out:
+	if (alloc_failed || ret) {
 		for_each_possible_cpu(cpu) {
 			handler = per_cpu_ptr(&lxic_handlers, cpu);
 			if (handler->ids_used_bimap)
@@ -774,6 +791,7 @@ static void setup_lxic(struct device_node *node, u32 *nvec, u32 *ndev,
 		}
 	}
 
+	return ret;
 }
 
 static void run_self_test(struct lxic_priv *priv)
@@ -837,7 +855,11 @@ static int __init lxic_init(struct device_node *node,
 	priv->dstride = dstride;
 	priv->nirq = nirq;
 
-	setup_lxic(node, &nvec, &ndev, priv);
+	ret = setup_lxic(node, &nvec, &ndev, priv);
+	if (ret) {
+		error = ret;
+		goto out_iounmap;
+	}
 
 	pr_info("%pOFP [%llx:%llx]: mapped %d interrupts with %d vectors for"
 		" %d Core.\n", node, res.start, res.end, nirq, nvec, ndev);

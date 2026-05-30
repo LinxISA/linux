@@ -21,8 +21,7 @@
 
 static __always_inline void linx_param_mark(char c)
 {
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
+	(void)c;
 }
 
 static __always_inline void linx_param_mark_arg(char phase, const char *param)
@@ -211,6 +210,55 @@ char *parse_args(const char *doing,
 
 	if (*args)
 		pr_debug("doing %s, parsing ARGS: '%s'\n", doing, args);
+
+	/*
+	 * Some early boot callers intentionally provide no builtin parameter
+	 * table and rely entirely on the unknown-handler path. Keep that
+	 * route explicit instead of falling into the generic parameter scan.
+	 */
+	if (!params || !num) {
+		while (*args) {
+			int ret;
+			int irq_was_disabled;
+
+			args = next_arg(args, &param, &val);
+			if (!val && strcmp(param, "--") == 0)
+				return err ?: args;
+#ifdef CONFIG_LINX
+			if (linx_booting_kernel)
+				linx_param_mark_arg('b', param);
+#endif
+			irq_was_disabled = irqs_disabled();
+			ret = unknown ? unknown(param, val, doing, arg) : -ENOENT;
+#ifdef CONFIG_LINX
+			if (linx_booting_kernel)
+				linx_param_mark_arg('a', param);
+#endif
+			if (irq_was_disabled && !irqs_disabled())
+				pr_warn("%s: option '%s' enabled irq's!\n",
+					doing, param);
+
+			switch (ret) {
+			case 0:
+				continue;
+			case -ENOENT:
+				pr_err("%s: Unknown parameter `%s'\n", doing, param);
+				break;
+			case -ENOSPC:
+				pr_err("%s: `%s' too large for parameter `%s'\n",
+				       doing, val ?: "", param);
+				break;
+			default:
+				pr_err("%s: `%s' invalid for parameter `%s'\n",
+				       doing, val ?: "", param);
+				break;
+			}
+
+			err = ERR_PTR(ret);
+		}
+
+		return err;
+	}
 
 	while (*args) {
 		int ret;
@@ -651,12 +699,20 @@ static ssize_t param_attr_store(const struct module_attribute *mattr,
 #ifdef CONFIG_SYSFS
 void kernel_param_lock(struct module *mod)
 {
+#if defined(__LINX__)
+	(void)mod;
+#else
 	mutex_lock(KPARAM_MUTEX(mod));
+#endif
 }
 
 void kernel_param_unlock(struct module *mod)
 {
+#if defined(__LINX__)
+	(void)mod;
+#else
 	mutex_unlock(KPARAM_MUTEX(mod));
+#endif
 }
 
 EXPORT_SYMBOL(kernel_param_lock);

@@ -18,6 +18,7 @@ extern struct mnt_namespace *copy_mnt_ns(u64, struct mnt_namespace *,
 extern void put_mnt_ns(struct mnt_namespace *ns);
 DEFINE_FREE(put_mnt_ns, struct mnt_namespace *, if (!IS_ERR_OR_NULL(_T)) put_mnt_ns(_T))
 extern struct ns_common *from_mnt_ns(struct mnt_namespace *);
+extern bool init_mnt_ns_root_path(struct path *root);
 
 extern const struct file_operations proc_mounts_operations;
 extern const struct file_operations proc_mountinfo_operations;

@@ -70,8 +70,10 @@ static int notifier_call_chain(struct notifier_block **nl,
 	struct notifier_block *nb, *next_nb;
 
 	nb = rcu_dereference_raw(*nl);
+	if (!nb || !nr_to_call)
+		return ret;
 
-	while (nb && nr_to_call) {
+	do {
 		next_nb = rcu_dereference_raw(nb->next);
 
 #ifdef CONFIG_DEBUG_NOTIFIERS
@@ -91,7 +93,7 @@ static int notifier_call_chain(struct notifier_block **nl,
 			break;
 		nb = next_nb;
 		nr_to_call--;
-	}
+	} while (nb && nr_to_call);
 	return ret;
 }
 NOKPROBE_SYMBOL(notifier_call_chain);

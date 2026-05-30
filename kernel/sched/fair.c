@@ -12761,6 +12761,17 @@ static inline void nohz_newidle_balance(struct rq *this_rq) { }
  */
 static int sched_balance_newidle(struct rq *this_rq, struct rq_flags *rf)
 {
+#if defined(__LINX__)
+	/*
+	 * Linx bring-up currently runs a single-CPU boot lane. New-idle load
+	 * balancing only tries to pull work from other CPUs and is the active
+	 * scheduler hot loop in the current traces, not a productive step
+	 * toward userspace. Skip it and let the local runnable state drive the
+	 * next boundary.
+	 */
+	return 0;
+#endif
+
 	unsigned long next_balance = jiffies + HZ;
 	int this_cpu = this_rq->cpu;
 	int continue_balancing = 1;
@@ -13613,8 +13624,21 @@ void init_tg_cfs_entry(struct task_group *tg, struct cfs_rq *cfs_rq,
 	cfs_rq->rq = rq;
 	init_cfs_rq_runtime(cfs_rq);
 
-	tg->cfs_rq[cpu] = cfs_rq;
-	tg->se[cpu] = se;
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up still has a bad indexed-store lane here in QEMU for the
+	 * cpu==0 bootstrap path. Use the direct slot form so early scheduler
+	 * setup does not depend on that addressing mode.
+	 */
+	if (cpu == 0) {
+		*tg->cfs_rq = cfs_rq;
+		*tg->se = se;
+	} else
+#endif
+	{
+		tg->cfs_rq[cpu] = cfs_rq;
+		tg->se[cpu] = se;
+	}
 
 	/* se could be NULL for root_task_group */
 	if (!se)

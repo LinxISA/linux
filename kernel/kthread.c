@@ -1049,8 +1049,21 @@ static int kthreads_online_cpu(unsigned int cpu)
 
 static int kthreads_init(void)
 {
-	return cpuhp_setup_state(CPUHP_AP_KTHREADS_ONLINE, "kthreads:online",
-				kthreads_online_cpu, NULL);
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_KTHREADS_ONLINE,
+					"kthreads:online",
+					kthreads_online_cpu, NULL);
+	if (ret)
+		return ret;
+
+	ret = kthreads_online_cpu(smp_processor_id());
+	if (ret) {
+		cpuhp_remove_state_nocalls(CPUHP_AP_KTHREADS_ONLINE);
+		return ret;
+	}
+
+	return 0;
 }
 early_initcall(kthreads_init);
 

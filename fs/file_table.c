@@ -32,6 +32,13 @@
 
 #include "internal.h"
 
+#if defined(__LINX__)
+static __always_inline void linx_file_mark(char c)
+{
+	(void)c;
+}
+#endif
+
 /* sysctl tunables... */
 static struct files_stat_struct files_stat = {
 	.max_files = NR_FILE
@@ -42,6 +49,18 @@ static struct kmem_cache *filp_cachep __ro_after_init;
 static struct kmem_cache *bfilp_cachep __ro_after_init;
 
 static struct percpu_counter nr_files __cacheline_aligned_in_smp;
+
+#if defined(__LINX__)
+#define LINX_BOOT_FILE_POOL_SIZE 16
+static struct file linx_boot_file_pool[LINX_BOOT_FILE_POOL_SIZE];
+static unsigned char linx_boot_file_inuse[LINX_BOOT_FILE_POOL_SIZE];
+
+static __always_inline bool linx_boot_file_ptr(struct file *f)
+{
+	return f >= &linx_boot_file_pool[0] &&
+	       f < &linx_boot_file_pool[LINX_BOOT_FILE_POOL_SIZE];
+}
+#endif
 
 /* Container for backing file with optional user path */
 struct backing_file {
@@ -72,6 +91,14 @@ static inline void file_free(struct file *f)
 	if (likely(!(f->f_mode & FMODE_NOACCOUNT)))
 		percpu_counter_dec(&nr_files);
 	put_cred(f->f_cred);
+#if defined(__LINX__)
+	if (linx_boot_file_ptr(f)) {
+		size_t idx = (size_t)(f - &linx_boot_file_pool[0]);
+		memset(f, 0, sizeof(*f));
+		linx_boot_file_inuse[idx] = 0;
+		return;
+	}
+#endif
 	if (unlikely(f->f_mode & FMODE_BACKING)) {
 		path_put(backing_file_user_path(f));
 		kmem_cache_free(bfilp_cachep, backing_file(f));
@@ -268,13 +295,43 @@ struct file *alloc_empty_file_noaccount(int flags, const struct cred *cred)
 	struct file *f;
 	int error;
 
+#if defined(__LINX__)
+	linx_file_mark('1');
+	f = NULL;
+	for (size_t i = 0; i < LINX_BOOT_FILE_POOL_SIZE; i++) {
+		if (!linx_boot_file_inuse[i]) {
+			linx_boot_file_inuse[i] = 1;
+			f = &linx_boot_file_pool[i];
+			memset(f, 0, sizeof(*f));
+			break;
+		}
+	}
+	if (unlikely(!f))
+		return ERR_PTR(-ENOMEM);
+#else
 	f = kmem_cache_alloc(filp_cachep, GFP_KERNEL);
+#endif
+#if defined(__LINX__)
+	linx_file_mark('2');
+#endif
 	if (unlikely(!f))
 		return ERR_PTR(-ENOMEM);
 
+#if defined(__LINX__)
+	linx_file_mark('3');
+#endif
 	error = init_file(f, flags, cred);
+#if defined(__LINX__)
+	linx_file_mark('4');
+#endif
 	if (unlikely(error)) {
+#if defined(__LINX__)
+		size_t idx = (size_t)(f - &linx_boot_file_pool[0]);
+		memset(f, 0, sizeof(*f));
+		linx_boot_file_inuse[idx] = 0;
+#else
 		kmem_cache_free(filp_cachep, f);
+#endif
 		return ERR_PTR(error);
 	}
 

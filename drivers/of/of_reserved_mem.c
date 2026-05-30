@@ -33,8 +33,7 @@
 
 static __always_inline void linx_reserved_mark(char c)
 {
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
+	(void)c;
 }
 
 static struct reserved_mem reserved_mem_array[MAX_RESERVED_REGIONS] __initdata;

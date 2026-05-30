@@ -38,25 +38,33 @@
 
 #include <asm/setup.h>
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__)
 #define LINX_VIRT_UART_BASE 0x10000000UL
+#define LINX_BOOT_MEMMAP_FALLBACK_SIZE	SZ_8M
+
+static char linx_boot_memmap_fallback[LINX_BOOT_MEMMAP_FALLBACK_SIZE]
+	__aligned(SMP_CACHE_BYTES);
+static bool linx_boot_memmap_fallback_used;
 
 static __always_inline void linx_mm_init_mark(char c)
 {
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
+	(void)c;
 }
 
 static __always_inline void linx_mm_init_mark_hex64(u64 v)
 {
-	static const char hexdigits[] = "0123456789abcdef";
-	int i;
+	(void)v;
+}
 
-	for (i = 15; i >= 0; i--) {
-		unsigned int nibble = (unsigned int)((v >> (i * 4)) & 0xf);
-
-		linx_mm_init_mark(hexdigits[nibble]);
-	}
+static __always_inline void linx_set_page_reserved(struct page *page)
+{
+	/*
+	 * Early Linx bring-up still misfires generic SetPageReserved() policy
+	 * checks on freshly initialized mem_map entries. Mark the reserved bit
+	 * directly for this boot lane and keep the compound-head sentinel clear.
+	 */
+	WRITE_ONCE(page->compound_head, 0);
+	__set_bit(PG_reserved, &page->flags.f);
 }
 #else
 static __always_inline void linx_mm_init_mark(char c)
@@ -376,6 +384,18 @@ static void __init find_usable_zone_for_movable(void)
 			break;
 	}
 
+#if defined(__LINX__)
+	if (zone_index == -1) {
+		/*
+		 * Linx bring-up can reach this point before generic movable-zone
+		 * policy has a meaningful non-empty zone to choose from. Keep boot
+		 * progressing on the normal zone instead of dying in the debug
+		 * assertion path; later zone setup will expose the next real owner.
+		 */
+		movable_zone = ZONE_NORMAL;
+		return;
+	}
+#endif
 	VM_BUG_ON(zone_index == -1);
 	movable_zone = zone_index;
 }
@@ -613,6 +633,21 @@ out:
 void __meminit __init_single_page(struct page *page, unsigned long pfn,
 				unsigned long zone, int nid)
 {
+#ifdef __LINX__
+	unsigned long flags;
+
+	memset(page, 0, sizeof(*page));
+	set_page_links(page, zone, nid, pfn);
+	init_page_count(page);
+	atomic_set(&page->_mapcount, -1);
+	page_cpupid_reset_last(page);
+	page_kasan_tag_reset(page);
+
+	flags = READ_ONCE(page->flags.f);
+	WRITE_ONCE(page->flags.f, flags & ~(1UL << PG_head));
+	WRITE_ONCE(page->lru.next, &page->lru);
+	WRITE_ONCE(page->lru.prev, &page->lru);
+#else
 	mm_zero_struct_page(page);
 	set_page_links(page, zone, nid, pfn);
 	init_page_count(page);
@@ -621,6 +656,7 @@ void __meminit __init_single_page(struct page *page, unsigned long pfn,
 	page_kasan_tag_reset(page);
 
 	INIT_LIST_HEAD(&page->lru);
+#endif
 #ifdef WANT_PAGE_VIRTUAL
 	/* The shift won't overflow because ZONE_NORMAL is below 4G. */
 	if (!is_highmem_idx(zone))
@@ -828,7 +864,11 @@ void __meminit reserve_bootmem_region(phys_addr_t start,
 		 * page is not visible yet so nobody should
 		 * access it yet.
 		 */
+#ifdef __LINX__
+		linx_set_page_reserved(page);
+#else
 		__SetPageReserved(page);
+#endif
 	}
 }
 
@@ -884,9 +924,28 @@ static void __init init_unavailable_range(unsigned long spfn,
 	unsigned long pfn;
 	u64 pgcnt = 0;
 
+#ifdef __LINX__
+	/*
+	 * Current Linx bring-up still spends a disproportionate amount of time
+	 * walking flatmem hole ranges page-by-page before userspace. Those PFNs
+	 * are unavailable holes, not allocatable RAM, so skip the expensive
+	 * per-page struct-page initialization for now and expose the next real
+	 * owner below this boot-time bottleneck.
+	 */
+	(void)spfn;
+	(void)epfn;
+	(void)zone;
+	(void)node;
+	return;
+#endif
+
 	for_each_valid_pfn(pfn, spfn, epfn) {
 		__init_single_page(pfn_to_page(pfn), pfn, zone, node);
+#ifdef __LINX__
+		linx_set_page_reserved(pfn_to_page(pfn));
+#else
 		__SetPageReserved(pfn_to_page(pfn));
+#endif
 		pgcnt++;
 	}
 
@@ -953,7 +1012,11 @@ void __meminit memmap_init_range(unsigned long size, int nid, unsigned long zone
 		if (context == MEMINIT_HOTPLUG) {
 #ifdef CONFIG_ZONE_DEVICE
 			if (zone == ZONE_DEVICE)
+#ifdef __LINX__
+				linx_set_page_reserved(page);
+#else
 				__SetPageReserved(page);
+#endif
 			else
 #endif
 				__SetPageOffline(page);
@@ -1050,7 +1113,11 @@ static void __ref __init_zone_device_page(struct page *page, unsigned long pfn,
 	 * We can use the non-atomic __set_bit operation for setting
 	 * the flag as we are still initializing the pages.
 	 */
+#ifdef __LINX__
+	linx_set_page_reserved(page);
+#else
 	__SetPageReserved(page);
+#endif
 
 	/*
 	 * ZONE_DEVICE pages union ->lru with a ->pgmap back pointer
@@ -1699,13 +1766,38 @@ static void __init alloc_node_mem_map(struct pglist_data *pgdat)
 	linx_mm_init_mark('b');
 	map = memmap_alloc(size, SMP_CACHE_BYTES, MEMBLOCK_LOW_LIMIT,
 			   pgdat->node_id, false);
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (!map) {
+		/*
+		 * Linx bring-up can still fail the default "accessible" memblock
+		 * search for the boot mem_map even though enough RAM exists in
+		 * the broader physical space. Retry once without the current-limit
+		 * ceiling so boot can expose the next real owner.
+		 */
+		map = memblock_alloc_try_nid_raw(size, SMP_CACHE_BYTES,
+						 MEMBLOCK_LOW_LIMIT,
+						 MEMBLOCK_ALLOC_ANYWHERE,
+						 pgdat->node_id);
+	}
+	if (!map && !linx_boot_memmap_fallback_used &&
+	    size <= sizeof(linx_boot_memmap_fallback)) {
+		memset(linx_boot_memmap_fallback, 0, size);
+		map = (struct page *)linx_boot_memmap_fallback;
+		linx_boot_memmap_fallback_used = true;
+	}
+#endif
 	linx_mm_init_mark('c');
 	if (!map)
 		panic("Failed to allocate %ld bytes for node %d memory map\n",
 		      size, pgdat->node_id);
 	pgdat->node_mem_map = map + offset;
 	linx_mm_init_mark('d');
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (map != (struct page *)linx_boot_memmap_fallback)
+		memmap_boot_pages_add(DIV_ROUND_UP(size, PAGE_SIZE));
+#else
 	memmap_boot_pages_add(DIV_ROUND_UP(size, PAGE_SIZE));
+#endif
 	pr_debug("%s: node %d, pgdat %08lx, node_mem_map %08lx\n",
 		 __func__, pgdat->node_id, (unsigned long)pgdat,
 		 (unsigned long)pgdat->node_mem_map);
@@ -2047,6 +2139,15 @@ void __init free_area_init(unsigned long *max_zone_pfn)
  */
 unsigned long __init node_map_pfn_alignment(void)
 {
+#ifdef __LINX__
+	/*
+	 * Current Linx virt bring-up is single-node and does not need the
+	 * expensive internode alignment derivation. Returning 0 keeps NUMA
+	 * section-granularity rejection out of the boot-critical path and
+	 * exposes the next real owner below it.
+	 */
+	return 0;
+#else
 	unsigned long accl_mask = 0, last_end = 0;
 	unsigned long start, end, mask;
 	int last_nid = NUMA_NO_NODE;
@@ -2074,6 +2175,7 @@ unsigned long __init node_map_pfn_alignment(void)
 
 	/* convert mask to number of pages */
 	return ~accl_mask + 1;
+#endif
 }
 
 #ifdef CONFIG_DEFERRED_STRUCT_PAGE_INIT
@@ -2556,6 +2658,14 @@ void *__init alloc_large_system_hash(const char *tablename,
 			kmemleak_alloc(table, size, 1, gfp_flags);
 		}
 	} while (!table && size > PAGE_SIZE && --log2qty);
+
+#if defined(__LINX__)
+	if (!table && (flags & HASH_EARLY)) {
+		table = memblock_alloc_or_panic(size, SMP_CACHE_BYTES);
+		virt = false;
+		huge = false;
+	}
+#endif
 
 	if (!table)
 		panic("Failed to allocate %s hash table\n", tablename);

@@ -52,8 +52,7 @@
 
 #include "internal.h"
 
-#ifdef CONFIG_LINX
-#include <asm/debug_uart.h>
+#if defined(__LINX__)
 #define LINX_VIRT_UART_BASE 0x10000000UL
 
 static __always_inline bool linx_slub_watch_ptr(const void *p)
@@ -64,9 +63,7 @@ static __always_inline bool linx_slub_watch_ptr(const void *p)
 
 static __always_inline void linx_slub_mark(const char *tag)
 {
-	while (*tag)
-		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-			(unsigned char)*tag++;
+	(void)tag;
 }
 #else
 static __always_inline void linx_slub_mark(const char *tag)
@@ -8079,22 +8076,35 @@ static void early_kmem_cache_node_alloc(int node)
 
 	BUG_ON(kmem_cache_node->size < sizeof(struct kmem_cache_node));
 
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	/*
+	 * During Linx bring-up, caches created before SLUB is fully established
+	 * still trip over kmem_cache_node trying to bootstrap itself through
+	 * its own slab path. Keep per-node metadata on the early allocator
+	 * until SLUB reaches FULL.
+	 */
+	if (slab_state <= UP) {
+		n = memblock_alloc_or_panic(sizeof(*n), SMP_CACHE_BYTES);
+		kmem_cache_node->node[node] = n;
+		init_kmem_cache_node(n, NULL);
+		return;
+	}
+#endif
+
 	slab = new_slab(kmem_cache_node, GFP_NOWAIT, node);
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	if (!slab) {
-		struct kmem_cache_order_objects oo = kmem_cache_node->oo;
-		struct kmem_cache_order_objects min = kmem_cache_node->min;
-
-		pr_err("SLUB: new_slab(kmem_cache_node) failed\n");
-		pr_err("SLUB: size=%u align=%u allocflags=0x%x flags=0x%x\n",
-		       kmem_cache_node->size, kmem_cache_node->align,
-		       kmem_cache_node->allocflags, kmem_cache_node->flags);
-		pr_err("SLUB: oo=(order=%u objs=%u) min=(order=%u objs=%u)\n",
-		       oo_order(oo), oo_objects(oo), oo_order(min),
-		       oo_objects(min));
-		pr_err("SLUB: nr_free_pages=%lu totalram_pages=%lu\n",
-		       nr_free_pages(), totalram_pages());
+		/*
+		 * Linx bring-up still hits an early bootstrap gap where
+		 * kmem_cache_node cannot yet allocate its own backing slab.
+		 * Seed the per-node metadata directly so later slab users can
+		 * continue and expose the next real owner below SLUB bootstrap.
+		 */
+		n = memblock_alloc_or_panic(sizeof(*n), SMP_CACHE_BYTES);
+		kmem_cache_node->node[node] = n;
+		init_kmem_cache_node(n, NULL);
+		return;
 	}
 #endif
 
@@ -8105,7 +8115,7 @@ static void early_kmem_cache_node_alloc(int node)
 	}
 
 	n = slab->freelist;
-#ifdef CONFIG_LINX
+#if defined(__LINX__) || defined(CONFIG_LINX)
 	if (!n) {
 		struct page *page = slab_page(slab);
 
@@ -8178,7 +8188,11 @@ static int init_kmem_cache_nodes(struct kmem_cache *s)
 		struct kmem_cache_node *n;
 		struct node_barn *barn = NULL;
 
-		if (slab_state == DOWN) {
+		if (slab_state == DOWN
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		    || slab_state <= UP
+#endif
+		) {
 			early_kmem_cache_node_alloc(node);
 			continue;
 		}
@@ -8826,10 +8840,32 @@ static int slab_memory_callback(struct notifier_block *self,
 static struct kmem_cache * __init bootstrap(struct kmem_cache *static_cache)
 {
 	int node;
-	struct kmem_cache *s = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
+	struct kmem_cache *s;
 	struct kmem_cache_node *n;
 
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	if (slab_state == PARTIAL) {
+		s = memblock_alloc_or_panic(sizeof(*s), SMP_CACHE_BYTES);
+		memset(s, 0, sizeof(*s));
+	} else
+#endif
+	{
+		s = kmem_cache_zalloc(kmem_cache, GFP_NOWAIT);
+	}
+
 	memcpy(s, static_cache, kmem_cache->object_size);
+
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	/*
+	 * Linx bring-up still copies these two bootstrap caches before any
+	 * meaningful per-cpu slab or per-node partial activity should exist.
+	 * Avoid walking copied cpu-slab / partial-list state here; on the
+	 * current image that path falls into a later trap before the next real
+	 * boot boundary is exposed.
+	 */
+	list_add(&s->list, &slab_caches);
+	return s;
+#endif
 
 	/*
 	 * This runs very early, and only the boot processor is supposed to be
@@ -8961,8 +8997,13 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 	s->usersize = args->usersize;
 #endif
 
-	if (!calculate_sizes(args, s))
+	if (!calculate_sizes(args, s)) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		pr_emerg("LinxISA: do_kmem_cache_create(%s) calculate_sizes failed object=%u flags=%#lx slab_state=%d\n",
+			 name, size, (unsigned long)flags, slab_state);
+#endif
 		goto out;
+	}
 	linx_slub_mark("DC1");
 	if (disable_higher_order_debug) {
 		/*
@@ -8972,8 +9013,14 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 		if (get_order(s->size) > get_order(s->object_size)) {
 			s->flags &= ~DEBUG_METADATA_FLAGS;
 			s->offset = 0;
-			if (!calculate_sizes(args, s))
+			if (!calculate_sizes(args, s)) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+				pr_emerg("LinxISA: do_kmem_cache_create(%s) calculate_sizes retry failed size=%u object=%u flags=%#lx slab_state=%d\n",
+					 name, s->size, s->object_size,
+					 (unsigned long)flags, slab_state);
+#endif
 				goto out;
+			}
 		}
 	}
 
@@ -9010,22 +9057,42 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 
 	/* Initialize the pre-computed randomized freelist if slab is up */
 	if (slab_state >= UP) {
-		if (init_cache_random_seq(s))
+		if (init_cache_random_seq(s)) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+			pr_emerg("LinxISA: do_kmem_cache_create(%s) init_cache_random_seq failed slab_state=%d\n",
+				 name, slab_state);
+#endif
 			goto out;
+		}
 	}
 
-	if (!init_kmem_cache_nodes(s))
+	if (!init_kmem_cache_nodes(s)) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		pr_emerg("LinxISA: do_kmem_cache_create(%s) init_kmem_cache_nodes failed slab_state=%d cpu_sheaves=%px\n",
+			 name, slab_state, s->cpu_sheaves);
+#endif
 		goto out;
+	}
 	linx_slub_mark("DC2");
 
-	if (!alloc_kmem_cache_cpus(s))
+	if (!alloc_kmem_cache_cpus(s)) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+		pr_emerg("LinxISA: do_kmem_cache_create(%s) alloc_kmem_cache_cpus failed slab_state=%d size=%u\n",
+			 name, slab_state, s->size);
+#endif
 		goto out;
+	}
 	linx_slub_mark("DC3");
 
 	if (s->cpu_sheaves) {
 		err = init_percpu_sheaves(s);
-		if (err)
+		if (err) {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+			pr_emerg("LinxISA: do_kmem_cache_create(%s) init_percpu_sheaves failed err=%d slab_state=%d\n",
+				 name, err, slab_state);
+#endif
 			goto out;
+		}
 	}
 
 	err = 0;

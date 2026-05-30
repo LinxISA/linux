@@ -72,12 +72,12 @@
 		"b.attr aqrl				\n"	\
 			"" insn "			\n"	\
 		"2:					\n"	\
-		".section .fixup,\"ax\"			\n"	\
+		"BSTART.std direct, 4f		\n"	\
 		".balign 16				\n"	\
 		"3:					\n"	\
 		"BSTART.std direct, 2b			\n"	\
 			"subi zero, %[e], -> %[r]	\n"	\
-		".previous				\n"	\
+		"4:					\n"	\
 		: [r] "+r" (ret), [ov] "=&r" (oldval)		\
 		: [u] "r" (uaddr), [op] "r" (oparg),		\
 		  [e] "i" (EFAULT)				\

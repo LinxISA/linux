@@ -319,6 +319,10 @@ void asm_offsets(void)
 		  offsetof(struct task_struct, thread.s[8])
 		- offsetof(struct task_struct, thread.ra)
 	);
+	DEFINE(TASK_THREAD_EBSTATE0_RA,
+		  offsetof(struct task_struct, thread.ebstate[0])
+		- offsetof(struct task_struct, thread.ra)
+	);
 
 	DEFINE(TASK_THREAD_F0_F0,
 		  offsetof(struct task_struct, thread.fstate.f[0])
