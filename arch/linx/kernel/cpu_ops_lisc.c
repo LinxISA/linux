@@ -10,7 +10,7 @@
 #include <asm/lisc.h>
 #include <asm/smp.h>
 
-extern char secondary_start_sbi[];
+extern char secondary_start_common[];
 const struct cpu_operations cpu_ops_lisc;
 
 #define LISC_SERVICE_ID_BASIC	0x1
@@ -47,7 +47,7 @@ static int lisc_cpu_start(unsigned int cpuid, struct task_struct *tidle)
 {
 	/* start a cpu. */
 	int rc;
-	unsigned long boot_addr = __pa_symbol(secondary_start_sbi);
+	unsigned long boot_addr = __pa_symbol(secondary_start_common);
 	int hartid = cpuid_to_hartid_map(cpuid);
 
 	cpu_update_secondary_bootdata(cpuid, tidle);

@@ -92,15 +92,29 @@ void show_regs(struct pt_regs *regs)
 void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
 	/* called by `load_elf_binary` */
-	regs->cstate = CSTATE_ACR2 | CSTATE_I;
+	regs->cstate = CSTATE_ACR2 | CSTATE_I | CSTATE_BI;
 	/*
 	 * Since the epc have been changed, the bstate of the exception block
 	 * should be discarded also.
 	 */
 	WARN_ON_ONCE(regs->bpc == pc);
 	regs->bpc = pc;
+	regs->bpcn = pc;
 	regs->tpc = pc;
-	// regs->ebstate.rra = RRAT_DEFAULT;
+	regs->ebarg = 0;
+	regs->elpr0 = 0;
+	regs->elpr1 = pc;
+	regs->elpr2 = pc;
+	regs->elpr3 = pc;
+	regs->elpr4 = 0;
+	regs->elpr5 = 0;
+	regs->elpr6 = 0;
+	regs->elpr7 = 0;
+	regs->orig_a0 = 0;
+	regs->orig_bpc = pc;
+	regs->orig_tpc = pc;
+	regs->traparg0 = 0;
+	regs->trapno = 0;
 	regs->sp = sp;
 }
 

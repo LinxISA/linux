@@ -22,6 +22,13 @@ __list_valid_slowpath
 bool __list_add_valid_or_report(struct list_head *new, struct list_head *prev,
 				struct list_head *next)
 {
+#if defined(__LINX__)
+	if (!new || !prev || !next)
+		return false;
+	if (new == prev || new == next)
+		return false;
+	return true;
+#else
 	if (CHECK_DATA_CORRUPTION(prev == NULL, NULL,
 			"list_add corruption. prev is NULL.\n") ||
 	    CHECK_DATA_CORRUPTION(next == NULL, NULL,
@@ -38,6 +45,7 @@ bool __list_add_valid_or_report(struct list_head *new, struct list_head *prev,
 		return false;
 
 	return true;
+#endif
 }
 EXPORT_SYMBOL(__list_add_valid_or_report);
 
@@ -45,6 +53,26 @@ __list_valid_slowpath
 bool __list_del_entry_valid_or_report(struct list_head *entry)
 {
 	struct list_head *prev, *next;
+
+#if defined(__LINX__)
+	if (!entry)
+		return false;
+
+	prev = entry->prev;
+	next = entry->next;
+
+	if (!next || !prev)
+		return false;
+	if (next == LIST_POISON1 || prev == LIST_POISON2)
+		return false;
+	if (prev->next != entry || next->prev != entry)
+		return false;
+
+	return true;
+#else
+	if (CHECK_DATA_CORRUPTION(entry == NULL, NULL,
+			"list_del corruption, entry is NULL\n"))
+		return false;
 
 	prev = entry->prev;
 	next = entry->next;
@@ -68,5 +96,6 @@ bool __list_del_entry_valid_or_report(struct list_head *entry)
 		return false;
 
 	return true;
+#endif
 }
 EXPORT_SYMBOL(__list_del_entry_valid_or_report);

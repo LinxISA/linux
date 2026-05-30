@@ -8,6 +8,8 @@
 
 #include <linux/bitmap.h>
 #include <linux/of.h>
+#include <linux/of_fdt.h>
+#include <linux/libfdt.h>
 #include <asm/processor.h>
 #include <asm/hwcap.h>
 #include <asm/smp.h>
@@ -61,6 +63,11 @@ EXPORT_SYMBOL_GPL(__riscv_isa_extension_available);
 
 void __init riscv_fill_hwcap(void)
 {
+#if defined(__LINX__)
+	const void *fdt = initial_boot_params;
+	int cpus;
+	int fdt_node;
+#endif
 	struct device_node *node;
 	const char *isa;
 	char print_str[BITS_PER_LONG + 1];
@@ -78,6 +85,70 @@ void __init riscv_fill_hwcap(void)
 
 	bitmap_zero(riscv_isa, RISCV_ISA_EXT_MAX);
 
+#if defined(__LINX__)
+	if (fdt) {
+		cpus = fdt_path_offset(fdt, "/cpus");
+		if (cpus >= 0) {
+			fdt_for_each_subnode(fdt_node, fdt, cpus) {
+				unsigned long this_hwcap = 0;
+				unsigned long this_isa = 0;
+				const char *name;
+				const char *type;
+				const char *status;
+				bool is_cpu = false;
+				int len = 0;
+
+				name = fdt_get_name(fdt, fdt_node, &len);
+				if (name && !strncmp(name, "cpu", 3) &&
+				    (name[3] == 0 || name[3] == '@'))
+					is_cpu = true;
+
+				type = fdt_getprop(fdt, fdt_node, "device_type", NULL);
+				if (type && !strcmp(type, "cpu"))
+					is_cpu = true;
+				if (!is_cpu)
+					continue;
+
+				status = fdt_getprop(fdt, fdt_node, "status", NULL);
+				if (status && strcmp(status, "okay") && strcmp(status, "ok"))
+					continue;
+
+				isa = fdt_getprop(fdt, fdt_node, "linx,isa", NULL);
+				if (!isa) {
+					pr_warn("Unable to find \"linx,isa\" devicetree entry\n");
+					continue;
+				}
+
+				i = 0;
+				isa_len = strlen(isa);
+#if IS_ENABLED(CONFIG_32BIT)
+				if (!strncmp(isa, "rv32", 4))
+					i += 4;
+#elif IS_ENABLED(CONFIG_64BIT)
+				if (!strncmp(isa, "rv64", 4))
+					i += 4;
+#endif
+				for (; i < isa_len; ++i) {
+					this_hwcap |= isa2hwcap[(unsigned char)isa[i]];
+					if ('a' <= isa[i] && isa[i] < 'x')
+						this_isa |= (1UL << (isa[i] - 'a'));
+				}
+
+				if (elf_hwcap)
+					elf_hwcap &= this_hwcap;
+				else
+					elf_hwcap = this_hwcap;
+
+				if (riscv_isa[0])
+					riscv_isa[0] &= this_isa;
+				else
+					riscv_isa[0] = this_isa;
+			}
+			goto print_caps;
+		}
+	}
+#endif
+
 	for_each_of_cpu_node(node) {
 		unsigned long this_hwcap = 0;
 		unsigned long this_isa = 0;
@@ -85,8 +156,8 @@ void __init riscv_fill_hwcap(void)
 		if (riscv_of_processor_hartid(node) < 0)
 			continue;
 
-		if (of_property_read_string(node, "riscv,isa", &isa)) {
-			pr_warn("Unable to find \"riscv,isa\" devicetree entry\n");
+		if (of_property_read_string(node, "linx,isa", &isa)) {
+			pr_warn("Unable to find \"linx,isa\" devicetree entry\n");
 			continue;
 		}
 
@@ -125,6 +196,7 @@ void __init riscv_fill_hwcap(void)
 			riscv_isa[0] = this_isa;
 	}
 
+print_caps:
 	/* We don't support systems with F but without D, so mask those out
 	 * here. */
 	if ((elf_hwcap & COMPAT_HWCAP_ISA_F) && !(elf_hwcap & COMPAT_HWCAP_ISA_D)) {

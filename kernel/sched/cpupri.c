@@ -24,6 +24,10 @@
  */
 #include "sched.h"
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static int linx_boot_cpu_to_pri[1];
+#endif
+
 /*
  * p->rt_priority   p->prio   newpri   cpupri
  *
@@ -289,8 +293,14 @@ int cpupri_init(struct cpupri *cp)
 	}
 
 	cp->cpu_to_pri = kcalloc(nr_cpu_ids, sizeof(int), GFP_KERNEL);
-	if (!cp->cpu_to_pri)
+	if (!cp->cpu_to_pri) {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+		if (cp == &def_root_domain.cpupri && nr_cpu_ids == 1)
+			cp->cpu_to_pri = linx_boot_cpu_to_pri;
+		else
+#endif
 		goto cleanup;
+	}
 
 	for_each_possible_cpu(i)
 		cp->cpu_to_pri[i] = CPUPRI_INVALID;
@@ -311,7 +321,12 @@ void cpupri_cleanup(struct cpupri *cp)
 {
 	int i;
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (cp->cpu_to_pri != linx_boot_cpu_to_pri)
+		kfree(cp->cpu_to_pri);
+#else
 	kfree(cp->cpu_to_pri);
+#endif
 	for (i = 0; i < CPUPRI_NR_PRIORITIES; i++)
 		free_cpumask_var(cp->pri_to_cpu[i].mask);
 }

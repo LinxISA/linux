@@ -33,6 +33,12 @@ struct thread_struct {
 	unsigned long ra;
 	unsigned long sp;	/* Kernel mode stack */
 	unsigned long s[9];	/* s[0]: frame pointer */
+	/*
+	 * ACR1 EBSTATE switch window.
+	 * Save the full 0x1f40..0x1f5f register range so schedule()/__switch_to()
+	 * can round-trip in-flight block state without needing per-field policy.
+	 */
+	unsigned long ebstate[32];
 	struct __riscv_d_ext_state fstate;
 	unsigned long bad_cause;
 };

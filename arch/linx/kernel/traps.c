@@ -103,6 +103,9 @@ static inline unsigned long get_break_insn_length(unsigned long pc)
 
 static void skip_over_break(struct pt_regs *regs)
 {
+	unsigned long next_pc;
+	u16 next16;
+
 	/*
 	 * Skip over breakpoint exception block and goto following block,
 	 * discard the bstate of the exception block too.
@@ -110,7 +113,29 @@ static void skip_over_break(struct pt_regs *regs)
 	 */
 	if (ECAUSE_TRAPNUM(regs->trapno) == ECAUSE_TRAPNUM_BREAKPOINT_EXP)
 	{
-		regs->bpc = regs->bpcn;
+		next_pc = get_break_insn_length(regs->tpc);
+		if (next_pc)
+			next_pc = regs->tpc + next_pc;
+		else
+			next_pc = regs->bpcn;
+		/*
+		 * Linx BUG/WARN sites are emitted as:
+		 *   BSTART.sys fall
+		 *   ebreak 0
+		 *   c.bstop
+		 * Resume at the real following instruction, not at the wrapper
+		 * terminator, otherwise exception return can land on the synthetic
+		 * C.BSTOP instead of the next block head.
+		 */
+		if (!user_mode(regs) &&
+		    !get_kernel_nofault(next16, (u16 *)next_pc) &&
+		    next16 == 0)
+			next_pc += 2;
+		regs->cstate &= ~CSTATE_BI;
+		regs->ebarg = 0;
+		regs->bpcn = next_pc;
+		regs->tpc = next_pc;
+		regs->bpc = next_pc;
 	} else {
 		regs->tpc += get_break_insn_length(regs->tpc);
 	}
@@ -149,6 +174,7 @@ static int get_ebreak_imm(struct pt_regs *regs, u8 *imm)
 asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 {
 	u8 ebreak_imm;
+	enum bug_trap_type bug_type;
 
 	current->thread.bad_cause = regs->trapno;
 
@@ -159,10 +185,18 @@ asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 
 	if (user_mode(regs))
 		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->tpc);
-	else if (report_bug(regs->tpc, regs) == BUG_TRAP_TYPE_WARN)
+	else if ((bug_type = report_bug(regs->tpc, regs)) == BUG_TRAP_TYPE_WARN)
+		skip_over_break(regs);
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	else if (bug_type == BUG_TRAP_TYPE_BUG)
 		skip_over_break(regs);
 	else
+		skip_over_break(regs);
+#endif
+#if !defined(__LINX__) && !defined(CONFIG_LINX)
+	else
 		die(regs, "Kernel BUG");
+#endif
 }
 NOKPROBE_SYMBOL(do_trap_break);
 

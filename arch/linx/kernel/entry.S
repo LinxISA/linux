@@ -46,6 +46,18 @@
 	sdi t#1, [\rd, \offset2]
 .endm
 
+.macro switch_ebstate_save base, offset, ssr
+	BSTART.sys fall
+	hl.ssrget \ssr, -> a2
+	sdi a2, [\base, \offset]
+.endm
+
+.macro switch_ebstate_restore base, offset, ssr
+	BSTART.sys fall
+	ldi [\base, \offset], -> a2
+	hl.ssrset a2, \ssr
+.endm
+
 ENTRY(handle_exception)
     /*
 	 * If coming from userspace, preserve the user thread pointer and load
@@ -53,7 +65,7 @@ ENTRY(handle_exception)
 	 * register will contain 0, and we should continue on the current SSR_TP.
 	 */
     BSTART.std cond, from_kernel
-	ssrswap x1, SSR_A0_ETEMP, -> x1
+	ssrswap x1, SSR_ETEMP, -> x1
 	setc.eqi x1, 0
 
 from_user:
@@ -77,7 +89,7 @@ from_kernel:
  *	sp hold (kernel sp)
  */
     BSTART.sys fall
-	ssrswap x1, SSR_TP, -> x1
+	ssrget SSR_TP, -> x1
 	sdi sp, [x1, TASK_TI_KERNEL_SP]
 	sdi sp, [x1, TASK_TI_USER_SP]
 
@@ -92,7 +104,7 @@ _save_context:
 
 	BSTART.sys fall
 	ssrswap x1, SSR_TP, -> x1
-	ssrswap x1, SSR_A0_ETEMP, -> x1
+	ssrswap x1, SSR_ETEMP, -> x1
 
 /*
  * current state:
@@ -210,8 +222,9 @@ ETEMP_IS_TLS:
 	hl.ssrset zero, SSR_ETEMP // it's already zero
 
 	/* Load the global pointer */
-	1: addtpc %tpcrel_hi(__global_pointer$), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	1: addtpc %tpcrel_hi(.Lkernel_gp_value), -> t
+	addi t#1, %tpcrel_lo(.Lkernel_gp_value), -> t
+	ldi [t#1, 0], -> t
 	ssrset t#1, SSR_GP
 
 	/*
@@ -223,16 +236,15 @@ ETEMP_IS_TLS:
 	block_next_bltz s4, handle_exceptions
 
 handle_interrupt:
-	BSTART.std fall
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
-
 	/* Handle interrupts, return to ret_from_exception */
-	BSTART.std ind
+	BSTART.std icall
 	addi sp, 0 -> a0	/* pt_regs as the 1th argument */
 	1: addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(generic_handle_arch_irq), -> t
 	setc.tgt t#1
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
+	bstop
 
 handle_exceptions:
 	/*
@@ -256,7 +268,7 @@ handle_syscalls:
 	/* set return address for both branches */
 	BSTART.std fall
 	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 
 	/* Handle syscalls, return to ret_from_exception */
 	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_SCALL_EXP, handle_syscall
@@ -273,18 +285,21 @@ handle_syscalls:
 	andi s4, ECAUSE_TRAPNUM_MASK, -> t	/* SSR_TRAPNO.trapnum */
 	slli t#1, RISCV_LGPTR, -> t
 	1: addtpc %tpcrel_hi(excp_vect_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table), -> t
 	add t#3, t#1, -> x0	/* &excp_vect_table[SSR_TRAPNO.trapnum] */
 	1: addtpc %tpcrel_hi(excp_vect_table_end), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table_end), -> t
 	/* Check if exception code lies within bounds */
 	setc.geu x0, t#1
 
 	/* jump to excp_vect_table[SSR_TRAPNO.trapnum] */
 	/* return to ret_from_exception */
-	BSTART.std ind
+	BSTART.std icall
 	ldi [x0, 0], -> t
 	setc.tgt t#1
+	1: addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
+	bstop
 
 handle_unknown_exceptions:
 	/* return to ret_from_exception */
@@ -330,13 +345,13 @@ check_syscall_nr:
 	 */
 	BSTART.std cond, call_syscall
 	1: addtpc %tpcrel_hi(sys_ni_syscall), -> t
-	addi t#1, %tpcrel_lo(1b), -> s0
+	addi t#1, %tpcrel_lo(sys_ni_syscall), -> s0
 	addi zero, __NR_syscalls, -> t
 	setc.geu, x1, t#1
 
 	BSTART.std fall
 	1: addtpc %tpcrel_hi(sys_call_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(sys_call_table), -> t
 	ld [t#1, x1<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[x1] */
 
 call_syscall:
@@ -505,7 +520,7 @@ work_pending:
 	 */
 	BSTART.std cond, work_resched
 	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	andi s0, _TIF_NEED_RESCHED, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_NEED_RESCHED */
 	setc.nei s1, 0
 
@@ -527,7 +542,7 @@ work_notifysig:
 	addi sp, 0, -> a0
 	addi s0, 0, -> a1
 	1: addtpc %tpcrel_hi(do_notify_resume), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addi t#1, %tpcrel_lo(do_notify_resume), -> t
 	setc.tgt t#1
 
 work_resched:
@@ -566,19 +581,16 @@ END(handle_exception)
 
 /* used in copy_thread */
 ENTRY(ret_from_fork)
-	BSTART.std ind
 	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
-	1: addtpc %tpcrel_hi(schedule_tail), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
-	setc.tgt t#1
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
+	block_next_ind schedule_tail
 ENDPROC(ret_from_fork)
 
 ENTRY(ret_from_kernel_thread)
 	block_next_indcall schedule_tail
 	BSTART.std ind
 	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	/* Call s0(s1) */
 	addi s1, 0, -> a0
 	setc.tgt s0
@@ -596,36 +608,106 @@ ENDPROC(ret_from_kernel_thread)
  * arguments are passed to schedule_tail.
  */
 ENTRY(__switch_to)
+	BSTART.std cond, .Lswitch_next_ready
+	setc.nei a1, 0
+	addi a0, 0, -> a1
+.Lswitch_next_ready:
 	BSTART.std fall
-	addi a0, TASK_THREAD_RA, -> t
-	addi a1, TASK_THREAD_RA, -> t
+	addi a0, TASK_THREAD_RA, -> a3
+	addi a1, TASK_THREAD_RA, -> a4
 
 	/* Save context into prev->thread */
 	/* save the callee-saved registers */
-	sdi ra, [t#2, TASK_THREAD_RA_RA]
-	sdi sp, [t#2, TASK_THREAD_SP_RA]
-	sdi s0, [t#2, TASK_THREAD_S0_RA]
-	sdi s1, [t#2, TASK_THREAD_S1_RA]
-	sdi s2, [t#2, TASK_THREAD_S2_RA]
-	sdi s3, [t#2, TASK_THREAD_S3_RA]
-	sdi s4, [t#2, TASK_THREAD_S4_RA]
-	sdi s5, [t#2, TASK_THREAD_S5_RA]
-	sdi s6, [t#2, TASK_THREAD_S6_RA]
-	sdi s7, [t#2, TASK_THREAD_S7_RA]
-	sdi s8, [t#2, TASK_THREAD_S8_RA]
+	sdi ra, [a3, TASK_THREAD_RA_RA]
+	sdi sp, [a3, TASK_THREAD_SP_RA]
+	sdi s0, [a3, TASK_THREAD_S0_RA]
+	sdi s1, [a3, TASK_THREAD_S1_RA]
+	sdi s2, [a3, TASK_THREAD_S2_RA]
+	sdi s3, [a3, TASK_THREAD_S3_RA]
+	sdi s4, [a3, TASK_THREAD_S4_RA]
+	sdi s5, [a3, TASK_THREAD_S5_RA]
+	sdi s6, [a3, TASK_THREAD_S6_RA]
+	sdi s7, [a3, TASK_THREAD_S7_RA]
+	sdi s8, [a3, TASK_THREAD_S8_RA]
+
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 0, SSR_A1_EBARG0
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 8, SSR_A1_EBARG_BPC_CUR
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 16, SSR_A1_EBARG_BPC_TGT
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 24, SSR_A1_EBARG_TPC
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 32, SSR_A1_EBARG_LRA
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 40, SSR_A1_EBARG_TQ0
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 48, SSR_A1_EBARG_TQ1
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 56, SSR_A1_EBARG_TQ2
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 64, SSR_A1_EBARG_TQ3
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 72, SSR_A1_EBARG_UQ0
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 80, SSR_A1_EBARG_UQ1
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 88, SSR_A1_EBARG_UQ2
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 96, SSR_A1_EBARG_UQ3
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 104, SSR_A1_EBARG_LB
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 112, SSR_A1_EBARG_LC
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 120, SSR_A1_EBARG_EXTCTX_PTR
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 128, SSR_A1_EBARG_EXTCTX_META
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 136, SSR_A1_EBARG_TPLFLAGS
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 144, SSR_A1_EBSTATE_EXT0
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 152, SSR_A1_EBSTATE_EXT1
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 160, SSR_A1_EBSTATE_EXT2
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 168, SSR_A1_EBSTATE_EXT3
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 176, SSR_A1_EBSTATE_EXT4
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 184, SSR_A1_EBSTATE_EXT5
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 192, SSR_A1_EBSTATE_EXT6
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 200, SSR_A1_EBSTATE_EXT7
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 208, SSR_A1_EBSTATE_EXT8
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 216, SSR_A1_EBSTATE_EXT9
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 224, SSR_A1_EBSTATE_EXT10
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 232, SSR_A1_EBSTATE_EXT11
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 240, SSR_A1_EBSTATE_EXT12
+	switch_ebstate_save a3, TASK_THREAD_EBSTATE0_RA + 248, SSR_A1_EBSTATE_EXT13
 
 	/* Restore context from next->thread */
-	ldi [t#1, TASK_THREAD_RA_RA], -> ra
-	ldi [t#1, TASK_THREAD_SP_RA], -> sp
-	ldi [t#1, TASK_THREAD_S0_RA], -> s0
-	ldi [t#1, TASK_THREAD_S1_RA], -> s1
-	ldi [t#1, TASK_THREAD_S2_RA], -> s2
-	ldi [t#1, TASK_THREAD_S3_RA], -> s3
-	ldi [t#1, TASK_THREAD_S4_RA], -> s4
-	ldi [t#1, TASK_THREAD_S5_RA], -> s5
-	ldi [t#1, TASK_THREAD_S6_RA], -> s6
-	ldi [t#1, TASK_THREAD_S7_RA], -> s7
-	ldi [t#1, TASK_THREAD_S8_RA], -> s8
+	ldi [a4, TASK_THREAD_RA_RA], -> ra
+	ldi [a4, TASK_THREAD_SP_RA], -> sp
+	ldi [a4, TASK_THREAD_S0_RA], -> s0
+	ldi [a4, TASK_THREAD_S1_RA], -> s1
+	ldi [a4, TASK_THREAD_S2_RA], -> s2
+	ldi [a4, TASK_THREAD_S3_RA], -> s3
+	ldi [a4, TASK_THREAD_S4_RA], -> s4
+	ldi [a4, TASK_THREAD_S5_RA], -> s5
+	ldi [a4, TASK_THREAD_S6_RA], -> s6
+	ldi [a4, TASK_THREAD_S7_RA], -> s7
+	ldi [a4, TASK_THREAD_S8_RA], -> s8
+
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 0, SSR_A1_EBARG0
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 8, SSR_A1_EBARG_BPC_CUR
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 16, SSR_A1_EBARG_BPC_TGT
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 24, SSR_A1_EBARG_TPC
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 32, SSR_A1_EBARG_LRA
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 40, SSR_A1_EBARG_TQ0
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 48, SSR_A1_EBARG_TQ1
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 56, SSR_A1_EBARG_TQ2
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 64, SSR_A1_EBARG_TQ3
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 72, SSR_A1_EBARG_UQ0
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 80, SSR_A1_EBARG_UQ1
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 88, SSR_A1_EBARG_UQ2
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 96, SSR_A1_EBARG_UQ3
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 104, SSR_A1_EBARG_LB
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 112, SSR_A1_EBARG_LC
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 120, SSR_A1_EBARG_EXTCTX_PTR
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 128, SSR_A1_EBARG_EXTCTX_META
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 136, SSR_A1_EBARG_TPLFLAGS
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 144, SSR_A1_EBSTATE_EXT0
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 152, SSR_A1_EBSTATE_EXT1
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 160, SSR_A1_EBSTATE_EXT2
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 168, SSR_A1_EBSTATE_EXT3
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 176, SSR_A1_EBSTATE_EXT4
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 184, SSR_A1_EBSTATE_EXT5
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 192, SSR_A1_EBSTATE_EXT6
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 200, SSR_A1_EBSTATE_EXT7
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 208, SSR_A1_EBSTATE_EXT8
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 216, SSR_A1_EBSTATE_EXT9
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 224, SSR_A1_EBSTATE_EXT10
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 232, SSR_A1_EBSTATE_EXT11
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 240, SSR_A1_EBSTATE_EXT12
+	switch_ebstate_restore a4, TASK_THREAD_EBSTATE0_RA + 248, SSR_A1_EBSTATE_EXT13
 
 	/* The offset of thread_info in task_struct is zero. */
 	ssrset a1, SSR_TP
@@ -633,6 +715,11 @@ ENTRY(__switch_to)
 	block_next_ret
 
 ENDPROC(__switch_to)
+
+	.section ".rodata"
+	.p2align LGREG
+.Lkernel_gp_value:
+	RISCV_PTR __global_pointer$
 
 	.section ".rodata"
 	.p2align LGREG

@@ -63,12 +63,10 @@
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__)
 static __always_inline void linx_mmap_mark(char c)
 {
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)'~';
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-	barrier();
+	(void)c;
 }
 #else
 static __always_inline void linx_mmap_mark(char c)

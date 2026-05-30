@@ -60,6 +60,7 @@
 #include <linux/slab.h>
 #include <linux/limits.h>
 #include <asm/barrier.h>
+#include "../mm/slab.h"
 
 #define CREATE_TRACE_POINTS
 #include <trace/events/maple_tree.h>
@@ -94,15 +95,22 @@
 #define ma_mnode_ptr(x) ((struct maple_node *)(x))
 #define ma_enode_ptr(x) ((struct maple_enode *)(x))
 static struct kmem_cache *maple_node_cache;
+static struct kmem_cache_args maple_node_cache_args __initdata = {
+	.align = sizeof(struct maple_node),
+#ifndef CONFIG_LINX
+	.sheaf_capacity = 32,
+#endif
+};
+#if defined(__LINX__) || defined(CONFIG_LINX)
+static struct kmem_cache boot_maple_node_cache __initdata;
+#endif
 
-#ifdef CONFIG_LINX
+#if defined(__LINX__)
 #define LINX_VIRT_UART_BASE 0x10000000UL
 
 static __always_inline void linx_maple_mark(const char *tag)
 {
-	while (*tag)
-		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-			(unsigned char)*tag++;
+	(void)tag;
 }
 #else
 static __always_inline void linx_maple_mark(const char *tag)
@@ -5878,23 +5886,26 @@ bool mas_nomem(struct ma_state *mas, gfp_t gfp)
 
 void __init maple_tree_init(void)
 {
-	struct kmem_cache_args args = {
-		.align  = sizeof(struct maple_node),
-		.sheaf_capacity = 32,
-	};
-
 #ifdef CONFIG_LINX
 	/*
 	 * Linx bring-up: skip maple sheaves until percpu-backed cache metadata
 	 * allocation is stable. Sheaves are an optimization, not a correctness
 	 * requirement for early boot.
 	 */
-	args.sheaf_capacity = 0;
+	maple_node_cache_args.sheaf_capacity = 0;
 #endif
 	linx_maple_mark("MT<");
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	create_boot_cache(&boot_maple_node_cache, "maple_node",
+			  sizeof(struct maple_node), SLAB_PANIC, 0, 0);
+	list_add(&boot_maple_node_cache.list, &slab_caches);
+	boot_maple_node_cache.refcount = 1;
+	maple_node_cache = &boot_maple_node_cache;
+#else
 	maple_node_cache = kmem_cache_create("maple_node",
-			sizeof(struct maple_node), &args,
+			sizeof(struct maple_node), &maple_node_cache_args,
 			SLAB_PANIC);
+#endif
 	linx_maple_mark("MT>");
 }
 

@@ -209,9 +209,22 @@ static int topology_remove_dev(unsigned int cpu)
 
 static int __init topology_sysfs_init(void)
 {
-	return cpuhp_setup_state(CPUHP_TOPOLOGY_PREPARE,
-				 "base/topology:prepare", topology_add_dev,
-				 topology_remove_dev);
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_TOPOLOGY_PREPARE,
+					"base/topology:prepare",
+					topology_add_dev,
+					topology_remove_dev);
+	if (ret)
+		return ret;
+
+	ret = topology_add_dev(smp_processor_id());
+	if (ret) {
+		cpuhp_remove_state_nocalls(CPUHP_TOPOLOGY_PREPARE);
+		return ret;
+	}
+
+	return 0;
 }
 
 device_initcall(topology_sysfs_init);
@@ -259,10 +272,26 @@ static int cpu_capacity_sysctl_remove(unsigned int cpu)
 	return 0;
 }
 
+static int cpu_capacity_sysctl_state = CPUHP_INVALID;
+
 static int register_cpu_capacity_sysctl(void)
 {
-	cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "topology/cpu-capacity",
-			  cpu_capacity_sysctl_add, cpu_capacity_sysctl_remove);
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+					"topology/cpu-capacity",
+					cpu_capacity_sysctl_add,
+					cpu_capacity_sysctl_remove);
+	if (ret < 0)
+		return ret;
+
+	cpu_capacity_sysctl_state = ret;
+	ret = cpu_capacity_sysctl_add(smp_processor_id());
+	if (ret) {
+		cpuhp_remove_state_nocalls(cpu_capacity_sysctl_state);
+		cpu_capacity_sysctl_state = CPUHP_INVALID;
+		return ret;
+	}
 
 	return 0;
 }

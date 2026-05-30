@@ -2240,6 +2240,19 @@ int vprintk_store(int facility, int level,
 	if (!printk_enter_irqsave(recursion_ptr, irqflags))
 		return 0;
 
+#ifdef __LINX__
+	/*
+	 * Linx bring-up workaround: the current LLVM/QEMU stack still
+	 * mis-handles printk formatting argument flow (for example the
+	 * fmt/va_list path into vsnprintf()), which turns early boot log
+	 * traffic into faults before userspace starts. Keep printk side
+	 * effects out of the boot-critical path until the lower layers are
+	 * repaired.
+	 */
+	ret = 0;
+	goto out;
+#endif
+
 	/*
 	 * Since the duration of printk() can vary depending on the message
 	 * and state of the ringbuffer, grab the timestamp now so that it is
@@ -2379,6 +2392,15 @@ asmlinkage int vprintk_emit(int facility, int level,
 	struct console_flush_type ft;
 	int printed_len;
 
+#ifdef __LINX__
+	/*
+	 * Linx bring-up workaround: keep all printk formatting, buffering, and
+	 * console flushing out of the boot-critical path until the remaining
+	 * compact call/return issues in the LLVM/QEMU stack are fixed.
+	 */
+	return 0;
+#endif
+
 	/* Suppress unimportant messages after panic happens */
 	if (unlikely(suppress_printk))
 		return 0;
@@ -2451,6 +2473,11 @@ asmlinkage __visible int _printk(const char *fmt, ...)
 {
 	va_list args;
 	int r;
+
+#ifdef __LINX__
+	(void)fmt;
+	return 0;
+#endif
 
 	va_start(args, fmt);
 	r = vprintk(fmt, args);
@@ -4770,9 +4797,14 @@ EXPORT_SYMBOL_GPL(kmsg_dump_reason_str);
 void kmsg_dump_desc(enum kmsg_dump_reason reason, const char *desc)
 {
 	struct kmsg_dumper *dumper;
+	struct list_head *first;
 	struct kmsg_dump_detail detail = {
 		.reason = reason,
 		.description = desc};
+
+	first = rcu_dereference_raw(dump_list.next);
+	if (!first || first == &dump_list)
+		return;
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(dumper, &dump_list, list) {

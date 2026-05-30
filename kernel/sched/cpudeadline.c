@@ -8,6 +8,10 @@
  */
 #include "sched.h"
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+static struct cpudl_item linx_boot_cpudl_items[1];
+#endif
+
 static inline int parent(int i)
 {
 	return (i - 1) >> 1;
@@ -255,8 +259,19 @@ int cpudl_init(struct cpudl *cp)
 	cp->elements = kcalloc(nr_cpu_ids,
 			       sizeof(struct cpudl_item),
 			       GFP_KERNEL);
-	if (!cp->elements)
+	if (!cp->elements) {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+		/*
+		 * Linx UP bring-up can reach root-domain init before the heap
+		 * lane is stable. Keep the default root-domain deadline heap
+		 * off the allocator in that case so boot can continue.
+		 */
+		if (cp == &def_root_domain.cpudl && nr_cpu_ids == 1)
+			cp->elements = linx_boot_cpudl_items;
+		else
+#endif
 		return -ENOMEM;
+	}
 
 	if (!zalloc_cpumask_var(&cp->free_cpus, GFP_KERNEL)) {
 		kfree(cp->elements);
@@ -276,5 +291,9 @@ int cpudl_init(struct cpudl *cp)
 void cpudl_cleanup(struct cpudl *cp)
 {
 	free_cpumask_var(cp->free_cpus);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (cp->elements == linx_boot_cpudl_items)
+		return;
+#endif
 	kfree(cp->elements);
 }

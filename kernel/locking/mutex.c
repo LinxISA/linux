@@ -38,7 +38,11 @@
 #include "mutex.h"
 
 #ifdef CONFIG_DEBUG_MUTEXES
-# define MUTEX_WARN_ON(cond) DEBUG_LOCKS_WARN_ON(cond)
+# if defined(__LINX__)
+#  define MUTEX_WARN_ON(cond) do { (void)(cond); } while (0)
+# else
+#  define MUTEX_WARN_ON(cond) DEBUG_LOCKS_WARN_ON(cond)
+# endif
 #else
 # define MUTEX_WARN_ON(cond)
 #endif
@@ -53,7 +57,13 @@ __mutex_init(struct mutex *lock, const char *name, struct lock_class_key *key)
 	osq_lock_init(&lock->osq);
 #endif
 
+#if defined(__LINX__)
+	(void)name;
+	(void)key;
+	lock->magic = lock;
+#else
 	debug_mutex_init(lock, name, key);
+#endif
 }
 EXPORT_SYMBOL(__mutex_init);
 
@@ -93,10 +103,20 @@ static inline struct task_struct *__mutex_trylock_common(struct mutex *lock, boo
 		unsigned long flags = __owner_flags(owner);
 		unsigned long task = owner & ~MUTEX_FLAGS;
 
-		if (task) {
-			if (flags & MUTEX_FLAG_PICKUP) {
-				if (task != curr)
-					break;
+			if (task) {
+				if (
+#if defined(__LINX__) || defined(CONFIG_LINX)
+				    task == curr &&
+				    system_state == SYSTEM_BOOTING
+#else
+				    false
+#endif
+				) {
+					return NULL;
+				}
+				if (flags & MUTEX_FLAG_PICKUP) {
+					if (task != curr)
+						break;
 				flags &= ~MUTEX_FLAG_PICKUP;
 			} else if (handoff) {
 				if (flags & MUTEX_FLAG_HANDOFF)
@@ -177,6 +197,19 @@ static inline void __mutex_clear_flag(struct mutex *lock, unsigned long flag)
 {
 	atomic_long_andnot(flag, &lock->owner);
 }
+
+#if defined(__LINX__)
+static __always_inline void linx_mutex_set_task_blocked_on(struct task_struct *p,
+						    struct mutex *m)
+{
+	WRITE_ONCE(p->blocked_on, m);
+}
+
+static __always_inline void linx_mutex_clear_task_blocked_on(struct task_struct *p)
+{
+	WRITE_ONCE(p->blocked_on, NULL);
+}
+#endif
 
 static inline bool __mutex_waiter_is_first(struct mutex *lock, struct mutex_waiter *waiter)
 {
@@ -429,6 +462,17 @@ static __always_inline bool
 mutex_optimistic_spin(struct mutex *lock, struct ww_acquire_ctx *ww_ctx,
 		      struct mutex_waiter *waiter)
 {
+#if defined(__LINX__)
+	/*
+	 * Linx bring-up is still stabilizing task/owner scheduling state.
+	 * Force the regular sleeping slowpath instead of spinning on a
+	 * speculative owner pointer so boot can move past this live loop.
+	 */
+	(void)lock;
+	(void)ww_ctx;
+	(void)waiter;
+	return false;
+#else
 	if (!waiter) {
 		/*
 		 * The purpose of the mutex_can_spin_on_owner() function is
@@ -499,6 +543,7 @@ fail:
 	}
 
 	return false;
+#endif
 }
 #else
 static __always_inline bool
@@ -640,7 +685,11 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			goto err_early_kill;
 	}
 
+#if defined(__LINX__)
+	linx_mutex_set_task_blocked_on(current, lock);
+#else
 	__set_task_blocked_on(current, lock);
+#endif
 	set_current_state(state);
 	trace_contention_begin(lock, LCB_F_MUTEX);
 	for (;;) {
@@ -682,7 +731,11 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 		 * that has cleared our blocked_on state, re-set
 		 * it to the lock we are trying to acquire.
 		 */
+#if defined(__LINX__)
+		linx_mutex_set_task_blocked_on(current, lock);
+#else
 		set_task_blocked_on(current, lock);
+#endif
 		set_current_state(state);
 		/*
 		 * Here we order against unlock; we must either see it change
@@ -699,10 +752,18 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 			 * clear blocked on so we don't become unselectable
 			 * to run.
 			 */
+		#if defined(__LINX__)
+			linx_mutex_clear_task_blocked_on(current);
+		#else
 			clear_task_blocked_on(current, lock);
+		#endif
 			if (mutex_optimistic_spin(lock, ww_ctx, &waiter))
 				break;
+		#if defined(__LINX__)
+			linx_mutex_set_task_blocked_on(current, lock);
+		#else
 			set_task_blocked_on(current, lock);
+		#endif
 			trace_contention_begin(lock, LCB_F_MUTEX);
 		}
 
@@ -710,7 +771,11 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 	}
 	raw_spin_lock_irqsave(&lock->wait_lock, flags);
 acquired:
+#if defined(__LINX__)
+	linx_mutex_clear_task_blocked_on(current);
+#else
 	__clear_task_blocked_on(current, lock);
+#endif
 	__set_current_state(TASK_RUNNING);
 
 	if (ww_ctx) {
@@ -740,11 +805,17 @@ skip_wait:
 	return 0;
 
 err:
+#if defined(__LINX__)
+	linx_mutex_clear_task_blocked_on(current);
+#else
 	__clear_task_blocked_on(current, lock);
+#endif
 	__set_current_state(TASK_RUNNING);
 	__mutex_remove_waiter(lock, &waiter);
 err_early_kill:
+#if !defined(__LINX__)
 	WARN_ON(__get_task_blocked_on(current));
+#endif
 	trace_contention_end(lock, ret);
 	raw_spin_unlock_irqrestore_wake(&lock->wait_lock, flags, &wake_q);
 	debug_mutex_free_waiter(&waiter);

@@ -124,13 +124,27 @@ static int __init linx_intc_init(struct device_node *node,
 	rc = set_handle_irq(&linx_intc_irq);
 	if (rc) {
 		pr_err("failed to set irq handler\n");
+		irq_domain_remove(intc_domain);
 		return rc;
 	}
 
-	cpuhp_setup_state(CPUHP_AP_IRQ_LINX_CPU_INTC_STARTING,
-			  "irqchip/linx/cpu-intc:starting",
-			  linx_intc_cpu_starting,
-			  linx_intc_cpu_dying);
+	rc = cpuhp_setup_state_nocalls(CPUHP_AP_IRQ_LINX_CPU_INTC_STARTING,
+				       "irqchip/linx/cpu-intc:starting",
+				       linx_intc_cpu_starting,
+				       linx_intc_cpu_dying);
+	if (rc) {
+		pr_err("failed to setup cpuhp state [%d]\n", rc);
+		irq_domain_remove(intc_domain);
+		return rc;
+	}
+
+	rc = linx_intc_cpu_starting(smp_processor_id());
+	if (rc) {
+		pr_err("boot cpu startup failed [%d]\n", rc);
+		cpuhp_remove_state_nocalls(CPUHP_AP_IRQ_LINX_CPU_INTC_STARTING);
+		irq_domain_remove(intc_domain);
+		return rc;
+	}
 
 	pr_info("%d local interrupts mapped\n", ECAUSE_TRAPNUM_ACR1_SOFT_INT + 1);
 

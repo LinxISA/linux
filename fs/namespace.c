@@ -5998,6 +5998,16 @@ struct mnt_namespace init_mnt_ns = {
 	.poll		= __WAIT_QUEUE_HEAD_INITIALIZER(init_mnt_ns.poll),
 };
 
+bool init_mnt_ns_root_path(struct path *root)
+{
+	if (!init_mnt_ns.root)
+		return false;
+
+	root->mnt = &init_mnt_ns.root->mnt;
+	root->dentry = init_mnt_ns.root->mnt.mnt_root;
+	return root->mnt && root->dentry;
+}
+
 static void __init init_mount_tree(void)
 {
 	struct vfsmount *mnt;

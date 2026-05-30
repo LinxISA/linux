@@ -250,28 +250,31 @@ struct idmap_key {
  */
 static int cmp_map_id(const void *k, const void *e)
 {
-	u32 first, last, id2;
 	const struct idmap_key *key = k;
 	const struct uid_gid_extent *el = e;
+	u64 first, last;
+	u64 id = key->id;
+	u64 id2 = id + key->count - 1;
 
-	id2 = key->id + key->count - 1;
-
-	/* handle map_id_{down,up}() */
-	if (key->map_up)
-		first = el->lower_first;
-	else
-		first = el->first;
-
+	first = key->map_up ? el->lower_first : el->first;
 	last = first + el->count - 1;
 
-	if (key->id >= first && key->id <= last &&
-	    (id2 >= first && id2 <= last))
-		return 0;
-
-	if (key->id < first || id2 < first)
+	if (id < first)
 		return -1;
 
-	return 1;
+	if (id2 > last)
+		return 1;
+
+	if (id2 < first)
+		return -1;
+
+	if (id > last)
+		return 1;
+
+	if (id >= first && id2 <= last)
+		return 0;
+
+	return id < first ? -1 : 1;
 }
 
 /*
@@ -281,6 +284,20 @@ static int cmp_map_id(const void *k, const void *e)
 static struct uid_gid_extent *
 map_id_range_down_max(unsigned extents, struct uid_gid_map *map, u32 id, u32 count)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	unsigned idx;
+	u32 first, last, id2 = id + count - 1;
+
+	for (idx = 0; idx < extents; idx++) {
+		first = map->forward[idx].first;
+		last = first + map->forward[idx].count - 1;
+		if (id >= first && id <= last &&
+		    id2 >= first && id2 <= last)
+			return &map->forward[idx];
+	}
+
+	return NULL;
+#else
 	struct idmap_key key;
 
 	key.map_up = false;
@@ -289,6 +306,7 @@ map_id_range_down_max(unsigned extents, struct uid_gid_map *map, u32 id, u32 cou
 
 	return bsearch(&key, map->forward, extents,
 		       sizeof(struct uid_gid_extent), cmp_map_id);
+#endif
 }
 
 /*
@@ -371,6 +389,20 @@ map_id_range_up_base(unsigned extents, struct uid_gid_map *map, u32 id, u32 coun
 static struct uid_gid_extent *
 map_id_range_up_max(unsigned extents, struct uid_gid_map *map, u32 id, u32 count)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	unsigned idx;
+	u32 first, last, id2 = id + count - 1;
+
+	for (idx = 0; idx < extents; idx++) {
+		first = map->reverse[idx].lower_first;
+		last = first + map->reverse[idx].count - 1;
+		if (id >= first && id <= last &&
+		    id2 >= first && id2 <= last)
+			return &map->reverse[idx];
+	}
+
+	return NULL;
+#else
 	struct idmap_key key;
 
 	key.map_up = true;
@@ -379,6 +411,7 @@ map_id_range_up_max(unsigned extents, struct uid_gid_map *map, u32 id, u32 count
 
 	return bsearch(&key, map->reverse, extents,
 		       sizeof(struct uid_gid_extent), cmp_map_id);
+#endif
 }
 
 u32 map_id_range_up(struct uid_gid_map *map, u32 id, u32 count)
@@ -421,8 +454,12 @@ u32 map_id_up(struct uid_gid_map *map, u32 id)
  */
 kuid_t make_kuid(struct user_namespace *ns, uid_t uid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return KUIDT_INIT(uid);
+#else
 	/* Map the uid to a global kernel uid */
 	return KUIDT_INIT(map_id_down(&ns->uid_map, uid));
+#endif
 }
 EXPORT_SYMBOL(make_kuid);
 
@@ -440,8 +477,12 @@ EXPORT_SYMBOL(make_kuid);
  */
 uid_t from_kuid(struct user_namespace *targ, kuid_t kuid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return __kuid_val(kuid);
+#else
 	/* Map the uid from a global kernel uid */
 	return map_id_up(&targ->uid_map, __kuid_val(kuid));
+#endif
 }
 EXPORT_SYMBOL(from_kuid);
 
@@ -465,12 +506,22 @@ EXPORT_SYMBOL(from_kuid);
  */
 uid_t from_kuid_munged(struct user_namespace *targ, kuid_t kuid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Early Linx bring-up still has unstable namespace/cred reporting
+	 * paths. Returning the raw kernel uid keeps metadata formatting from
+	 * dereferencing a bad user_namespace and lets the next functional boot
+	 * blocker surface.
+	 */
+	return __kuid_val(kuid);
+#else
 	uid_t uid;
 	uid = from_kuid(targ, kuid);
 
 	if (uid == (uid_t) -1)
 		uid = overflowuid;
 	return uid;
+#endif
 }
 EXPORT_SYMBOL(from_kuid_munged);
 
@@ -489,8 +540,12 @@ EXPORT_SYMBOL(from_kuid_munged);
  */
 kgid_t make_kgid(struct user_namespace *ns, gid_t gid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return KGIDT_INIT(gid);
+#else
 	/* Map the gid to a global kernel gid */
 	return KGIDT_INIT(map_id_down(&ns->gid_map, gid));
+#endif
 }
 EXPORT_SYMBOL(make_kgid);
 
@@ -508,8 +563,12 @@ EXPORT_SYMBOL(make_kgid);
  */
 gid_t from_kgid(struct user_namespace *targ, kgid_t kgid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return __kgid_val(kgid);
+#else
 	/* Map the gid from a global kernel gid */
 	return map_id_up(&targ->gid_map, __kgid_val(kgid));
+#endif
 }
 EXPORT_SYMBOL(from_kgid);
 
@@ -532,12 +591,16 @@ EXPORT_SYMBOL(from_kgid);
  */
 gid_t from_kgid_munged(struct user_namespace *targ, kgid_t kgid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return __kgid_val(kgid);
+#else
 	gid_t gid;
 	gid = from_kgid(targ, kgid);
 
 	if (gid == (gid_t) -1)
 		gid = overflowgid;
 	return gid;
+#endif
 }
 EXPORT_SYMBOL(from_kgid_munged);
 
@@ -556,8 +619,12 @@ EXPORT_SYMBOL(from_kgid_munged);
  */
 kprojid_t make_kprojid(struct user_namespace *ns, projid_t projid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return KPROJIDT_INIT(projid);
+#else
 	/* Map the uid to a global kernel uid */
 	return KPROJIDT_INIT(map_id_down(&ns->projid_map, projid));
+#endif
 }
 EXPORT_SYMBOL(make_kprojid);
 
@@ -575,8 +642,12 @@ EXPORT_SYMBOL(make_kprojid);
  */
 projid_t from_kprojid(struct user_namespace *targ, kprojid_t kprojid)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return __kprojid_val(kprojid);
+#else
 	/* Map the uid from a global kernel uid */
 	return map_id_up(&targ->projid_map, __kprojid_val(kprojid));
+#endif
 }
 EXPORT_SYMBOL(from_kprojid);
 

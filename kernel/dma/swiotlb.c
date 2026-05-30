@@ -365,6 +365,19 @@ void __init swiotlb_init_remap(bool addressing_limit, unsigned int flags,
 	if (swiotlb_force_disable)
 		return;
 
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up does not need the default 64MiB early SWIOTLB pool to
+	 * reach the initramfs shell. Clamp the bootstrap pool to the minimum
+	 * 1MiB size on the current UP lane so early memblock allocation can
+	 * complete quickly while keeping SWIOTLB enabled.
+	 */
+	if (num_possible_cpus() == 1 && default_nslabs > IO_TLB_MIN_SLABS) {
+		default_nslabs = IO_TLB_MIN_SLABS;
+		default_nareas = 1;
+	}
+#endif
+
 	io_tlb_default_mem.force_bounce =
 		swiotlb_force_bounce || (flags & SWIOTLB_FORCE);
 

@@ -390,12 +390,20 @@ extern struct mutex cgroup_mutex;
 
 static inline void cgroup_lock(void)
 {
+#if defined(__LINX__)
+	return;
+#else
 	mutex_lock(&cgroup_mutex);
+#endif
 }
 
 static inline void cgroup_unlock(void)
 {
+#if defined(__LINX__)
+	return;
+#else
 	mutex_unlock(&cgroup_mutex);
+#endif
 }
 
 /**

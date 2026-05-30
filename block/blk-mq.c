@@ -31,15 +31,12 @@
 #include <linux/part_stat.h>
 #include <linux/sched/isolation.h>
 
-#ifdef CONFIG_LINX
-#include <asm/debug_uart.h>
+#if defined(__LINX__)
 #define LINX_BLKMQ_FN __attribute__((optnone)) noinline
 static inline void linx_blk_mq_dbg(const char *tag, unsigned long val)
 {
-	linx_debug_uart_puts("[BLKMQ] ");
-	linx_debug_uart_puts(tag);
-	linx_debug_uart_puthex_ulong(val);
-	linx_debug_uart_putc('\n');
+	(void)tag;
+	(void)val;
 }
 #else
 #define LINX_BLKMQ_FN

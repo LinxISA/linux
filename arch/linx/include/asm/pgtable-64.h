@@ -47,6 +47,21 @@ typedef struct {
 #define __p4d(x)       ((p4d_t) { (x) })
 #define PTRS_PER_P4D   (PAGE_SIZE / sizeof(p4d_t))
 
+#if defined(__LINX__)
+#define LINX_BOOT_PT_LOW_ALIAS_LIMIT _AC(64, UL) << 20
+
+static inline bool linx_is_low_boot_pt_phys(unsigned long pa)
+{
+	/*
+	 * Linx bring-up allocates early page-table pages from a bounded low
+	 * physical window. Treat that entire window as directly aliasable so
+	 * early page-table walks do not depend on relocation-sensitive global
+	 * state to decide between low alias and __va().
+	 */
+	return pa < LINX_BOOT_PT_LOW_ALIAS_LIMIT;
+}
+#endif
+
 /* Page Upper Directory entry */
 typedef struct {
        unsigned long pud;
@@ -109,7 +124,14 @@ static inline unsigned long _pud_pfn(pud_t pud)
 
 static inline pmd_t *pud_pgtable(pud_t pud)
 {
-	return (pmd_t *)pfn_to_virt(pud_val(pud) >> _PAGE_PFN_SHIFT);
+	unsigned long pa = pfn_to_phys(_pud_pfn(pud));
+
+#if defined(__LINX__)
+	if (linx_is_low_boot_pt_phys(pa))
+		return (pmd_t *)(uintptr_t)pa;
+#endif
+
+	return (pmd_t *)__va(pa);
 }
 
 static inline struct page *pud_page(pud_t pud)
@@ -208,8 +230,16 @@ static inline unsigned long _p4d_pfn(p4d_t p4d)
 
 static inline pud_t *p4d_pgtable(p4d_t p4d)
 {
-       if (pgtable_l4_enabled)
-               return (pud_t *)pfn_to_virt(p4d_val(p4d) >> _PAGE_PFN_SHIFT);
+       if (pgtable_l4_enabled) {
+		unsigned long pa = pfn_to_phys(_p4d_pfn(p4d));
+
+#if defined(__LINX__)
+		if (linx_is_low_boot_pt_phys(pa))
+			return (pud_t *)(uintptr_t)pa;
+#endif
+
+               return (pud_t *)__va(pa);
+	}
 
        return (pud_t *)pud_pgtable((pud_t) { p4d_val(p4d) });
 }
@@ -272,8 +302,16 @@ static inline void pgd_clear(pgd_t *pgd)
 
 static inline p4d_t *pgd_pgtable(pgd_t pgd)
 {
-       if (pgtable_l5_enabled)
-               return (p4d_t *)pfn_to_virt(pgd_val(pgd) >> _PAGE_PFN_SHIFT);
+       if (pgtable_l5_enabled) {
+		unsigned long pa = pfn_to_phys(pgd_val(pgd) >> _PAGE_PFN_SHIFT);
+
+#if defined(__LINX__)
+		if (linx_is_low_boot_pt_phys(pa))
+			return (p4d_t *)(uintptr_t)pa;
+#endif
+
+               return (p4d_t *)__va(pa);
+	}
 
        return (p4d_t *)p4d_pgtable((p4d_t) { pgd_val(pgd) });
 }

@@ -2,6 +2,7 @@
 import os
 import pathlib
 import select
+import shlex
 import subprocess
 import sys
 import time
@@ -88,6 +89,7 @@ def main() -> int:
     disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
+    qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     timeout_s = int(os.environ.get("TIMEOUT", "90"))
     prompt_settle_s = float(os.environ.get("PROMPT_SETTLE", "2.0"))
     disk_mb = int(os.environ.get("DISK_MB", "64"))
@@ -133,6 +135,9 @@ def main() -> int:
         "-append",
         append,
     ]
+    if "-bios" not in cmd and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
+        cmd += ["-bios", "none"]
+    cmd.extend(qemu_extra_args)
 
     proc = subprocess.Popen(
         cmd,

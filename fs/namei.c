@@ -44,6 +44,49 @@
 #include "internal.h"
 #include "mount.h"
 
+#if defined(__LINX__)
+static __always_inline void linx_namei_mark(char c)
+{
+	(void)c;
+}
+
+#define LINX_BOOT_GETNAME_SLOTS 4
+struct linx_boot_filename {
+	struct filename f;
+	char buf[PATH_MAX];
+};
+
+static struct linx_boot_filename
+	linx_boot_getname_storage[LINX_BOOT_GETNAME_SLOTS];
+static unsigned char linx_boot_getname_inuse[LINX_BOOT_GETNAME_SLOTS];
+
+static __always_inline bool linx_boot_getname_ptr(const struct filename *name)
+{
+	for (size_t i = 0; i < LINX_BOOT_GETNAME_SLOTS; i++) {
+		if (name == &linx_boot_getname_storage[i].f)
+			return true;
+	}
+	return false;
+}
+
+static struct filename *linx_boot_getname_try_alloc(void)
+{
+	struct linx_boot_filename *slot;
+	struct filename *name;
+	for (size_t i = 0; i < LINX_BOOT_GETNAME_SLOTS; i++) {
+		if (linx_boot_getname_inuse[i])
+			continue;
+		linx_boot_getname_inuse[i] = 1;
+		slot = &linx_boot_getname_storage[i];
+		memset(slot, 0, sizeof(*slot));
+		name = &slot->f;
+		name->name = slot->buf;
+		return name;
+	}
+	return NULL;
+}
+#endif
+
 /* [Feb-1997 T. Schoebel-Theuer]
  * Fundamental changes in the pathname lookup mechanisms (namei)
  * were necessary because of omirr.  The reason is that omirr needs
@@ -244,11 +287,48 @@ struct filename *__getname_maybe_null(const char __user *pathname)
 struct filename *getname_kernel(const char * filename)
 {
 	struct filename *result;
-	int len = strlen(filename) + 1;
+	const char *src = filename;
+	int len;
 
+#if defined(__LINX__)
+	/*
+	 * Early Linx boot still executes substantial kernel code through low
+	 * aliases while many static kernel strings keep high kernel or linear
+	 * mapping addresses. Collapse those high aliases to the low physical
+	 * alias before the first byte read so kernel_execve("/init") and
+	 * similar internal callsites can safely reach strlen()/memcpy().
+	 */
+	if (is_kernel_mapping((unsigned long)src) ||
+	    is_linear_mapping((unsigned long)src))
+		src = (const char *)(uintptr_t)__pa(src);
+#endif
+
+	len = strlen(src) + 1;
+
+#if defined(__LINX__)
+	linx_namei_mark('g');
+#endif
 	result = __getname();
+#if defined(__LINX__)
+	if (unlikely(!result) && len <= EMBEDDED_NAME_MAX) {
+		result = linx_boot_getname_try_alloc();
+		if (result)
+			linx_namei_mark('H');
+	}
+#endif
 	if (unlikely(!result))
+#if defined(__LINX__)
+	{
+		linx_namei_mark('G');
 		return ERR_PTR(-ENOMEM);
+	}
+#else
+		return ERR_PTR(-ENOMEM);
+#endif
+
+#if defined(__LINX__)
+	linx_namei_mark('h');
+#endif
 
 	if (len <= EMBEDDED_NAME_MAX) {
 		result->name = (char *)result->iname;
@@ -256,20 +336,32 @@ struct filename *getname_kernel(const char * filename)
 		const size_t size = offsetof(struct filename, iname[1]);
 		struct filename *tmp;
 
+#if defined(__LINX__)
+		linx_namei_mark('i');
+#endif
 		tmp = kmalloc(size, GFP_KERNEL);
 		if (unlikely(!tmp)) {
 			__putname(result);
+#if defined(__LINX__)
+			linx_namei_mark('I');
+#endif
 			return ERR_PTR(-ENOMEM);
 		}
 		tmp->name = (char *)result;
 		result = tmp;
 	} else {
 		__putname(result);
+#if defined(__LINX__)
+		linx_namei_mark('J');
+#endif
 		return ERR_PTR(-ENAMETOOLONG);
 	}
-	memcpy((char *)result->name, filename, len);
+	memcpy((char *)result->name, src, len);
 	initname(result, NULL);
 	audit_getname(result);
+#if defined(__LINX__)
+	linx_namei_mark('k');
+#endif
 	return result;
 }
 EXPORT_SYMBOL(getname_kernel);
@@ -290,7 +382,18 @@ void putname(struct filename *name)
 			return;
 	}
 
-	if (name->name != name->iname) {
+	if (linx_boot_getname_ptr(name)) {
+#if defined(__LINX__)
+		for (size_t i = 0; i < LINX_BOOT_GETNAME_SLOTS; i++) {
+			if (name != &linx_boot_getname_storage[i].f)
+				continue;
+			memset(&linx_boot_getname_storage[i], 0,
+			       sizeof(linx_boot_getname_storage[i]));
+			linx_boot_getname_inuse[i] = 0;
+			break;
+		}
+#endif
+	} else if (name->name != name->iname) {
 		__putname(name->name);
 		kfree(name);
 	} else
@@ -691,6 +794,12 @@ static void restore_nameidata(void)
 	current->nameidata = old;
 	if (old)
 		old->total_link_count = now->total_link_count;
+#if defined(__LINX__)
+	if (now->stack != now->internal &&
+	    !is_linear_mapping((unsigned long)now->stack) &&
+	    !is_kernel_mapping((unsigned long)now->stack))
+		now->stack = now->internal;
+#endif
 	if (now->stack != now->internal)
 		kfree(now->stack);
 }
@@ -2542,6 +2651,10 @@ static const char *path_init(struct nameidata *nd, unsigned flags)
 	int error;
 	const char *s = nd->pathname;
 
+#if defined(__LINX__)
+	linx_namei_mark(*s == '/' ? 'S' : 's');
+#endif
+
 	/* LOOKUP_CACHED requires RCU, ask caller to retry */
 	if ((flags & (LOOKUP_RCU | LOOKUP_CACHED)) == LOOKUP_CACHED)
 		return ERR_PTR(-EAGAIN);
@@ -4117,20 +4230,41 @@ static struct file *path_openat(struct nameidata *nd,
 	int error;
 
 	file = alloc_empty_file(op->open_flag, current_cred());
+#if defined(__LINX__)
+	linx_namei_mark('B');
+#endif
 	if (IS_ERR(file))
 		return file;
 
 	if (unlikely(file->f_flags & __O_TMPFILE)) {
+#if defined(__LINX__)
+		linx_namei_mark('T');
+#endif
 		error = do_tmpfile(nd, flags, op, file);
 	} else if (unlikely(file->f_flags & O_PATH)) {
+#if defined(__LINX__)
+		linx_namei_mark('O');
+#endif
 		error = do_o_path(nd, flags, file);
 	} else {
+#if defined(__LINX__)
+		linx_namei_mark('N');
+#endif
 		const char *s = path_init(nd, flags);
+#if defined(__LINX__)
+		linx_namei_mark('C');
+#endif
 		while (!(error = link_path_walk(s, nd)) &&
 		       (s = open_last_lookups(nd, file, op)) != NULL)
 			;
+#if defined(__LINX__)
+		linx_namei_mark('D');
+#endif
 		if (!error)
 			error = do_open(nd, file, op);
+#if defined(__LINX__)
+		linx_namei_mark('E');
+#endif
 		terminate_walk(nd);
 	}
 	if (likely(!error)) {

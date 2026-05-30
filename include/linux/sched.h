@@ -1671,7 +1671,11 @@ struct task_struct {
 DECLARE_STATIC_KEY_TRUE(__sched_proxy_exec);
 static inline bool sched_proxy_exec(void)
 {
+#if defined(__LINX__) || defined(CONFIG_LINX)
+	return false;
+#else
 	return static_branch_likely(&__sched_proxy_exec);
+#endif
 }
 #else
 static inline bool sched_proxy_exec(void)
@@ -2192,7 +2196,7 @@ static inline void __clear_task_blocked_on(struct task_struct *p, struct mutex *
 		 * blocked_on relationships, but make sure we are not
 		 * clearing the relationship with a different lock.
 		 */
-		WARN_ON_ONCE(blocked_on && blocked_on != m);
+			WARN_ON_ONCE(blocked_on && blocked_on != m);
 	}
 	WRITE_ONCE(p->blocked_on, NULL);
 }

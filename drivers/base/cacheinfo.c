@@ -1040,8 +1040,21 @@ static int cacheinfo_cpu_pre_down(unsigned int cpu)
 
 static int __init cacheinfo_sysfs_init(void)
 {
-	return cpuhp_setup_state(CPUHP_AP_BASE_CACHEINFO_ONLINE,
-				 "base/cacheinfo:online",
-				 cacheinfo_cpu_online, cacheinfo_cpu_pre_down);
+	int ret;
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_BASE_CACHEINFO_ONLINE,
+					"base/cacheinfo:online",
+					cacheinfo_cpu_online,
+					cacheinfo_cpu_pre_down);
+	if (ret)
+		return ret;
+
+	ret = cacheinfo_cpu_online(smp_processor_id());
+	if (ret) {
+		cpuhp_remove_state_nocalls(CPUHP_AP_BASE_CACHEINFO_ONLINE);
+		return ret;
+	}
+
+	return 0;
 }
 device_initcall(cacheinfo_sysfs_init);

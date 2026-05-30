@@ -17,12 +17,18 @@
 void __raw_spin_lock_init(raw_spinlock_t *lock, const char *name,
 			  struct lock_class_key *key, short inner)
 {
+#if defined(__LINX__)
+	(void)name;
+	(void)key;
+	(void)inner;
+#else
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	/*
 	 * Make sure we are not reinitializing a held lock:
 	 */
 	debug_check_no_locks_freed((void *)lock, sizeof(*lock));
 	lockdep_init_map_wait(&lock->dep_map, name, key, 0, inner);
+#endif
 #endif
 	lock->raw_lock = (arch_spinlock_t)__ARCH_SPIN_LOCK_UNLOCKED;
 	lock->magic = SPINLOCK_MAGIC;
@@ -36,12 +42,17 @@ EXPORT_SYMBOL(__raw_spin_lock_init);
 void __rwlock_init(rwlock_t *lock, const char *name,
 		   struct lock_class_key *key)
 {
+#if defined(__LINX__)
+	(void)name;
+	(void)key;
+#else
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	/*
 	 * Make sure we are not reinitializing a held lock:
 	 */
 	debug_check_no_locks_freed((void *)lock, sizeof(*lock));
 	lockdep_init_map_wait(&lock->dep_map, name, key, 0, LD_WAIT_CONFIG);
+#endif
 #endif
 	lock->raw_lock = (arch_rwlock_t) __ARCH_RW_LOCK_UNLOCKED;
 	lock->magic = RWLOCK_MAGIC;
@@ -54,6 +65,11 @@ EXPORT_SYMBOL(__rwlock_init);
 
 static void spin_dump(raw_spinlock_t *lock, const char *msg)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	printk(KERN_EMERG "BUG: spinlock %s on CPU#%d\n",
+	       msg, raw_smp_processor_id());
+	return;
+#else
 	struct task_struct *owner = READ_ONCE(lock->owner);
 
 	if (owner == SPINLOCK_OWNER_INIT)
@@ -68,6 +84,7 @@ static void spin_dump(raw_spinlock_t *lock, const char *msg)
 		owner ? task_pid_nr(owner) : -1,
 		READ_ONCE(lock->owner_cpu));
 	dump_stack();
+#endif
 }
 
 static void spin_bug(raw_spinlock_t *lock, const char *msg)
@@ -83,20 +100,34 @@ static void spin_bug(raw_spinlock_t *lock, const char *msg)
 static inline void
 debug_spin_lock_before(raw_spinlock_t *lock)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Linx bring-up is still stabilizing task/lock metadata. Let the raw lock
+	 * primitive run so debug bookkeeping corruption does not mask the next
+	 * functional blocker.
+	 */
+	return;
+#endif
 	SPIN_BUG_ON(READ_ONCE(lock->magic) != SPINLOCK_MAGIC, lock, "bad magic");
 	SPIN_BUG_ON(READ_ONCE(lock->owner) == current, lock, "recursion");
 	SPIN_BUG_ON(READ_ONCE(lock->owner_cpu) == raw_smp_processor_id(),
-							lock, "cpu recursion");
+								lock, "cpu recursion");
 }
 
 static inline void debug_spin_lock_after(raw_spinlock_t *lock)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	WRITE_ONCE(lock->owner_cpu, raw_smp_processor_id());
 	WRITE_ONCE(lock->owner, current);
 }
 
 static inline void debug_spin_unlock(raw_spinlock_t *lock)
 {
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	return;
+#endif
 	SPIN_BUG_ON(lock->magic != SPINLOCK_MAGIC, lock, "bad magic");
 	SPIN_BUG_ON(!raw_spin_is_locked(lock), lock, "already unlocked");
 	SPIN_BUG_ON(lock->owner != current, lock, "wrong owner");

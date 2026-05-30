@@ -185,14 +185,33 @@
 #define SSR_A0_XBINFO			0x0f30 /* acr0's XB base register */
 #define SSR_A0_ACR_PARAM		0x0f31 /* acr0's LxLc argument register */
 
-#define SSR_A0_ELPR0	0x0f40 /* acr0's exception t1 */
-#define SSR_A0_ELPR1	0x0f41 /* acr0's exception t2 */
-#define SSR_A0_ELPR2	0x0f42 /* acr0's exception t3 */
-#define SSR_A0_ELPR3	0x0f43 /* acr0's exception t4 */
-#define SSR_A0_ELPR4	0x0f44 /* acr0's exception u1 */
-#define SSR_A0_ELPR5	0x0f45 /* acr0's exception u2 */
-#define SSR_A0_ELPR6	0x0f46 /* acr0's exception u3 */
-#define SSR_A0_ELPR7	0x0f47 /* acr0's exception u4 */
+#define SSR_A0_EBARG0	0x0f40 /* acr0 packed EBARG control word */
+#define SSR_A0_EBARG_BPC_CUR	0x0f41 /* acr0 current block start PC */
+#define SSR_A0_EBARG_BPC_TGT	0x0f42 /* acr0 next-block target PC */
+#define SSR_A0_EBARG_TPC	0x0f43 /* acr0 body resume PC */
+#define SSR_A0_EBARG_LRA	0x0f44 /* acr0 local return address */
+#define SSR_A0_EBARG_TQ0	0x0f45 /* acr0 T-hand queue entry 0 */
+#define SSR_A0_EBARG_TQ1	0x0f46 /* acr0 T-hand queue entry 1 */
+#define SSR_A0_EBARG_TQ2	0x0f47 /* acr0 T-hand queue entry 2 */
+#define SSR_A0_EBARG_TQ3	0x0f48 /* acr0 T-hand queue entry 3 */
+#define SSR_A0_EBARG_UQ0	0x0f49 /* acr0 U-hand queue entry 0 */
+#define SSR_A0_EBARG_UQ1	0x0f4a /* acr0 U-hand queue entry 1 */
+#define SSR_A0_EBARG_UQ2	0x0f4b /* acr0 U-hand queue entry 2 */
+#define SSR_A0_EBARG_UQ3	0x0f4c /* acr0 U-hand queue entry 3 */
+#define SSR_A0_EBARG_LB	0x0f4d /* acr0 packed LB0..LB2 */
+#define SSR_A0_EBARG_LC	0x0f4e /* acr0 packed LC0..LC2 */
+#define SSR_A0_EBARG_EXTCTX_PTR	0x0f4f /* acr0 extended context pointer */
+#define SSR_A0_EBARG_EXTCTX_META 0x0f50 /* acr0 extended context metadata */
+#define SSR_A0_EBARG_TPLFLAGS	0x0f51 /* acr0 template replay flags */
+/* Legacy aliases retained for bring-up compatibility. */
+#define SSR_A0_ELPR0	SSR_A0_EBARG0
+#define SSR_A0_ELPR1	SSR_A0_EBARG_BPC_CUR
+#define SSR_A0_ELPR2	SSR_A0_EBARG_BPC_TGT
+#define SSR_A0_ELPR3	SSR_A0_EBARG_TPC
+#define SSR_A0_ELPR4	SSR_A0_EBARG_LRA
+#define SSR_A0_ELPR5	SSR_A0_EBARG_TQ0
+#define SSR_A0_ELPR6	SSR_A0_EBARG_TQ1
+#define SSR_A0_ELPR7	SSR_A0_EBARG_TQ2
 
 
 #define SSR_ACR_SIZE	0x1000
@@ -219,16 +238,50 @@
 #define SSR_A1_TIMER_TIMECMP	0x1f21	/* acr1's timer configuration register */
 
 #define SSR_A1_XBINFO			0x1f30	/* acr0's XB base register */
-#define SSR_A1_ACR_PARAM		0x1f30	/* acr0's LxLc argument register */
+#define SSR_A1_ACR_PARAM		0x1f31	/* acr1's LxLc argument register */
 
-#define SSR_A1_ELPR0	0x1f40 /* acr1's exception t1 */
-#define SSR_A1_ELPR1	0x1f41 /* acr1's exception t2 */
-#define SSR_A1_ELPR2	0x1f42 /* acr1's exception t3 */
-#define SSR_A1_ELPR3	0x1f43 /* acr1's exception t4 */
-#define SSR_A1_ELPR4	0x1f44 /* acr1's exception u1 */
-#define SSR_A1_ELPR5	0x1f45 /* acr1's exception u2 */
-#define SSR_A1_ELPR6	0x1f46 /* acr1's exception u3 */
-#define SSR_A1_ELPR7	0x1f47 /* acr1's exception u4 */
+#define SSR_A1_EBARG0	0x1f40 /* acr1 packed EBARG control word */
+#define SSR_A1_EBARG_BPC_CUR	0x1f41 /* acr1 current block start PC */
+#define SSR_A1_EBARG_BPC_TGT	0x1f42 /* acr1 next-block target PC */
+#define SSR_A1_EBARG_TPC	0x1f43 /* acr1 body resume PC */
+#define SSR_A1_EBARG_LRA	0x1f44 /* acr1 local return address */
+#define SSR_A1_EBARG_TQ0	0x1f45 /* acr1 T-hand queue entry 0 */
+#define SSR_A1_EBARG_TQ1	0x1f46 /* acr1 T-hand queue entry 1 */
+#define SSR_A1_EBARG_TQ2	0x1f47 /* acr1 T-hand queue entry 2 */
+#define SSR_A1_EBARG_TQ3	0x1f48 /* acr1 T-hand queue entry 3 */
+#define SSR_A1_EBARG_UQ0	0x1f49 /* acr1 U-hand queue entry 0 */
+#define SSR_A1_EBARG_UQ1	0x1f4a /* acr1 U-hand queue entry 1 */
+#define SSR_A1_EBARG_UQ2	0x1f4b /* acr1 U-hand queue entry 2 */
+#define SSR_A1_EBARG_UQ3	0x1f4c /* acr1 U-hand queue entry 3 */
+#define SSR_A1_EBARG_LB	0x1f4d /* acr1 packed LB0..LB2 */
+#define SSR_A1_EBARG_LC	0x1f4e /* acr1 packed LC0..LC2 */
+#define SSR_A1_EBARG_EXTCTX_PTR	0x1f4f /* acr1 extended context pointer */
+#define SSR_A1_EBARG_EXTCTX_META 0x1f50 /* acr1 extended context metadata */
+#define SSR_A1_EBARG_TPLFLAGS	0x1f51 /* acr1 template replay flags */
+/* Hidden EBSTATE extension slots used by QEMU/Linux task-switch save/restore. */
+#define SSR_A1_EBSTATE_EXT0	0x1f52
+#define SSR_A1_EBSTATE_EXT1	0x1f53
+#define SSR_A1_EBSTATE_EXT2	0x1f54
+#define SSR_A1_EBSTATE_EXT3	0x1f55
+#define SSR_A1_EBSTATE_EXT4	0x1f56
+#define SSR_A1_EBSTATE_EXT5	0x1f57
+#define SSR_A1_EBSTATE_EXT6	0x1f58
+#define SSR_A1_EBSTATE_EXT7	0x1f59
+#define SSR_A1_EBSTATE_EXT8	0x1f5a
+#define SSR_A1_EBSTATE_EXT9	0x1f5b
+#define SSR_A1_EBSTATE_EXT10	0x1f5c
+#define SSR_A1_EBSTATE_EXT11	0x1f5d
+#define SSR_A1_EBSTATE_EXT12	0x1f5e
+#define SSR_A1_EBSTATE_EXT13	0x1f5f
+/* Legacy aliases retained for bring-up compatibility. */
+#define SSR_A1_ELPR0	SSR_A1_EBARG0
+#define SSR_A1_ELPR1	SSR_A1_EBARG_BPC_CUR
+#define SSR_A1_ELPR2	SSR_A1_EBARG_BPC_TGT
+#define SSR_A1_ELPR3	SSR_A1_EBARG_TPC
+#define SSR_A1_ELPR4	SSR_A1_EBARG_LRA
+#define SSR_A1_ELPR5	SSR_A1_EBARG_TQ0
+#define SSR_A1_ELPR6	SSR_A1_EBARG_TQ1
+#define SSR_A1_ELPR7	SSR_A1_EBARG_TQ2
 
 
 #define SSR_ECSTATE	SSR_A1_ECSTATE  /* acr1's exception store state */

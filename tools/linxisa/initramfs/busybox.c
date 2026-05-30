@@ -74,12 +74,6 @@ enum {
 };
 
 enum {
-	LINX_UART_BASE = 0x10000000UL,
-	LINX_UART_STATUS = LINX_UART_BASE + 0x4,
-	LINX_UART_STATUS_RX_READY = 0x2,
-};
-
-enum {
 	SSR_TIME = 0x0010,
 	SSR_USER_SCRATCH0 = 0x0030,
 };
@@ -359,22 +353,12 @@ static void write_all(const void *buf, ulong count)
 
 static void write_ch(char c)
 {
-	*(volatile unsigned char *)LINX_UART_BASE = (unsigned char)c;
+	(void)sys_write(1, &c, 1);
 }
 
 static void write_nl(void)
 {
 	write_ch('\n');
-}
-
-static int uart_mmio_read_ch(unsigned char *out)
-{
-	unsigned int st = *(volatile unsigned int *)LINX_UART_STATUS;
-
-	if (!(st & LINX_UART_STATUS_RX_READY))
-		return 0;
-	*out = *(volatile unsigned char *)LINX_UART_BASE;
-	return 1;
 }
 
 static void write_uhex(ulong v)
@@ -1466,6 +1450,7 @@ static int applet_sigsegv_test(int argc, char **argv)
  * SIGTRAP, the kernel can pollute EBARG(TQ/UQ/LB/LC/BPC/TPC), then restore.
  */
 __asm__(
+	".pushsection .text.ri_step,\"ax\"\n"
 	".p2align 3\n"
 	".globl __linx_ctx_ri_step_body\n"
 	"__linx_ctx_ri_step_body:\n"
@@ -1477,7 +1462,8 @@ __asm__(
 	"  ebreak 0\n"
 	"  v.sw.brg.local vt#1.sw, [ri0.sd, lc0<<2, ri1.sd]\n"
 	"  ebreak 0\n"
-	"  C.BSTOP\n");
+	"  C.BSTOP\n"
+	".popsection\n");
 
 extern void linx_ctx_launch_ri_step_block_round(ulong out_base, ulong out_stride,
 						       ulong filler2, ulong filler3,
@@ -1486,6 +1472,7 @@ extern void linx_ctx_launch_ri_step_block_round(ulong out_base, ulong out_stride
 						       ulong expect_ri7);
 
 __asm__(
+	".pushsection .text.ri_step,\"ax\"\n"
 	".p2align 2\n"
 	".globl linx_ctx_launch_ri_step_block_round\n"
 	"linx_ctx_launch_ri_step_block_round:\n"
@@ -1502,7 +1489,8 @@ __asm__(
 	"linx_ctx_launch_ri_step_block_round_ret:\n"
 	"  C.BSTART.STD RET\n"
 	"  c.setc.tgt ra\n"
-	"  C.BSTOP\n");
+	"  C.BSTOP\n"
+	".popsection\n");
 
 static inline ulong user_scratch0_get(void)
 {
@@ -1659,13 +1647,6 @@ static void shell_loop(void)
 {
 	char line[256];
 
-	/*
-	 * Keep a theoretical return path so codegen does not collapse callers into
-	 * noreturn tail-call form (which violates strict CALL/SETRET adjacency).
-	 */
-	if (*(volatile unsigned int *)LINX_UART_STATUS == 0xffffffffu)
-		return;
-
 	for (;;) {
 		ulong len = 0;
 
@@ -1685,15 +1666,6 @@ static void shell_loop(void)
 
 			ch = 0;
 			n = sys_read(fd, &ch, 1);
-			if (n < 0) {
-				/*
-				 * Early bring-up fallback: when stdin wiring is
-				 * incomplete, consume host input directly from
-				 * the virt UART RX queue.
-				 */
-				if (uart_mmio_read_ch(&ch))
-					n = 1;
-			}
 			if (n <= 0)
 				continue;
 			if (ch == '\r')

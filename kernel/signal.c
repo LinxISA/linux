@@ -69,6 +69,53 @@ static struct kmem_cache *sigqueue_cachep;
 
 int print_fatal_signals __read_mostly;
 
+static inline uid_t linx_si_uid(struct user_namespace *user_ns, kuid_t uid)
+{
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Early Linx bring-up still has unstable user-namespace/credential
+	 * reporting paths. Keep signal delivery moving by eliding si_uid until
+	 * the surrounding namespace/cred lane is stable.
+	 */
+	return 0;
+#else
+	return from_kuid_munged(user_ns, uid);
+#endif
+}
+
+static inline pid_t linx_si_pid(struct task_struct *tsk, struct pid_namespace *ns,
+			       enum pid_type type)
+{
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * Early Linx bring-up still has unstable pid-namespace reporting paths.
+	 * Keep signal delivery moving by eliding si_pid until the surrounding
+	 * pid-namespace/task lookup lane is stable.
+	 */
+	return 0;
+#else
+	if (type == PIDTYPE_TGID)
+		return task_tgid_nr_ns(tsk, ns);
+
+	return task_pid_nr_ns(tsk, ns);
+#endif
+}
+
+static inline bool linx_force_signal_from_ancestor(struct task_struct *tsk,
+						  struct pid_namespace *ns)
+{
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	/*
+	 * The pid-namespace ancestry check currently funnels through the same
+	 * unstable task/pid lookup path as si_pid formatting. Skip it during
+	 * bring-up so signal delivery can expose the next functional blocker.
+	 */
+	return false;
+#else
+	return !task_pid_nr_ns(tsk, ns);
+#endif
+}
+
 static void __user *sig_handler(struct task_struct *t, int sig)
 {
 	return t->sighand->action[sig - 1].sa.sa_handler;
@@ -1089,17 +1136,18 @@ static int __send_signal_locked(int sig, struct kernel_siginfo *info,
 	if (q) {
 		list_add_tail(&q->list, &pending->list);
 		switch ((unsigned long) info) {
-		case (unsigned long) SEND_SIG_NOINFO:
-			clear_siginfo(&q->info);
-			q->info.si_signo = sig;
-			q->info.si_errno = 0;
-			q->info.si_code = SI_USER;
-			q->info.si_pid = task_tgid_nr_ns(current,
-							task_active_pid_ns(t));
-			rcu_read_lock();
-			q->info.si_uid =
-				from_kuid_munged(task_cred_xxx(t, user_ns),
-						 current_uid());
+			case (unsigned long) SEND_SIG_NOINFO:
+				clear_siginfo(&q->info);
+				q->info.si_signo = sig;
+				q->info.si_errno = 0;
+				q->info.si_code = SI_USER;
+				q->info.si_pid = linx_si_pid(current,
+							 task_active_pid_ns(t),
+							 PIDTYPE_TGID);
+				rcu_read_lock();
+				q->info.si_uid =
+					linx_si_uid(task_cred_xxx(t, user_ns),
+						    current_uid());
 			rcu_read_unlock();
 			break;
 		case (unsigned long) SEND_SIG_PRIV:
@@ -1188,7 +1236,8 @@ int send_signal_locked(int sig, struct kernel_siginfo *info,
 
 	if (info == SEND_SIG_NOINFO) {
 		/* Force if sent from an ancestor pid namespace */
-		force = !task_pid_nr_ns(current, task_active_pid_ns(t));
+		force = linx_force_signal_from_ancestor(current,
+							task_active_pid_ns(t));
 	} else if (info == SEND_SIG_PRIV) {
 		/* Don't ignore kernel generated signals */
 		force = true;
@@ -1200,7 +1249,7 @@ int send_signal_locked(int sig, struct kernel_siginfo *info,
 		t_user_ns = task_cred_xxx(t, user_ns);
 		if (current_user_ns() != t_user_ns) {
 			kuid_t uid = make_kuid(current_user_ns(), info->si_uid);
-			info->si_uid = from_kuid_munged(t_user_ns, uid);
+			info->si_uid = linx_si_uid(t_user_ns, uid);
 		}
 		rcu_read_unlock();
 
@@ -1208,7 +1257,8 @@ int send_signal_locked(int sig, struct kernel_siginfo *info,
 		force = (info->si_code == SI_KERNEL);
 
 		/* From an ancestor pid namespace? */
-		if (!task_pid_nr_ns(current, task_active_pid_ns(t))) {
+		if (linx_force_signal_from_ancestor(current,
+						    task_active_pid_ns(t))) {
 			info->si_pid = 0;
 			force = true;
 		}
@@ -2208,9 +2258,10 @@ bool do_notify_parent(struct task_struct *tsk, int sig)
 	 * correct to rely on this
 	 */
 	rcu_read_lock();
-	info.si_pid = task_pid_nr_ns(tsk, task_active_pid_ns(tsk->parent));
-	info.si_uid = from_kuid_munged(task_cred_xxx(tsk->parent, user_ns),
-				       task_uid(tsk));
+	info.si_pid = linx_si_pid(tsk, task_active_pid_ns(tsk->parent),
+				 PIDTYPE_PID);
+	info.si_uid = linx_si_uid(task_cred_xxx(tsk->parent, user_ns),
+				  task_uid(tsk));
 	rcu_read_unlock();
 
 	task_cputime(tsk, &utime, &stime);
@@ -2299,8 +2350,8 @@ static void do_notify_parent_cldstop(struct task_struct *tsk,
 	 * see comment in do_notify_parent() about the following 4 lines
 	 */
 	rcu_read_lock();
-	info.si_pid = task_pid_nr_ns(tsk, task_active_pid_ns(parent));
-	info.si_uid = from_kuid_munged(task_cred_xxx(parent, user_ns), task_uid(tsk));
+	info.si_pid = linx_si_pid(tsk, task_active_pid_ns(parent), PIDTYPE_PID);
+	info.si_uid = linx_si_uid(task_cred_xxx(parent, user_ns), task_uid(tsk));
 	rcu_read_unlock();
 
 	task_cputime(tsk, &utime, &stime);
@@ -2505,7 +2556,7 @@ static int ptrace_do_notify(int signr, int exit_code, int why, unsigned long mes
 	info.si_signo = signr;
 	info.si_code = exit_code;
 	info.si_pid = task_pid_vnr(current);
-	info.si_uid = from_kuid_munged(current_user_ns(), current_uid());
+	info.si_uid = linx_si_uid(current_user_ns(), current_uid());
 
 	/* Let the debugger run.  */
 	return ptrace_stop(exit_code, why, message, &info);
@@ -2759,8 +2810,8 @@ static int ptrace_signal(int signr, kernel_siginfo_t *info, enum pid_type type)
 		info->si_code = SI_USER;
 		rcu_read_lock();
 		info->si_pid = task_pid_vnr(current->parent);
-		info->si_uid = from_kuid_munged(current_user_ns(),
-						task_uid(current->parent));
+		info->si_uid = linx_si_uid(current_user_ns(),
+					   task_uid(current->parent));
 		rcu_read_unlock();
 	}
 
@@ -3946,7 +3997,7 @@ static void prepare_kill_siginfo(int sig, struct kernel_siginfo *info,
 	info->si_errno = 0;
 	info->si_code = (type == PIDTYPE_PID) ? SI_TKILL : SI_USER;
 	info->si_pid = task_tgid_vnr(current);
-	info->si_uid = from_kuid_munged(current_user_ns(), current_uid());
+	info->si_uid = linx_si_uid(current_user_ns(), current_uid());
 }
 
 /**

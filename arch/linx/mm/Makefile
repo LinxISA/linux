@@ -1,5 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 
+CFLAGS_init.o := -fno-stack-protector -O0
+
 ifdef CONFIG_FTRACE
 CFLAGS_REMOVE_init.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_cacheflush.o = $(CC_FLAGS_FTRACE)

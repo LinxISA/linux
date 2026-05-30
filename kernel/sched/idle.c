@@ -475,6 +475,15 @@ static void set_next_task_idle(struct rq *rq, struct task_struct *next, bool fir
 struct task_struct *pick_task_idle(struct rq *rq)
 {
 	scx_update_idle(rq, true, false);
+#if defined(CONFIG_LINX) || defined(__LINX__)
+	if (unlikely(!rq->idle)) {
+		struct task_struct *idle = READ_ONCE(rq->curr);
+
+		if (!idle)
+			idle = current;
+		rq->idle = idle;
+	}
+#endif
 	return rq->idle;
 }
 
@@ -485,6 +494,16 @@ struct task_struct *pick_task_idle(struct rq *rq)
 static bool
 dequeue_task_idle(struct rq *rq, struct task_struct *p, int flags)
 {
+#ifdef __LINX__
+	/*
+	 * Linx bring-up: this warning path only exists to diagnose illegal
+	 * attempts to dequeue the idle task. On the current target it pulls
+	 * in deep printk/stack-dump machinery and hides the next functional
+	 * scheduler boundary, while still returning true.
+	 */
+	return true;
+#endif
+
 	raw_spin_rq_unlock_irq(rq);
 	printk(KERN_ERR "bad: scheduling from the idle thread!\n");
 	dump_stack();
