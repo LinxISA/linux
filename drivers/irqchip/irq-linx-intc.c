@@ -10,12 +10,13 @@
  * Ruan Jinjie (ruanjinjie@huawei.com)
  */
 #define pr_fmt(fmt) "lxintc: " fmt
-#include <linux/dma-iommu.h>
+#include <linux/iommu.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/irqchip/chained_irq.h>
+#include <linux/cpuhotplug.h>
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of.h>
@@ -396,7 +397,8 @@ static int lxic_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		if (ret)
 			return ret;
 
-		cpumask_copy(irq_get_affinity_mask(virq + i), &cpumask);
+		irq_data_update_effective_affinity(irq_get_irq_data(virq + i),
+						   &cpumask);
 
 		priv->wbi_msi_flag[cpu][vector + i] = true;
 		handler = per_cpu_ptr(&lxic_handlers, cpu);
@@ -528,7 +530,8 @@ static void lxic_irq_compose_msi_msg(struct irq_data *d,
 
 	pr_info("lxic_irq_compose_msi_msg, cpu: 0x%x, addr_hi: 0x%x, addr_lo: 0x%x, data: 0x%x\n", cpu, msg->address_hi, msg->address_lo, msg->data);
 
-	iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
+	msi_msg_set_addr(irq_data_get_msi_desc(d), msg,
+			 ((u64)msg->address_hi << 32) | msg->address_lo);
 }
 
 static struct irq_chip lxic_irq_base_chip = {
