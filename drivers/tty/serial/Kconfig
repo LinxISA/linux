@@ -20,7 +20,7 @@ comment "Non-8250 serial port support"
 
 config SERIAL_LINX_VIRT_UART
 	tristate "LinxISA QEMU virt UART support"
-	depends on LINX || COMPILE_TEST
+	depends on RISCV || COMPILE_TEST
 	select SERIAL_CORE
 	help
 	  Support for the simple UART device provided by the LinxISA QEMU "virt"

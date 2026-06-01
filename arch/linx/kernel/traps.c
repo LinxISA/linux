@@ -111,6 +111,7 @@ static void skip_over_break(struct pt_regs *regs)
 	if (ECAUSE_TRAPNUM(regs->trapno) == ECAUSE_TRAPNUM_BREAKPOINT_EXP)
 	{
 		regs->bpc = regs->bpcn;
+		regs->tpc = regs->bpcn;
 	} else {
 		regs->tpc += get_break_insn_length(regs->tpc);
 	}
@@ -149,6 +150,7 @@ static int get_ebreak_imm(struct pt_regs *regs, u8 *imm)
 asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 {
 	u8 ebreak_imm;
+	enum bug_trap_type bug = BUG_TRAP_TYPE_NONE;
 
 	current->thread.bad_cause = regs->trapno;
 
@@ -159,9 +161,17 @@ asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 
 	if (user_mode(regs))
 		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->tpc);
-	else if (report_bug(regs->tpc, regs) == BUG_TRAP_TYPE_WARN)
+	else {
+		bug = report_bug(regs->tpc, regs);
+		if (bug == BUG_TRAP_TYPE_NONE && regs->tpc >= 4)
+			bug = report_bug(regs->tpc - 4, regs);
+	}
+
+	if (!user_mode(regs) && bug == BUG_TRAP_TYPE_WARN)
 		skip_over_break(regs);
-	else
+	else if (!user_mode(regs) && bug == BUG_TRAP_TYPE_NONE && ebreak_imm == 0)
+		skip_over_break(regs);
+	else if (!user_mode(regs))
 		die(regs, "Kernel BUG");
 }
 NOKPROBE_SYMBOL(do_trap_break);

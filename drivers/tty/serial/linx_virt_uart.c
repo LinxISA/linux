@@ -11,6 +11,7 @@
  */
 
 #include <linux/console.h>
+#include <linux/init.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
 #include <linux/module.h>
@@ -139,6 +140,8 @@ static int linx_vuart_startup(struct uart_port *port)
 {
 	struct linx_vuart_port *lport = container_of(port, struct linx_vuart_port, port);
 
+	if (linx_vuart_read_status(port) & LINX_VUART_STATUS_TX_READY)
+		linx_vuart_write_data(port, 'S');
 	WRITE_ONCE(lport->poll_enabled, true);
 	mod_timer(&lport->poll_timer, jiffies + msecs_to_jiffies(10));
 	return 0;
@@ -239,6 +242,26 @@ static void linx_vuart_console_write(struct console *co, const char *s,
 	uart_port_unlock_irqrestore(port, flags);
 }
 
+static void linx_vuart_early_write(struct console *con, const char *s,
+				   unsigned int count)
+{
+	struct earlycon_device *device = con->data;
+
+	uart_console_write(&device->port, s, count, linx_vuart_console_putchar);
+}
+
+static int __init linx_vuart_early_setup(struct earlycon_device *device,
+					 const char *options)
+{
+	if (!device->port.membase)
+		return -ENODEV;
+
+	device->con->write = linx_vuart_early_write;
+	return 0;
+}
+
+OF_EARLYCON_DECLARE(linx_vuart, "linx,virt-uart", linx_vuart_early_setup);
+
 static int __init linx_vuart_console_setup(struct console *co, char *options)
 {
 	struct linx_vuart_port *lport;
@@ -249,11 +272,11 @@ static int __init linx_vuart_console_setup(struct console *co, char *options)
 	int flow = 'n';
 
 	if (co->index < 0 || co->index >= ARRAY_SIZE(linx_vuart_ports))
-		return 0;
+		return -ENODEV;
 
 	lport = linx_vuart_ports[co->index];
 	if (!lport)
-		return 0;
+		return -ENODEV;
 
 	port = &lport->port;
 	if (options)
@@ -271,6 +294,21 @@ static struct console linx_vuart_console = {
 	.index = -1,
 	.data = &linx_vuart_uart_driver,
 };
+
+static int __init linx_vuart_console_init(void)
+{
+	register_console(&linx_vuart_console);
+	return 0;
+}
+console_initcall(linx_vuart_console_init);
+
+static int __init linx_vuart_late_console_init(void)
+{
+	if (!console_is_registered(&linx_vuart_console))
+		register_console(&linx_vuart_console);
+	return 0;
+}
+core_initcall(linx_vuart_late_console_init);
 #endif
 
 static int linx_vuart_probe(struct platform_device *pdev)
@@ -321,6 +359,9 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	lport->port.ops = &linx_vuart_uart_ops;
 	lport->port.flags = UPF_BOOT_AUTOCONF;
 	lport->port.line = id;
+
+	if (linx_vuart_read_status(&lport->port) & LINX_VUART_STATUS_TX_READY)
+		linx_vuart_write_data(&lport->port, 'P');
 
 	timer_setup(&lport->poll_timer, linx_vuart_poll_timer, 0);
 	lport->poll_enabled = false;
@@ -380,19 +421,14 @@ static int __init linx_vuart_init(void)
 {
 	int rc;
 
+	writeb('I', (void __iomem *)(unsigned long)0x10000000);
+
 	rc = uart_register_driver(&linx_vuart_uart_driver);
 	if (rc)
 		return rc;
 
-#ifdef CONFIG_SERIAL_LINX_VIRT_UART_CONSOLE
-	register_console(&linx_vuart_console);
-#endif
-
 	rc = platform_driver_register(&linx_vuart_platform_driver);
 	if (rc) {
-#ifdef CONFIG_SERIAL_LINX_VIRT_UART_CONSOLE
-		unregister_console(&linx_vuart_console);
-#endif
 		uart_unregister_driver(&linx_vuart_uart_driver);
 		return rc;
 	}

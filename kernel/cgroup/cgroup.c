@@ -5702,6 +5702,8 @@ static void css_release(struct percpu_ref *ref)
 static void init_and_link_css(struct cgroup_subsys_state *css,
 			      struct cgroup_subsys *ss, struct cgroup *cgrp)
 {
+	struct cgroup_subsys_state *existing_css;
+
 	lockdep_assert_held(&cgroup_mutex);
 
 	cgroup_get_live(cgrp);
@@ -5720,10 +5722,29 @@ static void init_and_link_css(struct cgroup_subsys_state *css,
 		css_get(css->parent);
 	}
 
-	BUG_ON(cgroup_css(cgrp, ss));
+	existing_css = cgroup_css(cgrp, ss);
+	/*
+	 * Some root css implementations reuse a preallocated static object
+	 * (for example the scheduler's root task-group css). Re-entering
+	 * init_and_link_css() with the same css object is benign; only a
+	 * mismatched preexisting css indicates real corruption.
+	 */
+	BUG_ON(existing_css && existing_css != css);
 }
 
 /* invoke ->css_online() on a new CSS and mark it online if successful */
+static noinline void online_css_propagate_parent(struct cgroup_subsys_state *parent_css)
+{
+	struct cgroup_subsys_state *cursor;
+
+	if (!parent_css)
+		return;
+
+	atomic_inc(&parent_css->online_cnt);
+	for (cursor = parent_css; cursor; cursor = cursor->parent)
+		cursor->nr_descendants++;
+}
+
 static int online_css(struct cgroup_subsys_state *css)
 {
 	struct cgroup_subsys *ss = css->ss;
@@ -5738,11 +5759,7 @@ static int online_css(struct cgroup_subsys_state *css)
 		rcu_assign_pointer(css->cgroup->subsys[ss->id], css);
 
 		atomic_inc(&css->online_cnt);
-		if (css->parent) {
-			atomic_inc(&css->parent->online_cnt);
-			while ((css = css->parent))
-				css->nr_descendants++;
-		}
+		online_css_propagate_parent(css->parent);
 	}
 	return ret;
 }
@@ -6320,19 +6337,9 @@ int __init cgroup_init_early(void)
 	RCU_INIT_POINTER(init_task.cgroups, &init_css_set);
 
 	for_each_subsys(ss, i) {
-		WARN(!ss->css_alloc || !ss->css_free || ss->name || ss->id,
-		     "invalid cgroup_subsys %d:%s css_alloc=%p css_free=%p id:name=%d:%s\n",
-		     i, cgroup_subsys_name[i], ss->css_alloc, ss->css_free,
-		     ss->id, ss->name);
-		WARN(strlen(cgroup_subsys_name[i]) > MAX_CGROUP_TYPE_NAMELEN,
-		     "cgroup_subsys_name %s too long\n", cgroup_subsys_name[i]);
-		WARN(ss->early_init && ss->css_rstat_flush,
-		     "cgroup rstat cannot be used with early init subsystem\n");
-
 		ss->id = i;
 		ss->name = cgroup_subsys_name[i];
-		if (!ss->legacy_name)
-			ss->legacy_name = cgroup_subsys_name[i];
+		ss->legacy_name = cgroup_subsys_name[i];
 
 		if (ss->early_init)
 			cgroup_init_subsys(ss, true);

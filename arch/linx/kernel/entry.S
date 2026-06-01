@@ -210,8 +210,8 @@ ETEMP_IS_TLS:
 	hl.ssrset zero, SSR_ETEMP // it's already zero
 
 	/* Load the global pointer */
-	1: addtpc %tpcrel_hi(__global_pointer$), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(__global_pointer$), -> t
+	addi t#1, %tpcrel_lo(__global_pointer$), -> t
 	ssrset t#1, SSR_GP
 
 	/*
@@ -224,14 +224,14 @@ ETEMP_IS_TLS:
 
 handle_interrupt:
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 
 	/* Handle interrupts, return to ret_from_exception */
 	BSTART.std ind
 	addi sp, 0 -> a0	/* pt_regs as the 1th argument */
-	1: addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
+	addi t#1, %tpcrel_lo(generic_handle_arch_irq), -> t
 	setc.tgt t#1
 
 handle_exceptions:
@@ -255,8 +255,8 @@ handle_exceptions:
 handle_syscalls:
 	/* set return address for both branches */
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 
 	/* Handle syscalls, return to ret_from_exception */
 	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_SCALL_EXP, handle_syscall
@@ -272,11 +272,11 @@ handle_syscalls:
 	addi sp, 0, -> a0
 	andi s4, ECAUSE_TRAPNUM_MASK, -> t	/* SSR_TRAPNO.trapnum */
 	slli t#1, RISCV_LGPTR, -> t
-	1: addtpc %tpcrel_hi(excp_vect_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(excp_vect_table), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table), -> t
 	add t#3, t#1, -> x0	/* &excp_vect_table[SSR_TRAPNO.trapnum] */
-	1: addtpc %tpcrel_hi(excp_vect_table_end), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(excp_vect_table_end), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table_end), -> t
 	/* Check if exception code lies within bounds */
 	setc.geu x0, t#1
 
@@ -329,14 +329,14 @@ check_syscall_nr:
 	 * }
 	 */
 	BSTART.std cond, call_syscall
-	1: addtpc %tpcrel_hi(sys_ni_syscall), -> t
-	addi t#1, %tpcrel_lo(1b), -> s0
+	addtpc %tpcrel_hi(sys_ni_syscall), -> t
+	addi t#1, %tpcrel_lo(sys_ni_syscall), -> s0
 	addi zero, __NR_syscalls, -> t
 	setc.geu, x1, t#1
 
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(sys_call_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(sys_call_table), -> t
+	addi t#1, %tpcrel_lo(sys_call_table), -> t
 	ld [t#1, x1<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[x1] */
 
 call_syscall:
@@ -504,8 +504,8 @@ work_pending:
 	 * 	goto work_resched;
 	 */
 	BSTART.std cond, work_resched
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	andi s0, _TIF_NEED_RESCHED, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_NEED_RESCHED */
 	setc.nei s1, 0
 
@@ -526,8 +526,8 @@ work_notifysig:
 	 */
 	addi sp, 0, -> a0
 	addi s0, 0, -> a1
-	1: addtpc %tpcrel_hi(do_notify_resume), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(do_notify_resume), -> t
+	addi t#1, %tpcrel_lo(do_notify_resume), -> t
 	setc.tgt t#1
 
 work_resched:
@@ -567,18 +567,18 @@ END(handle_exception)
 /* used in copy_thread */
 ENTRY(ret_from_fork)
 	BSTART.std ind
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
-	1: addtpc %tpcrel_hi(schedule_tail), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
+	addtpc %tpcrel_hi(schedule_tail), -> t
+	addi t#1, %tpcrel_lo(schedule_tail), -> t
 	setc.tgt t#1
 ENDPROC(ret_from_fork)
 
 ENTRY(ret_from_kernel_thread)
 	block_next_indcall schedule_tail
 	BSTART.std ind
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	/* Call s0(s1) */
 	addi s1, 0, -> a0
 	setc.tgt s0

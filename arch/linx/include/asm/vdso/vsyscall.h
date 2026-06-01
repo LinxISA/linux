@@ -4,9 +4,14 @@
 
 #ifndef __ASSEMBLER__
 
-#include <asm/vdso.h>
 #include <linux/timekeeper_internal.h>
 #include <vdso/datapage.h>
+
+/*
+ * Keep the VDSO-internal header independent from generated vdso offsets.
+ * Fresh O= builds need to compile vgettimeofday.o before vdso-offsets.h exists.
+ */
+#define __VDSO_PAGES 2
 
 extern struct vdso_data *vdso_data;
 /*
