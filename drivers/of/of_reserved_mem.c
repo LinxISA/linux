@@ -29,6 +29,7 @@
 
 #include "of_private.h"
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
 #define LINX_VIRT_UART_BASE 0x10000000UL
 
 static __always_inline void linx_reserved_mark(char c)
@@ -36,6 +37,9 @@ static __always_inline void linx_reserved_mark(char c)
 	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
 		(unsigned char)c;
 }
+#else
+static __always_inline void linx_reserved_mark(char c) { }
+#endif
 
 static struct reserved_mem reserved_mem_array[MAX_RESERVED_REGIONS] __initdata;
 static struct reserved_mem *reserved_mem __refdata = reserved_mem_array;

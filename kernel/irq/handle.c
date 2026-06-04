@@ -280,6 +280,15 @@ asmlinkage void noinstr generic_handle_arch_irq(struct pt_regs *regs)
 {
 	struct pt_regs *old_regs;
 
+	/*
+	 * Linx bring-up: patched QEMU can surface an external interrupt before
+	 * irqchip_init()/set_handle_irq() has published the arch handler.
+	 * Ignore that early interrupt instead of indirect-calling through NULL
+	 * and faulting before init_IRQ() completes.
+	 */
+	if (unlikely(!READ_ONCE(handle_arch_irq)))
+		return;
+
 	irq_enter();
 	old_regs = set_irq_regs(regs);
 	handle_arch_irq(regs);

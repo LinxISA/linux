@@ -48,25 +48,17 @@
 
 ENTRY(handle_exception)
     /*
-	 * If coming from userspace, preserve the user thread pointer and load
-	 * the kernel thread pointer. If we came from the kernel, the SSR_ETEMP
-	 * register will contain 0, and we should continue on the current SSR_TP.
+	 * Distinguish user-origin vs kernel-origin traps from the saved source
+	 * ACR in SSR_ECSTATE. ETEMP is still used to recover the preserved user
+	 * thread pointer, but it is not reliable enough to classify the source
+	 * context during early bring-up.
 	 */
-    BSTART.std cond, from_kernel
-	ssrswap x1, SSR_A0_ETEMP, -> x1
-	setc.eqi x1, 0
-
-from_user:
-/*
- * current state:
- *	x1 hold (thread info)
- *	tp hold (tls)
- *	etemp hold (old x1)
- *	sp hold (user sp)
- */
-    BSTART.std direct, _save_context
-    sdi sp, [x1, TASK_TI_USER_SP]
-	ldi [x1, TASK_TI_KERNEL_SP], -> sp
+    BSTART.std cond, from_user
+	hl.ssrget SSR_ECSTATE, -> t
+	andi t#1, CSTATE_ACR_MASK, -> t
+	ssrget SSR_CSTATE, -> u
+	andi u#1, CSTATE_ACR_MASK, -> u
+	setc.ne t#1, u#1
 
 from_kernel:
 /*
@@ -80,6 +72,19 @@ from_kernel:
 	ssrswap x1, SSR_TP, -> x1
 	sdi sp, [x1, TASK_TI_KERNEL_SP]
 	sdi sp, [x1, TASK_TI_USER_SP]
+
+from_user:
+/*
+ * current state:
+ *	x1 hold (thread info)
+ *	tp hold (tls)
+ *	etemp hold (old x1)
+ *	sp hold (user sp)
+ */
+    BSTART.std direct, _save_context
+	ssrswap x1, SSR_A0_ETEMP, -> x1
+    sdi sp, [x1, TASK_TI_USER_SP]
+	ldi [x1, TASK_TI_KERNEL_SP], -> sp
 
 _save_context:
 /*

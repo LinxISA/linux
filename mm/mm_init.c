@@ -78,6 +78,19 @@ struct page *mem_map;
 EXPORT_SYMBOL(mem_map);
 #endif
 
+#ifdef __LINX__
+static __always_inline struct page *linx_mm_init_pfn_to_page(unsigned long pfn)
+{
+	return (struct page *)((char *)mem_map +
+			       ((pfn - ARCH_PFN_OFFSET) * sizeof(struct page)));
+}
+#else
+static __always_inline struct page *linx_mm_init_pfn_to_page(unsigned long pfn)
+{
+	return pfn_to_page(pfn);
+}
+#endif
+
 /*
  * high_memory defines the upper bound on direct map memory, then end
  * of ZONE_NORMAL.
@@ -1714,8 +1727,15 @@ static void __init alloc_node_mem_map(struct pglist_data *pgdat)
 	WARN_ON(pgdat != NODE_DATA(0));
 
 	mem_map = pgdat->node_mem_map;
+#ifdef __LINX__
+	/*
+	 * Linx builds do not define CONFIG_LINX, so use the compiler target
+	 * macro for this bring-up-specific mem_map publication rule.
+	 */
+#else
 	if (page_to_pfn(mem_map) != pgdat->node_start_pfn)
 		mem_map -= offset;
+#endif
 
 	max_mapnr = end - start;
 	linx_mm_init_mark('e');
@@ -2086,12 +2106,12 @@ static void __init deferred_free_pages(unsigned long pfn,
 	if (!nr_pages)
 		return;
 
-	page = pfn_to_page(pfn);
+	page = linx_mm_init_pfn_to_page(pfn);
 
 	/* Free a large naturally-aligned chunk if possible */
 	if (nr_pages == MAX_ORDER_NR_PAGES && IS_MAX_ORDER_ALIGNED(pfn)) {
 		for (i = 0; i < nr_pages; i += pageblock_nr_pages)
-			init_pageblock_migratetype(page + i, MIGRATE_MOVABLE,
+			init_pageblock_migratetype(linx_mm_init_pfn_to_page(pfn + i), MIGRATE_MOVABLE,
 					false);
 		__free_pages_core(page, MAX_PAGE_ORDER, MEMINIT_EARLY);
 		return;
@@ -2100,7 +2120,8 @@ static void __init deferred_free_pages(unsigned long pfn,
 	/* Accept chunks smaller than MAX_PAGE_ORDER upfront */
 	accept_memory(PFN_PHYS(pfn), nr_pages * PAGE_SIZE);
 
-	for (i = 0; i < nr_pages; i++, page++, pfn++) {
+	for (i = 0; i < nr_pages; i++, pfn++) {
+		page = linx_mm_init_pfn_to_page(pfn);
 		if (pageblock_aligned(pfn))
 			init_pageblock_migratetype(page, MIGRATE_MOVABLE,
 					false);
@@ -2129,10 +2150,12 @@ static unsigned long __init deferred_init_pages(struct zone *zone,
 	int nid = zone_to_nid(zone);
 	unsigned long nr_pages = end_pfn - pfn;
 	int zid = zone_idx(zone);
-	struct page *page = pfn_to_page(pfn);
+	struct page *page = linx_mm_init_pfn_to_page(pfn);
 
-	for (; pfn < end_pfn; pfn++, page++)
+	for (; pfn < end_pfn; pfn++) {
+		page = linx_mm_init_pfn_to_page(pfn);
 		__init_single_page(page, pfn, zid, nid);
+	}
 	return nr_pages;
 }
 
@@ -2575,6 +2598,8 @@ void *__init alloc_large_system_hash(const char *tablename,
 void __init memblock_free_pages(struct page *page, unsigned long pfn,
 							unsigned int order)
 {
+	page = linx_mm_init_pfn_to_page(pfn);
+
 	if (IS_ENABLED(CONFIG_DEFERRED_STRUCT_PAGE_INIT)) {
 		int nid = early_pfn_to_nid(pfn);
 
@@ -2589,6 +2614,36 @@ void __init memblock_free_pages(struct page *page, unsigned long pfn,
 
 	/* pages were reserved and not allocated */
 	clear_page_tag_ref(page);
+#ifdef CONFIG_LINX
+	{
+		unsigned int nr_pages = 1 << order;
+		struct page *p = page;
+		unsigned int loop;
+
+		for (loop = 0; loop < nr_pages; loop++, p++) {
+			__ClearPageReserved(p);
+			set_page_count(p, 0);
+		}
+
+		/* memblock adjusts totalram_pages() manually. */
+		atomic_long_add(nr_pages, &page_zone(page)->managed_pages);
+
+		if (page_contains_unaccepted(page, order)) {
+			if (order == MAX_PAGE_ORDER && __free_unaccepted(page))
+				return;
+
+			accept_memory(page_to_phys(page), PAGE_SIZE << order);
+		}
+
+		/*
+		 * Linx bring-up: inline the MEMINIT_EARLY free core path here to
+		 * avoid the current cross-stack call boundary from
+		 * memblock_free_pages() into __free_pages_core().
+		 */
+		__free_pages_ok(page, order, FPI_TO_TAIL);
+		return;
+	}
+#endif
 	__free_pages_core(page, order, MEMINIT_EARLY);
 }
 

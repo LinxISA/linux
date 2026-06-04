@@ -569,6 +569,12 @@ __mutex_lock_common(struct mutex *lock, unsigned int state, unsigned int subclas
 	unsigned long flags;
 	int ret;
 
+	/*
+	 * Linx bring-up: explicitly initialize the stack wake_q object instead of
+	 * relying only on the local aggregate initializer path.
+	 */
+	wake_q_init(&wake_q);
+
 	if (!use_ww_ctx)
 		ww_ctx = NULL;
 
@@ -918,6 +924,12 @@ static noinline void __sched __mutex_unlock_slowpath(struct mutex *lock, unsigne
 	DEFINE_WAKE_Q(wake_q);
 	unsigned long owner;
 	unsigned long flags;
+
+	/*
+	 * Linx bring-up: explicitly initialize the stack wake_q object instead of
+	 * relying only on the local aggregate initializer path.
+	 */
+	wake_q_init(&wake_q);
 
 	mutex_release(&lock->dep_map, ip);
 

@@ -118,6 +118,8 @@ extern void *__unflatten_device_tree(const void *blob,
 			      struct device_node **mynodes,
 			      void *(*dt_alloc)(u64 size, u64 align),
 			      bool detached);
+void *of_call_dt_alloc(void *(*dt_alloc)(u64 size, u64 align),
+		       u64 size, u64 align);
 
 void of_alias_scan(void * (*dt_alloc)(u64 size, u64 align));
 

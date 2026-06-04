@@ -5,6 +5,9 @@ CFLAGS_REMOVE_init.o = $(CC_FLAGS_FTRACE)
 CFLAGS_REMOVE_cacheflush.o = $(CC_FLAGS_FTRACE)
 endif
 
+CFLAGS_REMOVE_init.o += -fstack-protector -fstack-protector-strong
+CFLAGS_init.o += -fno-stack-protector
+
 KCOV_INSTRUMENT_init.o := n
 
 obj-y += init.o

@@ -22,6 +22,7 @@
 #include <linux/crash_dump.h>
 #include <linux/hugetlb.h>
 #include <linux/kfence.h>
+#include <linux/sched/task.h>
 
 #include <asm/fixmap.h>
 #include <asm/tlbflush.h>
@@ -37,8 +38,11 @@
 
 #include "../kernel/head.h"
 
+extern void handle_exception(void);
 extern void memblock_free_all(void);
 extern unsigned long max_mapnr;
+struct task_struct;
+extern struct task_struct init_task;
 
 struct kernel_mapping kernel_map __ro_after_init;
 EXPORT_SYMBOL(kernel_map);
@@ -1202,17 +1206,59 @@ static void __init setup_vm_final(void)
 	create_kernel_page_table(swapper_pg_dir, false);
 #endif
 
+	/*
+	 * Keep the boot stack's low alias reachable across the final TTBR switch.
+	 * The current call chain was entered before the high-half-only mapping is
+	 * fully active, so its saved FRET.STK frames still live on the low alias
+	 * of init_thread_union until this stack unwinds back into normal kernel
+	 * code.
+	 */
+	create_pgd_mapping(swapper_pg_dir,
+			   __pa_symbol(&init_thread_union) & PMD_MASK,
+			   __pa_symbol(&init_thread_union) & PMD_MASK,
+			   PMD_SIZE, PAGE_KERNEL);
+
 	/* Clear fixmap PTE and PMD mappings */
 	clear_fixmap(FIX_PTE);
 	clear_fixmap(FIX_PMD);
 	clear_fixmap(FIX_PUD);
 	clear_fixmap(FIX_P4D);
 
+	/*
+	 * Linx bring-up: publish the late page-table helper pointers before
+	 * switching TTBR0 to the final page tables. This avoids touching
+	 * _pt_ops/.init.data immediately after the MMU transition while the
+	 * new mapping contract is still being validated.
+	 */
+	pt_ops_set_late();
+
+	/*
+	 * Linx bring-up: refresh EVBASE to the linked high-half exception
+	 * handler before switching TTBR0 so late faults don't keep routing to
+	 * the old low bootstrap vector page.
+	 */
+	ssr_write(SSR_EVBASE, (unsigned long)handle_exception);
+
+	/*
+	 * Late boot still relies on handle_exception() treating recursive and
+	 * in-kernel faults as kernel-origin traps, which requires ETEMP to be
+	 * zero on entry. Reassert that invariant before the final TTBR switch so
+	 * a stale low-alias thread pointer cannot force the vector down the
+	 * from_user path.
+	 */
+	ssr_write(SSR_ETEMP, 0);
+
+	/*
+	 * The early boot path seeds TP before the final high-half-only kernel
+	 * mapping is active. Refresh it to the linked init_task address before
+	 * dropping the low alias so exception entry and thread_info accesses do
+	 * not keep using the stale low mapping.
+	 */
+	ssr_write(SSR_TP, (unsigned long)&init_task);
+
 	/* Move to swapper page table */
 	ssr_write(SSR_MMTBASE, (PFN_DOWN(__pa_symbol(swapper_pg_dir)) << MMTBASE_PPN_SHIFT));
 	local_flush_tlb_all();
-
-	pt_ops_set_late();
 }
 #else
 asmlinkage void __init setup_vm(uintptr_t dtb_pa)
