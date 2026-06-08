@@ -236,19 +236,23 @@ int __init faux_bus_init(void)
 {
 	int ret;
 
+	pr_err("Linx dbg: faux_bus_init enter\n");
 	ret = device_register(&faux_bus_root);
 	if (ret) {
 		put_device(&faux_bus_root);
 		return ret;
 	}
+	pr_err("Linx dbg: faux_bus_init after device_register\n");
 
 	ret = bus_register(&faux_bus_type);
 	if (ret)
 		goto error_bus;
+	pr_err("Linx dbg: faux_bus_init after bus_register\n");
 
 	ret = driver_register(&faux_driver);
 	if (ret)
 		goto error_driver;
+	pr_err("Linx dbg: faux_bus_init after driver_register\n");
 
 	return ret;
 
