@@ -66,12 +66,19 @@ from_user:
  * current state:
  *	SSR_TP holds thread_info
  *	ETEMP holds the manager thread_info snapshot for user return
+ *	x1 holds the interrupted user x1
  *	sp hold (user sp)
  */
-	BSTART.std direct, _save_context
+	BSTART.std fall
 		ssrget SSR_TP, -> t
 		sdi sp, [t#1, TASK_TI_USER_SP]
+
+	block_next_direct from_user_switch_stack
+from_user_switch_stack:
+	BSTART.std direct, _save_context
+		ssrget SSR_TP, -> t
 		ldi [t#1, TASK_TI_KERNEL_SP], -> sp
+		ssrswap x1, SSR_A0_ETEMP, -> x1
 
 from_kernel:
 /*
