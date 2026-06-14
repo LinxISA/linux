@@ -3123,11 +3123,21 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	 * immediately after.
 	 */
 	tty_port_link_device(port, drv->tty_driver, uport->line);
-	pr_err("Linx dbg: serial_core_add_one_port before uart_configure_port line=%u\n",
-	       uport->line);
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The reduced Linx initramfs lane uses a static /dev/ttyS0 node and
+	 * does not yet run the serial console/device publication path. Keep
+	 * the tty driver state openable without entering uart_configure_port(),
+	 * which can re-enter console registration before the Linx driver-core
+	 * bring-up path is ready for it.
+	 */
+	uport->type = PORT_16550;
+	uport->flags &= ~UPF_DEAD;
+	return 0;
+#endif
+
 	uart_configure_port(drv, state, uport);
-	pr_err("Linx dbg: serial_core_add_one_port after uart_configure_port line=%u type=%u\n",
-	       uport->line, uport->type);
 
 	port->console = uart_console(uport);
 
@@ -3147,12 +3157,6 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	/* Ensure serdev drivers can call serdev_device_open() right away */
 	uport->flags &= ~UPF_DEAD;
 
-#ifdef CONFIG_LINX_INTC
-	pr_err("Linx dbg: serial_core_add_one_port skipping tty register for Linx bring-up line=%u\n",
-	       uport->line);
-	return 0;
-#endif
-
 	/*
 	 * Register the port whether it's detected or not.  This allows
 	 * setserial to be used to alter this port's parameters.
@@ -3161,8 +3165,6 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 			uport->line, uport->dev,
 			uport->port_dev ? &uport->port_dev->dev : NULL,
 			port, uport->tty_groups);
-	pr_err("Linx dbg: serial_core_add_one_port after tty register line=%u err=%ld\n",
-	       uport->line, IS_ERR(tty_dev) ? PTR_ERR(tty_dev) : 0L);
 	if (!IS_ERR(tty_dev)) {
 		device_set_wakeup_capable(tty_dev, 1);
 	} else {

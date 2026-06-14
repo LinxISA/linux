@@ -46,6 +46,7 @@
 #include <linux/profile.h>
 #include <linux/kfence.h>
 #include <linux/rcupdate.h>
+#include <linux/tty.h>
 #include <linux/srcu.h>
 #include <linux/moduleparam.h>
 #include <linux/kallsyms.h>
@@ -101,6 +102,7 @@
 #include <linux/jump_label.h>
 #include <linux/kcsan.h>
 #include <linux/init_syscalls.h>
+#include <linux/linx_vuart.h>
 #include <linux/stackdepot.h>
 #include <linux/randomize_kstack.h>
 #include <linux/pidfs.h>
@@ -2058,6 +2060,26 @@ static void __init do_pre_smp_initcalls(void)
 		do_one_initcall(initcall_from_entry(fn));
 }
 
+#ifdef CONFIG_LINX_INTC
+static void __init linx_bringup_init_userspace_io(void)
+{
+	int rc;
+
+	driver_init();
+	rc = tty_init();
+	if (rc)
+		pr_err("Linx dbg: tty_init failed during bring-up rc=%d\n", rc);
+
+#ifdef CONFIG_SERIAL_LINX_VIRT_UART
+	rc = linx_vuart_bringup_init();
+	if (rc)
+		pr_err("Linx dbg: linx_vuart_bringup_init failed rc=%d\n", rc);
+#else
+	pr_warn("Linx dbg: CONFIG_SERIAL_LINX_VIRT_UART is disabled\n");
+#endif
+}
+#endif
+
 static int run_init_process(const char *init_filename)
 {
 	const char *const *p;
@@ -2320,6 +2342,7 @@ static noinline void __init kernel_init_freeable(void)
 	 * Linx bring-up: bootstrap only the minimum userspace prerequisites
 	 * here instead of waiting for the broad late initcall surface.
 	 */
+	linx_bringup_init_userspace_io();
 	linx_populate_rootfs_now();
 	linx_init_elf_binfmt();
 	linx_init_script_binfmt();
