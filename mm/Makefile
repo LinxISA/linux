@@ -59,6 +59,10 @@ CFLAGS_util.o += -O0
 # LinxISA bring-up: page allocator is currently miscompiled at -O2 in early
 # boot (compound page prep), triggering folio_set_order() WARNs and hangs.
 CFLAGS_page_alloc.o += -O0
+
+# LinxISA bring-up: vmalloc/vmap rbtree insertion can be miscompiled at -O2,
+# corrupting busy-tree roots used by ioremap_page_range() during rootfs setup.
+CFLAGS_vmalloc.o += -O1
 endif
 
 mmu-y			:= nommu.o
