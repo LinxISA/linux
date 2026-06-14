@@ -1440,6 +1440,7 @@ out_free_interp:
 	linx_debug_uart_putc('t');
 #endif
 #ifdef CONFIG_LINX_INTC
+	bprm->p &= ~0xfUL;
 	retval = 0;
 	pr_err("Linx dbg: load_elf_binary skipping create_elf_tables for Linx bring-up stack=%lx entry=%lx\n",
 	       bprm->p, elf_entry);

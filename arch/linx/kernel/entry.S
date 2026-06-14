@@ -64,15 +64,14 @@ ENTRY(handle_exception)
 from_user:
 /*
  * current state:
- *	x1 hold (thread info)
- *	tp hold (tls)
- *	etemp hold (old x1)
+ *	SSR_TP holds thread_info
+ *	ETEMP holds the manager thread_info snapshot for user return
  *	sp hold (user sp)
  */
-    BSTART.std direct, _save_context
-	ssrswap x1, SSR_A0_ETEMP, -> x1
-    sdi sp, [x1, TASK_TI_USER_SP]
-	ldi [x1, TASK_TI_KERNEL_SP], -> sp
+	BSTART.std direct, _save_context
+		ssrget SSR_TP, -> t
+		sdi sp, [t#1, TASK_TI_USER_SP]
+		ldi [t#1, TASK_TI_KERNEL_SP], -> sp
 
 from_kernel:
 /*
@@ -500,6 +499,9 @@ restore_level1_state:
 /* restored block-head exception */
 	BSTART.sys, fall
 	ldi [sp, PT_SP], -> sp
+	block_next_direct restore_default_acre_enter
+restore_default_acre_enter:
+	BSTART.sys fall
 	acre RRAT_DEFAULT
 
 
@@ -516,6 +518,9 @@ restore_level2_state:
 
 	/* restore sp */
 	ldi [sp, PT_SP], -> sp
+	block_next_direct restore_level2_acre_enter
+restore_level2_acre_enter:
+	BSTART.sys fall
 	acre RRAT_RESTORE
 
 work_pending:
