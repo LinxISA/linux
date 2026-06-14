@@ -36,6 +36,7 @@
 #include <linux/fcntl.h>
 #include <linux/file.h>
 #include <linux/jiffies.h>
+#include <linux/linx_vuart.h>
 #include <linux/math.h>
 #include <linux/poll.h>
 #include <linux/ratelimit.h>
@@ -1880,7 +1881,11 @@ static void n_tty_close(struct tty_struct *tty)
 		n_tty_packet_mode_flush(tty);
 
 	down_write(&tty->termios_rwsem);
+#ifdef CONFIG_LINX_INTC
+	kvfree(ldata);
+#else
 	vfree(ldata);
+#endif
 	tty->disc_data = NULL;
 	up_write(&tty->termios_rwsem);
 }
@@ -1898,13 +1903,32 @@ static int n_tty_open(struct tty_struct *tty)
 	struct n_tty_data *ldata;
 
 	/* Currently a malloc failure here can panic */
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx reduced initramfs bring-up can open ttyS0 before the vmalloc
+	 * path is stable under userspace syscalls. Prefer slab-backed memory
+	 * for the modest N_TTY state and still allow vmalloc fallback.
+	 */
+	ldata = kvzalloc(sizeof(*ldata), GFP_KERNEL);
+#else
 	ldata = vzalloc(sizeof(*ldata));
+#endif
 	if (!ldata)
 		return -ENOMEM;
 
 	ldata->overrun_time = jiffies;
 	mutex_init(&ldata->atomic_read_lock);
 	mutex_init(&ldata->output_lock);
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The Linx no-libc initramfs shell echoes command bytes after read().
+	 * Avoid N_TTY's producer-side echo path while the reduced UART lane is
+	 * still using synchronous polling and no serial port lock.
+	 */
+	tty->termios.c_lflag &= ~(ECHO | ECHOE | ECHOK | ECHONL |
+				  ECHOCTL | ECHOPRT | ECHOKE);
+#endif
 
 	tty->disc_data = ldata;
 	tty->closing = 0;
@@ -2145,6 +2169,7 @@ static ssize_t n_tty_continue_cookie(struct tty_struct *tty, u8 *kbuf,
 	return kb - kbuf;
 }
 
+#ifndef CONFIG_LINX_INTC
 static int n_tty_wait_for_input(struct tty_struct *tty, struct file *file,
 				struct wait_queue_entry *wait, long *timeout)
 {
@@ -2171,6 +2196,7 @@ static int n_tty_wait_for_input(struct tty_struct *tty, struct file *file,
 
 	return 1;
 }
+#endif
 
 /**
  * n_tty_read		-	read function for tty
@@ -2223,6 +2249,38 @@ static ssize_t n_tty_read(struct tty_struct *tty, struct file *file, u8 *kbuf,
 			return -ERESTARTSYS;
 	}
 
+#ifdef CONFIG_LINX_INTC
+	if (linx_vuart_tty_is_active(tty)) {
+		while (nr) {
+			int got = linx_vuart_read_tty_char(tty, kb);
+
+			if (got > 0) {
+				kb += got;
+				nr -= got;
+				break;
+			}
+			if (got < 0) {
+				retval = got;
+				break;
+			}
+			if (file->f_flags & O_NONBLOCK) {
+				retval = -EAGAIN;
+				break;
+			}
+			if (signal_pending(current)) {
+				retval = -ERESTARTSYS;
+				break;
+			}
+			cpu_relax();
+		}
+
+		mutex_unlock(&ldata->atomic_read_lock);
+		if (kb - kbuf)
+			return kb - kbuf;
+		return retval;
+	}
+#endif
+
 	down_read(&tty->termios_rwsem);
 
 	minimum = time = 0;
@@ -2257,6 +2315,25 @@ static ssize_t n_tty_read(struct tty_struct *tty, struct file *file, u8 *kbuf,
 		}
 
 		if (!input_available_p(tty, 0)) {
+#ifdef CONFIG_LINX_INTC
+			up_read(&tty->termios_rwsem);
+			linx_vuart_poll_tty_rx(tty);
+			down_read(&tty->termios_rwsem);
+			if (!input_available_p(tty, 0)) {
+				if (file->f_flags & O_NONBLOCK) {
+					retval = -EAGAIN;
+					break;
+				}
+				up_read(&tty->termios_rwsem);
+				cpu_relax();
+				down_read(&tty->termios_rwsem);
+				if (signal_pending(current)) {
+					retval = -ERESTARTSYS;
+					break;
+				}
+				continue;
+			}
+#else
 			up_read(&tty->termios_rwsem);
 			tty_buffer_flush_work(tty->port);
 			down_read(&tty->termios_rwsem);
@@ -2269,6 +2346,7 @@ static ssize_t n_tty_read(struct tty_struct *tty, struct file *file, u8 *kbuf,
 				}
 				continue;
 			}
+#endif
 		}
 
 		if (ldata->icanon && !L_EXTPROC(tty)) {

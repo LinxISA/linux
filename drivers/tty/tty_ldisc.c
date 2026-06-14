@@ -92,6 +92,15 @@ EXPORT_SYMBOL(tty_unregister_ldisc);
 
 static struct tty_ldisc_ops *get_ldops(int disc)
 {
+#if defined(CONFIG_LINX_INTC) && !defined(CONFIG_SMP) && !defined(CONFIG_MODULES)
+	struct tty_ldisc_ops *ldops;
+
+	if (disc < N_TTY || disc >= NR_LDISCS)
+		return ERR_PTR(-EINVAL);
+
+	ldops = READ_ONCE(tty_ldiscs[disc]);
+	return ldops ?: ERR_PTR(-EINVAL);
+#else
 	unsigned long flags;
 	struct tty_ldisc_ops *ldops, *ret;
 
@@ -105,15 +114,20 @@ static struct tty_ldisc_ops *get_ldops(int disc)
 	}
 	raw_spin_unlock_irqrestore(&tty_ldiscs_lock, flags);
 	return ret;
+#endif
 }
 
 static void put_ldops(struct tty_ldisc_ops *ldops)
 {
+#if defined(CONFIG_LINX_INTC) && !defined(CONFIG_SMP) && !defined(CONFIG_MODULES)
+	(void)ldops;
+#else
 	unsigned long flags;
 
 	raw_spin_lock_irqsave(&tty_ldiscs_lock, flags);
 	module_put(ldops->owner);
 	raw_spin_unlock_irqrestore(&tty_ldiscs_lock, flags);
+#endif
 }
 
 int tty_ldisc_autoload = IS_BUILTIN(CONFIG_LDISC_AUTOLOAD);

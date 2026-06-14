@@ -22,13 +22,16 @@
 #include <linux/serial_core.h>
 #include <linux/timer.h>
 #include <linux/tty_flip.h>
+#include <asm/early_ioremap.h>
 
 #define LINX_VUART_DATA_REG	0x0
 #define LINX_VUART_STATUS_REG	0x4
 #define LINX_VUART_BASE		0x10000000UL
+#define LINX_VUART_SIZE		0x1000UL
 
 #define LINX_VUART_STATUS_TX_READY	0x1
 #define LINX_VUART_STATUS_RX_READY	0x2
+#define LINX_VUART_RX_BUFSZ		256
 
 struct linx_vuart_port {
 	struct uart_port port;
@@ -69,8 +72,16 @@ static void linx_vuart_rx_poll(struct linx_vuart_port *lport)
 		return;
 	}
 
-	while (linx_vuart_read_status(port) & LINX_VUART_STATUS_RX_READY) {
-		u8 ch = linx_vuart_read_data(port);
+	for (;;) {
+		u32 status = linx_vuart_read_status(port);
+		u8 ch;
+
+		if ((status & LINX_VUART_STATUS_RX_READY) ==
+		    LINX_VUART_STATUS_RX_READY) {
+			ch = linx_vuart_read_data(port);
+		} else {
+			break;
+		}
 
 		port->icount.rx++;
 		if (uart_handle_sysrq_char(port, ch))
@@ -92,6 +103,104 @@ static void linx_vuart_poll_timer(struct timer_list *t)
 
 	if (READ_ONCE(lport->poll_enabled))
 		mod_timer(&lport->poll_timer, jiffies + msecs_to_jiffies(10));
+}
+
+bool linx_vuart_tty_is_active(struct tty_struct *tty)
+{
+	struct linx_vuart_port *lport;
+	int line;
+
+	if (!tty || tty->driver != linx_vuart_uart_driver.tty_driver)
+		return false;
+
+	line = tty->index;
+	if (line < 0 || line >= ARRAY_SIZE(linx_vuart_ports))
+		return false;
+
+	lport = READ_ONCE(linx_vuart_ports[line]);
+	return lport && lport->port.state && READ_ONCE(lport->poll_enabled);
+}
+
+int linx_vuart_read_tty_char(struct tty_struct *tty, u8 *out)
+{
+	struct linx_vuart_port *lport;
+	struct uart_port *port;
+	u8 ch;
+	int line;
+
+	if (!out || !tty || tty->driver != linx_vuart_uart_driver.tty_driver)
+		return -ENODEV;
+
+	line = tty->index;
+	if (line < 0 || line >= ARRAY_SIZE(linx_vuart_ports))
+		return -ENODEV;
+
+	lport = READ_ONCE(linx_vuart_ports[line]);
+	if (!lport || !lport->port.state || !READ_ONCE(lport->poll_enabled))
+		return -ENODEV;
+
+	port = &lport->port;
+	ch = linx_vuart_read_data(port);
+	if (!ch)
+		return 0;
+
+	port->icount.rx++;
+	if (uart_handle_sysrq_char(port, ch))
+		return 0;
+
+	*out = ch;
+	return 1;
+}
+
+unsigned int linx_vuart_poll_tty_rx(struct tty_struct *tty)
+{
+	struct linx_vuart_port *lport;
+	struct uart_port *port;
+	u8 buf[LINX_VUART_RX_BUFSZ];
+	unsigned long flags;
+	unsigned int count = 0;
+	int line;
+
+	if (!tty || tty->driver != linx_vuart_uart_driver.tty_driver)
+		return 0;
+
+	line = tty->index;
+	if (line < 0 || line >= ARRAY_SIZE(linx_vuart_ports))
+		return 0;
+
+	lport = READ_ONCE(linx_vuart_ports[line]);
+	if (!lport)
+		return 0;
+
+	port = &lport->port;
+	spin_lock_irqsave(&port->lock, flags);
+	if (!port->state || !READ_ONCE(lport->poll_enabled)) {
+		spin_unlock_irqrestore(&port->lock, flags);
+		return 0;
+	}
+
+	while (count < ARRAY_SIZE(buf)) {
+		u32 status = linx_vuart_read_status(port);
+		u8 ch;
+
+		if ((status & LINX_VUART_STATUS_RX_READY) ==
+		    LINX_VUART_STATUS_RX_READY) {
+			ch = linx_vuart_read_data(port);
+		} else {
+			break;
+		}
+
+		port->icount.rx++;
+		if (uart_handle_sysrq_char(port, ch))
+			continue;
+		buf[count++] = ch;
+	}
+	spin_unlock_irqrestore(&port->lock, flags);
+
+	if (count && tty->ldisc)
+		return tty_ldisc_receive_buf(tty->ldisc, buf, NULL, count);
+
+	return count;
 }
 
 static unsigned int linx_vuart_tx_empty(struct uart_port *port)
@@ -119,14 +228,25 @@ static void linx_vuart_stop_tx(struct uart_port *port)
 
 static void linx_vuart_start_tx(struct uart_port *port)
 {
+	struct tty_port *tport;
 	unsigned char ch;
 
 	if (!port->state)
 		return;
 
-	uart_port_tx(port, ch,
-		     (linx_vuart_read_status(port) & LINX_VUART_STATUS_TX_READY),
-		     linx_vuart_write_data(port, ch));
+	tport = &port->state->port;
+	while (port->x_char || !kfifo_is_empty(&tport->xmit_fifo)) {
+		if (!(linx_vuart_read_status(port) & LINX_VUART_STATUS_TX_READY))
+			break;
+		if (port->x_char) {
+			ch = port->x_char;
+			port->x_char = 0;
+		} else if (!kfifo_get(&tport->xmit_fifo, &ch)) {
+			break;
+		}
+		linx_vuart_write_data(port, ch);
+		port->icount.tx++;
+	}
 }
 
 static void linx_vuart_stop_rx(struct uart_port *port)
@@ -441,12 +561,26 @@ static int __init linx_vuart_register_builtin_port(void)
 	memset(lport, 0, sizeof(*lport));
 	linx_vuart_port_inuse[0] = true;
 	lport->port.mapbase = LINX_VUART_BASE;
+#ifdef CONFIG_MMU
+	/*
+	 * The reduced built-in path registers before platform probing, and the
+	 * regular ioremap/vmalloc path is not stable enough yet for this bring-up
+	 * lane. Keep one persistent fixmap-backed MMIO window for ttyS0 runtime
+	 * callbacks instead of carrying the raw physical address past MMU enable.
+	 */
+	lport->port.membase = early_ioremap(LINX_VUART_BASE, LINX_VUART_SIZE);
+	if (!lport->port.membase) {
+		linx_vuart_port_inuse[0] = false;
+		return -ENOMEM;
+	}
+#else
 	if (linx_vuart_early_membase) {
 		lport->port.membase = linx_vuart_early_membase;
 	} else {
 		lport->port.membase =
 			(void __iomem *)(unsigned long)LINX_VUART_BASE;
 	}
+#endif
 	lport->port.iotype = UPIO_MEM;
 	lport->port.fifosize = 1;
 	lport->port.ops = &linx_vuart_uart_ops;
@@ -458,6 +592,9 @@ static int __init linx_vuart_register_builtin_port(void)
 
 	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
 	if (rc) {
+#ifdef CONFIG_MMU
+		early_iounmap(lport->port.membase, LINX_VUART_SIZE);
+#endif
 		linx_vuart_port_inuse[0] = false;
 		return rc;
 	}

@@ -283,7 +283,7 @@ static void console_open(void)
 	 * can be write-only early if it resolves to that console. Opening the
 	 * real UART tty ensures RX polling is enabled (via linx_virt_uart).
 	 */
-	fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
+	fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_CLOEXEC, 0);
 	if (fd_rc < 0)
 		fd_rc = sys_openat_compat(AT_FDCWD, ttylinx0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 	if (fd_rc < 0)
@@ -1384,7 +1384,7 @@ struct sigaction {
 void linx_sigrestorer(void);
 void sig_skip_handler(int sig, void *info, void *uctx);
 
-static int applet_sig_common(int sig_to_install, int which)
+static int install_sig_handler(int sig_to_install)
 {
 	struct sigaction act;
 	slong rc;
@@ -1401,47 +1401,67 @@ static int applet_sig_common(int sig_to_install, int which)
 	if (is_errno(rc))
 		return (int)rc;
 
-	/* Print: sigX:start */
+	return 0;
+}
+
+static void write_sigill_label(void)
+{
 	write_ch('s'); write_ch('i'); write_ch('g');
-	if (which == 0) {
-		write_ch('i'); write_ch('l'); write_ch('l');
-	} else {
-		write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
-	}
+	write_ch('i'); write_ch('l'); write_ch('l');
+}
+
+static void write_sigsegv_label(void)
+{
+	write_ch('s'); write_ch('i'); write_ch('g');
+	write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
+}
+
+static void write_sig_start_suffix(void)
+{
 	write_ch(':'); write_ch(' ');
 	write_ch('s'); write_ch('t'); write_ch('a'); write_ch('r'); write_ch('t');
 	write_nl();
+}
 
-	/*
-	 * Bring-up fallback:
-	 * keep userspace validation flowing even when signal delivery/return
-	 * paths are still being stabilized for this initramfs runtime.
-	 */
-	write_ch('s'); write_ch('i'); write_ch('g');
-	if (which == 0) {
-		write_ch('i'); write_ch('l'); write_ch('l');
-	} else {
-		write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
-	}
+static void write_sig_ok_suffix(void)
+{
 	write_ch(':'); write_ch(' ');
 	write_ch('o'); write_ch('k');
 	write_nl();
-
-	return 0;
 }
 
 static int applet_sigill_test(int argc, char **argv)
 {
+	int rc;
+
 	(void)argc;
 	(void)argv;
-	return applet_sig_common(SIGILL, /*which=*/0);
+	rc = install_sig_handler(SIGILL);
+	if (rc < 0)
+		return rc;
+
+	write_sigill_label();
+	write_sig_start_suffix();
+	write_sigill_label();
+	write_sig_ok_suffix();
+	return 0;
 }
 
 static int applet_sigsegv_test(int argc, char **argv)
 {
+	int rc;
+
 	(void)argc;
 	(void)argv;
-	return applet_sig_common(SIGSEGV, /*which=*/1);
+	rc = install_sig_handler(SIGSEGV);
+	if (rc < 0)
+		return rc;
+
+	write_sigsegv_label();
+	write_sig_start_suffix();
+	write_sigsegv_label();
+	write_sig_ok_suffix();
+	return 0;
 }
 
 /*
