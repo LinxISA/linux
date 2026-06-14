@@ -33,7 +33,6 @@ EXPORT_SYMBOL(__stack_chk_guard);
 
 extern asmlinkage void ret_from_fork(void);
 extern asmlinkage void ret_from_kernel_thread(void);
-
 void arch_cpu_idle(void)
 {
 	wait_for_interrupt();
@@ -92,6 +91,8 @@ void show_regs(struct pt_regs *regs)
 void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
 	/* called by `load_elf_binary` */
+	pr_err("Linx dbg: start_thread enter pc=%lx sp=%lx old_cstate=%lx old_tpc=%lx old_bpc=%lx\n",
+	       pc, sp, regs->cstate, regs->tpc, regs->bpc);
 	regs->cstate = CSTATE_ACR2 | CSTATE_I;
 	/*
 	 * Since the epc have been changed, the bstate of the exception block
@@ -102,11 +103,28 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 	regs->tpc = pc;
 	// regs->ebstate.rra = RRAT_DEFAULT;
 	regs->sp = sp;
+#ifdef CONFIG_LINX_INTC
+	current_thread_info()->flags &= ~_TIF_WORK_MASK;
+#endif
+	pr_err("Linx dbg: start_thread exit new_cstate=%lx new_tpc=%lx new_bpc=%lx new_sp=%lx\n",
+	       regs->cstate, regs->tpc, regs->bpc, regs->sp);
 }
 
 void flush_thread(void)
 {
 }
+
+#ifdef CONFIG_LINX_INTC
+asmlinkage void linx_trace_ret_from_exception(struct pt_regs *regs)
+{
+	if (current && current->pid == 1) {
+		pr_err("Linx dbg: ret_from_exception trace pid=1 flags=%lx pt_cstate=%lx pt_tpc=%lx pt_bpc=%lx pt_sp=%lx live_ssr_cstate=%lx user_mode=%d\n",
+		       current_thread_info()->flags,
+		       regs->cstate, regs->tpc, regs->bpc, regs->sp,
+		       ssr_read(SSR_CSTATE), user_mode(regs) ? 1 : 0);
+	}
+}
+#endif
 
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {

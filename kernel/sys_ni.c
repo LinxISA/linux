@@ -2,6 +2,8 @@
 
 #include <linux/linkage.h>
 #include <linux/errno.h>
+#include <linux/printk.h>
+#include <linux/sched.h>
 
 #include <asm/unistd.h>
 
@@ -19,6 +21,10 @@ asmlinkage long sys_ni_syscall(void);
  */
 asmlinkage long sys_ni_syscall(void)
 {
+#ifdef CONFIG_LINX_INTC
+	if (current && current->pid == 1)
+		pr_err("Linx dbg: sys_ni_syscall pid=1 current=%s\n", current->comm);
+#endif
 	return -ENOSYS;
 }
 

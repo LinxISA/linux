@@ -409,6 +409,10 @@ void sunrpc_init_cache_detail(struct cache_detail *cd)
 	spin_unlock(&cache_list_lock);
 
 	/* start the cleaning process */
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("sunrpc: skipping cache_cleaner queue during Linx bring-up\n");
+	return;
+#endif
 	queue_delayed_work(system_power_efficient_wq, &cache_cleaner, 0);
 }
 EXPORT_SYMBOL_GPL(sunrpc_init_cache_detail);
@@ -522,6 +526,9 @@ static void do_cache_clean(struct work_struct *work)
 	else
 		delay = 5;
 
+#ifdef CONFIG_LINX_INTC
+	return;
+#endif
 	queue_delayed_work(system_power_efficient_wq, &cache_cleaner, delay);
 }
 

@@ -20,6 +20,8 @@ ifdef CONFIG_LINX
 CFLAGS_fork.o += -O0
 CFLAGS_workqueue.o += -O0
 CFLAGS_kthread.o += -O0
+# PCI-free Linx virt boot currently trips very early in insert_resource().
+CFLAGS_resource.o += -O0
 endif
 
 ifdef CONFIG_FUNCTION_TRACER

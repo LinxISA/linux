@@ -124,6 +124,8 @@
 
 #include <trace/events/sock.h>
 
+static const struct proto_ops inet_sockraw_ops;
+
 /* The inetsw table contains everything that inet_create needs to
  * build a new socket.
  */
@@ -317,11 +319,23 @@ lookup_protocol:
 	    !ns_capable(net->user_ns, CAP_NET_RAW))
 		goto out_rcu_unlock;
 
+#ifdef CONFIG_LINX_INTC
+	if (sock->type == SOCK_RAW && answer->prot != &raw_prot) {
+		pr_warn_once("Linx dbg: forcing raw_prot for SOCK_RAW inet_create path\n");
+		sock->ops = &inet_sockraw_ops;
+		answer_prot = &raw_prot;
+		answer_flags = INET_PROTOSW_REUSE;
+		rcu_read_unlock();
+		goto have_answer;
+	}
+#endif
+
 	sock->ops = answer->ops;
 	answer_prot = answer->prot;
 	answer_flags = answer->flags;
 	rcu_read_unlock();
 
+have_answer:
 	WARN_ON(!answer_prot->slab);
 
 	err = -ENOMEM;
@@ -356,9 +370,18 @@ lookup_protocol:
 
 	sock_init_data(sock, sk);
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up can transiently corrupt sk->sk_prot during the
+	 * sock_init_data() setup window. Reassert the protocol selected from the
+	 * inetsw table before the first protocol callbacks run.
+	 */
+	WRITE_ONCE(sk->sk_prot, answer_prot);
+#endif
+
 	sk->sk_destruct	   = inet_sock_destruct;
 	sk->sk_protocol	   = protocol;
-	sk->sk_backlog_rcv = sk->sk_prot->backlog_rcv;
+	sk->sk_backlog_rcv = answer_prot->backlog_rcv;
 	sk->sk_txrehash = READ_ONCE(net->core.sysctl_txrehash);
 
 	inet->uc_ttl	= -1;
@@ -377,13 +400,23 @@ lookup_protocol:
 		 */
 		inet->inet_sport = htons(inet->inet_num);
 		/* Add to protocol hash chains. */
-		err = sk->sk_prot->hash(sk);
+#ifdef CONFIG_LINX_INTC
+		pr_err("Linx dbg: inet_create before hash type=%d proto=%d answer_prot=%px sk_prot=%px hash=%ps init=%ps\n",
+		       sock->type, protocol, answer_prot, sk->sk_prot,
+		       answer_prot->hash, answer_prot->init);
+#endif
+		err = answer_prot->hash(sk);
 		if (err)
 			goto out_sk_release;
 	}
 
-	if (sk->sk_prot->init) {
-		err = sk->sk_prot->init(sk);
+	if (answer_prot->init) {
+#ifdef CONFIG_LINX_INTC
+		pr_err("Linx dbg: inet_create before init type=%d proto=%d answer_prot=%px sk_prot=%px init=%ps\n",
+		       sock->type, protocol, answer_prot, sk->sk_prot,
+		       answer_prot->init);
+#endif
+		err = answer_prot->init(sk);
 		if (err)
 			goto out_sk_release;
 	}
@@ -1889,6 +1922,16 @@ static int __init inet_init(void)
 	int rc;
 
 	sock_skb_cb_check_size(sizeof(struct inet_skb_parm));
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up currently mis-materializes some proto callback slots in
+	 * the static objects by the time inet_init() starts using them. Restore
+	 * the one we have concrete evidence for before proto_register()/
+	 * inet_create() rely on it.
+	 */
+	udp_prot.init = udp_init_sock;
+#endif
 
 	raw_hashinfo_init(&raw_v4_hashinfo);
 

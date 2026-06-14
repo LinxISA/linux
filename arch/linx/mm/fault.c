@@ -320,16 +320,21 @@ good_area:
 	 * the fault.
 	 */
 	fault = handle_mm_fault(vma, addr, flags, regs);
+	ssr_write(SSR_CW, 0xd001);
+	ssr_write(SSR_CW, 0xd100 | (fault & 0xffff));
 
 	/*
 	 * If we need to retry but a fatal signal is pending, handle the
 	 * signal first. We do not need to release the mmap_lock because it
 	 * would already be released in __lock_page_or_retry in mm/filemap.c.
 	 */
-	if (fault_signal_pending(fault, regs))
+	if (fault_signal_pending(fault, regs)) {
+		ssr_write(SSR_CW, 0xd002);
 		return;
+	}
 
 	if (unlikely((fault & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))) {
+		ssr_write(SSR_CW, 0xd003);
 		flags |= FAULT_FLAG_TRIED;
 
 		/*
@@ -341,12 +346,16 @@ good_area:
 	}
 
 	mmap_read_unlock(mm);
+	ssr_write(SSR_CW, 0xd004);
 
 	if (unlikely(fault & VM_FAULT_ERROR)) {
+		ssr_write(SSR_CW, 0xd005);
+		ssr_write(SSR_CW, 0xd200 | (fault & 0xffff));
 		tsk->thread.bad_cause = cause;
 		mm_fault_error(regs, addr, fault);
 		return;
 	}
+	ssr_write(SSR_CW, 0xd006);
 	return;
 }
 NOKPROBE_SYMBOL(do_page_fault);

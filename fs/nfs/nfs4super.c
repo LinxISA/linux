@@ -262,6 +262,10 @@ int nfs4_get_referral_tree(struct fs_context *fc)
 
 static int __init init_nfs_v4(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("nfs: skipping init_nfs_v4 during Linx bring-up\n");
+	return 0;
+#endif
 	int err;
 
 	err = nfs_dns_resolver_init();

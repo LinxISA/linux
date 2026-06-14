@@ -466,6 +466,15 @@ static int con_unify_unimap(struct vc_data *conp, struct uni_pagedict *dict1)
 	struct uni_pagedict *dict2;
 	unsigned int cons, d, r;
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up still has VT console-state issues in the global console
+	 * walk used only for unimap deduplication. Skip the dedup pass and keep
+	 * the caller's freshly built map instead.
+	 */
+	return 0;
+#endif
+
 	for (cons = 0; cons < MAX_NR_CONSOLES; cons++) {
 		if (!vc_cons_allocated(cons))
 			continue;
@@ -897,4 +906,3 @@ console_map_init(void)
 		if (vc_cons_allocated(i) && !*vc_cons[i].d->uni_pagedict_loc)
 			con_set_default_unimap(vc_cons[i].d);
 }
-

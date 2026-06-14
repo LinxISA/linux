@@ -32,6 +32,11 @@ obj-y			+= test/
 
 ccflags-$(CONFIG_DEBUG_DRIVER) := -DDEBUG
 
+ifdef CONFIG_LINX
+# Linx no-PCI bring-up currently trips in clear_cpu_topology().
+CFLAGS_arch_topology.o += -O0
+endif
+
 # define_trace.h needs to know how to find our header
 CFLAGS_trace.o		:= -I$(src)
 obj-$(CONFIG_TRACING)	+= trace.o

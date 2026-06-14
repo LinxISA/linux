@@ -3241,12 +3241,17 @@ void __meminit kcompactd_run(int nid)
 	if (pgdat->kcompactd)
 		return;
 
+	pr_err("Linx dbg: kcompactd_run(%d) before create\n", nid);
 	pgdat->kcompactd = kthread_create_on_node(kcompactd, pgdat, nid, "kcompactd%d", nid);
+	pr_err("Linx dbg: kcompactd_run(%d) after create task=%px err=%ld\n",
+	       nid, pgdat->kcompactd, IS_ERR(pgdat->kcompactd) ? PTR_ERR(pgdat->kcompactd) : 0L);
 	if (IS_ERR(pgdat->kcompactd)) {
 		pr_err("Failed to start kcompactd on node %d\n", nid);
 		pgdat->kcompactd = NULL;
 	} else {
+		pr_err("Linx dbg: kcompactd_run(%d) before wake\n", nid);
 		wake_up_process(pgdat->kcompactd);
+		pr_err("Linx dbg: kcompactd_run(%d) after wake\n", nid);
 	}
 }
 

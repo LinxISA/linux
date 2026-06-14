@@ -156,7 +156,21 @@ static struct platform_driver simple_pm_bus_driver = {
 	},
 };
 
-module_platform_driver(simple_pm_bus_driver);
+static int __init simple_pm_bus_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("simple-pm-bus: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&simple_pm_bus_driver);
+}
+module_init(simple_pm_bus_driver_init);
+
+static void __exit simple_pm_bus_driver_exit(void)
+{
+	platform_driver_unregister(&simple_pm_bus_driver);
+}
+module_exit(simple_pm_bus_driver_exit);
 
 MODULE_DESCRIPTION("Simple Power-Managed Bus Driver");
 MODULE_AUTHOR("Geert Uytterhoeven <geert+renesas@glider.be>");

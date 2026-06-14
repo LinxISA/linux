@@ -8,20 +8,6 @@
 #include "vma_internal.h"
 #include "vma.h"
 
-#ifdef CONFIG_LINX
-static __always_inline void linx_vma_mark(char c)
-{
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)'~';
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-	barrier();
-}
-#else
-static __always_inline void linx_vma_mark(char c)
-{
-	(void)c;
-}
-#endif
-
 /* SLAB cache for vm_area_struct structures */
 static struct kmem_cache *vm_area_cachep;
 
@@ -33,12 +19,10 @@ void __init vma_state_init(void)
 		.sheaf_capacity = 32,
 	};
 
-	linx_vma_mark('u');
 	vm_area_cachep = kmem_cache_create("vm_area_struct",
 			sizeof(struct vm_area_struct), &args,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_TYPESAFE_BY_RCU|
 			SLAB_ACCOUNT);
-	linx_vma_mark('v');
 }
 
 struct vm_area_struct *vm_area_alloc(struct mm_struct *mm)

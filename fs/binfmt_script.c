@@ -148,6 +148,11 @@ static int __init init_script_binfmt(void)
 	return 0;
 }
 
+int __init linx_init_script_binfmt(void)
+{
+	return init_script_binfmt();
+}
+
 static void __exit exit_script_binfmt(void)
 {
 	unregister_binfmt(&script_format);

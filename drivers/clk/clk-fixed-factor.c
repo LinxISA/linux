@@ -3,6 +3,7 @@
  * Copyright (C) 2011 Sascha Hauer, Pengutronix <s.hauer@pengutronix.de>
  */
 #include <linux/module.h>
+#include <linux/init.h>
 #include <linux/clk-provider.h>
 #include <linux/slab.h>
 #include <linux/err.h>
@@ -420,5 +421,19 @@ static struct platform_driver of_fixed_factor_clk_driver = {
 	.probe = of_fixed_factor_clk_probe,
 	.remove = of_fixed_factor_clk_remove,
 };
-builtin_platform_driver(of_fixed_factor_clk_driver);
+static int __init of_fixed_factor_clk_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("clk: skipping fixed-factor-clock registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&of_fixed_factor_clk_driver);
+}
+device_initcall(of_fixed_factor_clk_driver_init);
+
+static void __exit of_fixed_factor_clk_driver_exit(void)
+{
+	platform_driver_unregister(&of_fixed_factor_clk_driver);
+}
+module_exit(of_fixed_factor_clk_driver_exit);
 #endif

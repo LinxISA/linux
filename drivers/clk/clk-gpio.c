@@ -15,6 +15,7 @@
 #include <linux/gpio/consumer.h>
 #include <linux/err.h>
 #include <linux/device.h>
+#include <linux/init.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
@@ -239,7 +240,21 @@ static struct platform_driver gpio_clk_driver = {
 		.of_match_table = gpio_clk_match_table,
 	},
 };
-builtin_platform_driver(gpio_clk_driver);
+static int __init gpio_clk_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("clk: skipping gpio clock registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&gpio_clk_driver);
+}
+device_initcall(gpio_clk_driver_init);
+
+static void __exit gpio_clk_driver_exit(void)
+{
+	platform_driver_unregister(&gpio_clk_driver);
+}
+module_exit(gpio_clk_driver_exit);
 
 /**
  * DOC: gated fixed clock, controlled with a gpio output and a regulator
@@ -423,4 +438,18 @@ static struct platform_driver gated_fixed_clk_driver = {
 		.of_match_table = gated_fixed_clk_match_table,
 	},
 };
-builtin_platform_driver(gated_fixed_clk_driver);
+static int __init gated_fixed_clk_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("clk: skipping gated-fixed-clock registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&gated_fixed_clk_driver);
+}
+device_initcall(gated_fixed_clk_driver_init);
+
+static void __exit gated_fixed_clk_driver_exit(void)
+{
+	platform_driver_unregister(&gated_fixed_clk_driver);
+}
+module_exit(gated_fixed_clk_driver_exit);

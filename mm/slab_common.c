@@ -38,22 +38,6 @@
 #define CREATE_TRACE_POINTS
 #include <trace/events/kmem.h>
 
-#ifdef CONFIG_LINX
-#define LINX_VIRT_UART_BASE 0x10000000UL
-
-static __always_inline void linx_slab_mark(const char *tag)
-{
-	while (*tag)
-		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-			(unsigned char)*tag++;
-}
-#else
-static __always_inline void linx_slab_mark(const char *tag)
-{
-	(void)tag;
-}
-#endif
-
 enum slab_state slab_state;
 LIST_HEAD(slab_caches);
 DEFINE_MUTEX(slab_mutex);
@@ -254,8 +238,10 @@ static struct kmem_cache *create_cache(const char *name,
 		goto out;
 
 	err = -ENOMEM;
-	linx_slab_mark("CC0");
-	if (slab_state <= UP) {
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: create_cache vmap_area state=%d before meta\n",
+		       slab_state);
+	if (slab_state < UP) {
 		s = memblock_alloc(sizeof(*s), SMP_CACHE_BYTES);
 		if (s)
 			memset(s, 0, sizeof(*s));
@@ -265,12 +251,13 @@ static struct kmem_cache *create_cache(const char *name,
 	}
 	if (!s)
 		goto out;
-	linx_slab_mark("CC1");
-	linx_slab_mark("CC2");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: create_cache vmap_area after meta s=%px\n", s);
 	err = do_kmem_cache_create(s, name, object_size, args, flags);
 	if (err)
 		goto out_free_cache;
-	linx_slab_mark("CC3");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: create_cache vmap_area after do create\n");
 
 	s->refcount = 1;
 	list_add(&s->list, &slab_caches);
@@ -335,15 +322,18 @@ struct kmem_cache *__kmem_cache_create_args(const char *name,
 	flags &= ~SLAB_DEBUG_FLAGS;
 #endif
 
-	linx_slab_mark("KC0");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area before lock\n");
 	mutex_lock(&slab_mutex);
-	linx_slab_mark("KC1");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area after lock\n");
 
 	err = kmem_cache_sanity_check(name, object_size);
 	if (err) {
 		goto out_unlock;
 	}
-	linx_slab_mark("KC2");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area after sanity\n");
 
 	if (flags & ~SLAB_FLAGS_PERMITTED) {
 		err = -EINVAL;
@@ -370,20 +360,24 @@ struct kmem_cache *__kmem_cache_create_args(const char *name,
 	}
 
 	args->align = calculate_alignment(flags, args->align, object_size);
-	linx_slab_mark("KC3");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area before create_cache\n");
 	s = create_cache(cache_name, object_size, args, flags);
-	linx_slab_mark("KC4");
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area after create_cache s=%px\n",
+		       s);
 	if (IS_ERR(s)) {
 		err = PTR_ERR(s);
 		kfree_const(cache_name);
 	}
 
 out_unlock:
-	linx_slab_mark("KC5");
 	mutex_unlock(&slab_mutex);
+	if (!strcmp(name, "vmap_area"))
+		pr_err("Linx dbg: kmem_cache_create vmap_area after unlock err=%d\n",
+		       err);
 
 	if (err) {
-		linx_slab_mark("KCE");
 		if (flags & SLAB_PANIC)
 			panic("%s: Failed to create slab '%s'. Error %d\n",
 				__func__, name, err);

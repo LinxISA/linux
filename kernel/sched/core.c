@@ -5423,10 +5423,19 @@ context_switch(struct rq *rq, struct task_struct *prev,
 #ifdef CONFIG_LINX
 	do {
 		static int dbg_left = 16;
+		bool trace_kthreadd = prev->pid == 1 || next->pid == 1 ||
+				      prev->pid == 2 || next->pid == 2;
 
-		if (dbg_left <= 0)
+		if (!trace_kthreadd && dbg_left <= 0)
 			break;
-		dbg_left--;
+		if (!trace_kthreadd)
+			dbg_left--;
+		if (trace_kthreadd) {
+			pr_err("Linx dbg: context_switch prev=%px(pid=%d) next=%px(pid=%d) nsp=%lx nra=%lx\n",
+			       prev, prev->pid, next, next->pid,
+			       next->thread.sp, next->thread.ra);
+			break;
+		}
 		linx_debug_uart_puts("\n[linx switch] prev=");
 		linx_debug_uart_puthex_ulong((unsigned long)prev);
 		linx_debug_uart_puts(" next=");
@@ -5440,9 +5449,8 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		linx_debug_uart_puts("\n");
 	} while (0);
 #endif
-
-	/* Here we just switch the register state and the stack. */
-	switch_to(prev, next, prev);
+		/* Here we just switch the register state and the stack. */
+		switch_to(prev, next, prev);
 	barrier();
 
 	return finish_task_switch(prev);

@@ -134,6 +134,8 @@ static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
 						 const char *name, bool kthread);
 static noinline void linx_call_void_indirect(void);
 static void (*volatile linx_boot_void_call_target)(void);
+int __init linx_init_elf_binfmt(void);
+int __init linx_init_script_binfmt(void);
 #endif
 
 #ifdef CONFIG_LINX
@@ -2164,12 +2166,6 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	linx_boot_mark('I');
-	{
-		unsigned long linx_stack_marker = 0;
-
-		pr_err("Linx dbg: kernel_init started current=%px stack=%px\n",
-		       current, &linx_stack_marker);
-	}
 
 	/*
 	 * Wait until kthreadd is all set-up.
@@ -2281,7 +2277,6 @@ void __init console_on_rootfs(void)
 static noinline void __init kernel_init_freeable(void)
 {
 	linx_boot_mark('f');
-	pr_err("Linx dbg: kernel_init_freeable start\n");
 	/* Now the scheduler is fully set up and can do blocking allocations */
 	gfp_allowed_mask = __GFP_BITS_MASK;
 
@@ -2305,42 +2300,40 @@ static noinline void __init kernel_init_freeable(void)
 	yield();
 #endif
 
-	pr_err("Linx dbg: kernel_init_freeable before workqueue_init\n");
 	workqueue_init();
-	pr_err("Linx dbg: workqueue_init done\n");
 
 	init_mm_internals();
-	pr_err("Linx dbg: init_mm_internals done\n");
 
 	do_pre_smp_initcalls();
-	pr_err("Linx dbg: do_pre_smp_initcalls done\n");
 	lockup_detector_init();
-	pr_err("Linx dbg: lockup_detector_init done\n");
 
 	smp_init();
-	pr_err("Linx dbg: smp_init done\n");
 	sched_init_smp();
-	pr_err("Linx dbg: sched_init_smp done\n");
 
 	workqueue_init_topology();
-	pr_err("Linx dbg: workqueue_init_topology done\n");
 	async_init();
-	pr_err("Linx dbg: async_init done\n");
 	padata_init();
-	pr_err("Linx dbg: padata_init done\n");
 	page_alloc_init_late();
-	pr_err("Linx dbg: page_alloc_init_late done\n");
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up: bootstrap only the minimum userspace prerequisites
+	 * here instead of waiting for the broad late initcall surface.
+	 */
+	linx_populate_rootfs_now();
+	linx_init_elf_binfmt();
+	linx_init_script_binfmt();
+#else
 	do_basic_setup();
+#endif
 	linx_boot_mark('B');
-	pr_err("Linx dbg: do_basic_setup done\n");
 
+#ifndef CONFIG_LINX_INTC
 	kunit_run_all_tests();
-	pr_err("Linx dbg: kunit_run_all_tests done\n");
+#endif
 
 	wait_for_initramfs();
 	linx_boot_mark('R');
-	pr_err("Linx dbg: wait_for_initramfs done\n");
 #ifdef CONFIG_LINX
 	/*
 	 * LinxISA bring-up: let userspace open its own console once /dev is
@@ -2356,15 +2349,11 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 	int ramdisk_command_access;
 	ramdisk_command_access = init_eaccess(ramdisk_execute_command);
-	pr_err("Linx dbg: init_eaccess(%s)=%d\n",
-	       ramdisk_execute_command ? ramdisk_execute_command : "<null>",
-	       ramdisk_command_access);
 	if (ramdisk_command_access != 0) {
 		pr_warn("check access for rdinit=%s failed: %i, ignoring\n",
 			ramdisk_execute_command, ramdisk_command_access);
 		ramdisk_execute_command = NULL;
 		prepare_namespace();
-		pr_err("Linx dbg: prepare_namespace done\n");
 	}
 	linx_boot_mark('N');
 
@@ -2377,7 +2366,8 @@ static noinline void __init kernel_init_freeable(void)
 	 * and default modules
 	 */
 
+#ifndef CONFIG_LINX_INTC
 	integrity_load_keys();
-	pr_err("Linx dbg: integrity_load_keys done\n");
+#endif
 	linx_boot_mark('K');
 }

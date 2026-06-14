@@ -661,6 +661,18 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	};
 	struct iov_iter iter;
 	ssize_t ret;
+	bool linx_trace = false;
+
+#ifdef CONFIG_LINX_INTC
+	if (file && file->f_path.dentry) {
+		const char *name = file->f_path.dentry->d_name.name;
+		linx_trace = !strcmp(name, "busybox") || !strcmp(name, "init");
+	}
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write enter file=%s count=%zu iov_len=%zu pos=%lld\n",
+		       file->f_path.dentry->d_name.name, count, iov.iov_len,
+		       pos ? *pos : 0);
+#endif
 
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
@@ -670,6 +682,13 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	}
 #endif
 	iov_iter_kvec(&iter, ITER_SOURCE, &iov, 1, iov.iov_len);
+#ifdef CONFIG_LINX_INTC
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write iter file=%s count=%zu type=%u write_iter=%px write=%px\n",
+		       file->f_path.dentry->d_name.name, iter.count, iter.iter_type,
+		       file->f_op ? file->f_op->write_iter : NULL,
+		       file->f_op ? file->f_op->write : NULL);
+#endif
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
 	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
@@ -680,6 +699,11 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	}
 #endif
 	ret = __kernel_write_iter(file, &iter, pos);
+#ifdef CONFIG_LINX_INTC
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write exit file=%s ret=%zd pos=%lld\n",
+		       file->f_path.dentry->d_name.name, ret, pos ? *pos : 0);
+#endif
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
 	    !strcmp(file->f_path.dentry->d_name.name, "init")) {

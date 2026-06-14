@@ -858,6 +858,10 @@ static void get_boottime_timespec(struct timespec64 *tp)
  */
 static int __init alarmtimer_init(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("alarmtimer: skipping alarmtimer_init during Linx bring-up\n");
+	return 0;
+#endif
 	int error;
 	int i;
 

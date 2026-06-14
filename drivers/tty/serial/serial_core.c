@@ -3123,7 +3123,11 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	 * immediately after.
 	 */
 	tty_port_link_device(port, drv->tty_driver, uport->line);
+	pr_err("Linx dbg: serial_core_add_one_port before uart_configure_port line=%u\n",
+	       uport->line);
 	uart_configure_port(drv, state, uport);
+	pr_err("Linx dbg: serial_core_add_one_port after uart_configure_port line=%u type=%u\n",
+	       uport->line, uport->type);
 
 	port->console = uart_console(uport);
 
@@ -3143,13 +3147,22 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	/* Ensure serdev drivers can call serdev_device_open() right away */
 	uport->flags &= ~UPF_DEAD;
 
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: serial_core_add_one_port skipping tty register for Linx bring-up line=%u\n",
+	       uport->line);
+	return 0;
+#endif
+
 	/*
 	 * Register the port whether it's detected or not.  This allows
 	 * setserial to be used to alter this port's parameters.
 	 */
 	tty_dev = tty_port_register_device_attr_serdev(port, drv->tty_driver,
-			uport->line, uport->dev, &uport->port_dev->dev, port,
-			uport->tty_groups);
+			uport->line, uport->dev,
+			uport->port_dev ? &uport->port_dev->dev : NULL,
+			port, uport->tty_groups);
+	pr_err("Linx dbg: serial_core_add_one_port after tty register line=%u err=%ld\n",
+	       uport->line, IS_ERR(tty_dev) ? PTR_ERR(tty_dev) : 0L);
 	if (!IS_ERR(tty_dev)) {
 		device_set_wakeup_capable(tty_dev, 1);
 	} else {
@@ -3327,6 +3340,10 @@ int serial_core_register_port(struct uart_driver *drv, struct uart_port *port)
 	 */
 	port->flags |= UPF_DEAD;
 
+#ifdef CONFIG_LINX_INTC
+	return serial_core_add_one_port(drv, port);
+#endif
+
 	/* Inititalize a serial core controller device if needed */
 	ctrl_dev = serial_core_ctrl_find(drv, port->dev, port->ctrl_id);
 	if (!ctrl_dev) {
@@ -3370,6 +3387,14 @@ err_unregister_ctrl_dev:
  */
 void serial_core_unregister_port(struct uart_driver *drv, struct uart_port *port)
 {
+#ifdef CONFIG_LINX_INTC
+	mutex_lock(&port_mutex);
+	port->flags |= UPF_DEAD;
+	serial_core_remove_one_port(drv, port);
+	mutex_unlock(&port_mutex);
+	return;
+#endif
+
 	struct device *phys_dev = port->dev;
 	struct serial_port_device *port_dev = port->port_dev;
 	struct serial_ctrl_device *ctrl_dev = serial_core_get_ctrl_dev(port_dev);

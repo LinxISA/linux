@@ -221,50 +221,6 @@ ATOMIC_OPS(xor, xor, i)
 #undef ATOMIC_FETCH_OP
 #undef ATOMIC_OP_RETURN
 
-#define ASM_ATOMIC_FETCH_ADD_UNLESS(type, prev, ptr, a, u, tmp)	\
-	__asm__ __volatile__ (					\
-		"1:					\n"	\
-		"BSTART.sys fall	\n"	\
-			"lr." #type " [%[ptr]], -> %[prev]\n"	\
-		"BSTART.std cond, 4f\n"					\
-			"setc.eq %[u], %[prev]		\n"	\
-		"2:					\n"	\
-		"BSTART.sys fall\n"	\
-			"add %[prev], %[a], -> t\n"	\
-			"sc." #type ".rl t#1, [%[ptr]], -> %[tmp]\n"	\
-		"BSTART.std cond, 1b\n"	\
-			"setc.nei %[tmp], 0		\n"	\
-		ASM_FULL_BARRIER_BLOCK				\
-		"4:					\n"	\
-		: [prev] "=&r" (prev), [tmp] "=&r" (tmp)				\
-		: [ptr] "r" (ptr), [a] "r" (a), [u] "r" (u)	\
-		: "memory")
-
-/* This is required to provide a full barrier on success. */
-static __always_inline int arch_atomic_fetch_add_unless(atomic_t *v, int a, int u)
-{
-	int prev, tmp;
-	__typeof__(&v->counter) ptr = &v->counter;
-
-	ASM_ATOMIC_FETCH_ADD_UNLESS(w, prev, ptr, a, u, tmp);
-
-	return prev;
-}
-#define arch_atomic_fetch_add_unless arch_atomic_fetch_add_unless
-
-#ifndef CONFIG_GENERIC_ATOMIC64
-static __always_inline s64 arch_atomic64_fetch_add_unless(atomic64_t *v, s64 a, s64 u)
-{
-	s64 prev, tmp;
-	__typeof__(&v->counter) ptr = &v->counter;
-
-	ASM_ATOMIC_FETCH_ADD_UNLESS(d, prev, ptr, a, u, tmp);
-
-	return prev;
-}
-#define arch_atomic64_fetch_add_unless arch_atomic64_fetch_add_unless
-#endif
-
 /*
  * atomic_{cmp,}xchg is required to have exactly the same ordering semantics as
  * {cmp,}xchg and the operations that return, so they need a full barrier.

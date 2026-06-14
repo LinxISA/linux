@@ -52,6 +52,9 @@
 #include <linux/pagemap.h>
 #include <linux/memremap.h>
 #include <linux/kmsan.h>
+#ifdef CONFIG_LINX_INTC
+#include <asm/ssr.h>
+#endif
 #include <linux/ksm.h>
 #include <linux/rmap.h>
 #include <linux/export.h>
@@ -5714,10 +5717,16 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 		return ret;
 
 	ret = __do_fault(vmf);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe110 | (ret & 0xffff));
+#endif
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
 		return ret;
 
 	ret |= finish_fault(vmf);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe120 | (ret & 0xffff));
+#endif
 	folio = page_folio(vmf->page);
 	folio_unlock(folio);
 	if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
@@ -5852,6 +5861,10 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 		ret = do_cow_fault(vmf);
 	else
 		ret = do_shared_fault(vmf);
+
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe130 | (ret & 0xffff));
+#endif
 
 	/* preallocated pagetable is unused: free it */
 	if (vmf->prealloc_pte) {
@@ -6475,6 +6488,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	vm_fault_t ret;
 	bool is_droppable;
 
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe001);
+#endif
+
 	__set_current_state(TASK_RUNNING);
 
 	ret = sanitize_fault_flags(vma, &flags);
@@ -6489,6 +6506,10 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 	}
 
 	is_droppable = !!(vma->vm_flags & VM_DROPPABLE);
+
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe002);
+#endif
 
 	/*
 	 * Enable the memcg OOM handling for faults triggered in user
@@ -6528,6 +6549,9 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 			mem_cgroup_oom_synchronize(false);
 	}
 out:
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xe003);
+#endif
 	mm_account_fault(mm, regs, address, flags, ret);
 
 	return ret;

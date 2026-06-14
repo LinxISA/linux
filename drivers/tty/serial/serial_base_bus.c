@@ -252,19 +252,32 @@ static int serial_base_init(void)
 {
 	int ret;
 
+#ifdef CONFIG_LINX_INTC
+	serial_base_initialized = true;
+	pr_err("Linx dbg: serial_base_init skipped for Linx bring-up\n");
+	return 0;
+#endif
+
+	pr_err("Linx dbg: serial_base_init before bus_register\n");
 	ret = bus_register(&serial_base_bus_type);
+	pr_err("Linx dbg: serial_base_init after bus_register ret=%d\n", ret);
 	if (ret)
 		return ret;
 
+	pr_err("Linx dbg: serial_base_init before ctrl_init\n");
 	ret = serial_base_ctrl_init();
+	pr_err("Linx dbg: serial_base_init after ctrl_init ret=%d\n", ret);
 	if (ret)
 		goto err_bus_unregister;
 
+	pr_err("Linx dbg: serial_base_init before port_init\n");
 	ret = serial_base_port_init();
+	pr_err("Linx dbg: serial_base_init after port_init ret=%d\n", ret);
 	if (ret)
 		goto err_ctrl_exit;
 
 	serial_base_initialized = true;
+	pr_err("Linx dbg: serial_base_init done\n");
 
 	return 0;
 

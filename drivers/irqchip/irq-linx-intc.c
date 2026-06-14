@@ -464,9 +464,14 @@ void lxic_handle_irq(struct irq_desc *desc)
 			if(!virq)
 				pr_info("cannot find virq for vector 0x%lx on cpu 0x%x\n", vector, cpu);
 
+#ifdef CONFIG_PCI
 			err = generic_handle_domain_irq(handler->priv->base_domain, virq);
 			if (unlikely(err))
 				pr_warn_ratelimited("msi base_domain can't find mapping for vector %lu\n", vector);
+#else
+			pr_warn_ratelimited("msi vector %lu received with PCI disabled\n", vector);
+			break;
+#endif
 		}
 	}
 	chained_irq_exit(chip, desc);
@@ -514,6 +519,7 @@ static int lxic_get_msi_msg(unsigned int cpu, unsigned int vector, struct msi_ms
 	return 0;
 }
 
+#ifdef CONFIG_PCI
 static void lxic_irq_compose_msi_msg(struct irq_data *d,
 				      struct msi_msg *msg)
 {
@@ -661,11 +667,20 @@ static int lxic_allocate_msi_domains(struct lxic_priv *priv, struct irq_domain *
 
 	return 0;
 }
+#else
+static int lxic_allocate_msi_domains(struct lxic_priv *priv, struct irq_domain *parent,
+				     struct fwnode_handle *fwnode)
+{
+	return 0;
+}
+#endif
 
 void irq_domain_cleanup(struct lxic_priv *priv)
 {
+#ifdef CONFIG_PCI
 	irq_domain_remove(priv->pci_domain);
 	irq_domain_remove(priv->base_domain);
+#endif
 	irq_domain_remove(priv->irqdomain);
 }
 

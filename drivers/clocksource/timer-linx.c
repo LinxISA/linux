@@ -25,6 +25,8 @@
 
 static unsigned long linx_timer_freq;
 static unsigned int linx_timer_irq;
+static int linx_dbg_next_event_count;
+static int linx_dbg_interrupt_count;
 
 static u64 linx_clocksource_rdtime(struct clocksource *cs)
 {
@@ -47,6 +49,12 @@ static struct clocksource linx_clocksource = {
 static int linx_clock_next_event(unsigned long delta,
 				   struct clock_event_device *ce)
 {
+	if (linx_dbg_next_event_count < 8) {
+		pr_err("Linx dbg: timer next_event delta=%lu now=%llu irq=%u count=%d\n",
+		       delta, get_cycles64(), linx_timer_irq,
+		       linx_dbg_next_event_count);
+		linx_dbg_next_event_count++;
+	}
 	ssr_set(SSR_A1_ECONFIG, BIT(ECONFIG_TIMER));
 	ssr_write(SSR_TIMER_TIMECMP, get_cycles64() + delta);
 	return 0;
@@ -82,6 +90,11 @@ static irqreturn_t linx_timer_interrupt(int irq, void *dev_id)
 {
 	struct clock_event_device *evdev = this_cpu_ptr(&linx_clock_event);
 
+	if (linx_dbg_interrupt_count < 8) {
+		pr_err("Linx dbg: timer irq irq=%d now=%llu count=%d\n",
+		       irq, get_cycles64(), linx_dbg_interrupt_count);
+		linx_dbg_interrupt_count++;
+	}
 	ssr_clear(SSR_A1_ECONFIG, BIT(ECONFIG_TIMER));
 	evdev->event_handler(evdev);
 

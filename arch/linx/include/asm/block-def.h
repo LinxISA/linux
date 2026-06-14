@@ -303,10 +303,10 @@
  */
 .macro block_next_indcall symbol
 	bstart.std icall
+	setret 2f, -> ra
 	1: addtpc %tpcrel_hi(\symbol), -> t
 	addi t#1, %tpcrel_lo(1b), -> t
 	setc.tgt t#1
-	setret 2f, -> ra
 	bstop
 	2:
 .endm
@@ -316,8 +316,8 @@
  */
 .macro block_next_indcall_reg rs
 	bstart.std icall
-	setc.tgt \rs
 	setret 2f, -> ra
+	setc.tgt \rs
 	bstop
 	2:
 .endm

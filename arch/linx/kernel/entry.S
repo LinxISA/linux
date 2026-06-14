@@ -49,29 +49,17 @@
 ENTRY(handle_exception)
     /*
 	 * Distinguish user-origin vs kernel-origin traps from the saved source
-	 * ACR in SSR_ECSTATE. ETEMP is still used to recover the preserved user
-	 * thread pointer, but it is not reliable enough to classify the source
-	 * context during early bring-up.
+	 * ACR in SSR_ECSTATE. QEMU currently commits the conditional BSTART at
+	 * the next block header, so the fallthrough path must be the user-origin
+	 * case and the branch target must skip over it to the kernel-origin
+	 * prologue.
 	 */
-    BSTART.std cond, from_user
+    BSTART.std cond, from_kernel
 	hl.ssrget SSR_ECSTATE, -> t
 	andi t#1, CSTATE_ACR_MASK, -> t
 	ssrget SSR_CSTATE, -> u
 	andi u#1, CSTATE_ACR_MASK, -> u
-	setc.ne t#1, u#1
-
-from_kernel:
-/*
- * current state:
- *	x1 hold (0)
- *	tp hold (thread info)
- *	etemp hold (old x1)
- *	sp hold (kernel sp)
- */
-    BSTART.sys fall
-	ssrswap x1, SSR_TP, -> x1
-	sdi sp, [x1, TASK_TI_KERNEL_SP]
-	sdi sp, [x1, TASK_TI_USER_SP]
+	setc.eq t#1, u#1
 
 from_user:
 /*
@@ -85,6 +73,20 @@ from_user:
 	ssrswap x1, SSR_A0_ETEMP, -> x1
     sdi sp, [x1, TASK_TI_USER_SP]
 	ldi [x1, TASK_TI_KERNEL_SP], -> sp
+
+from_kernel:
+/*
+ * current state:
+ *	x1 hold (0)
+ *	tp hold (thread info)
+ *	etemp hold (old x1)
+ *	sp hold (kernel sp)
+ */
+    BSTART.sys fall
+	ssrswap x1, SSR_TP, -> x1
+	sdi sp, [x1, TASK_TI_KERNEL_SP]
+	sdi sp, [x1, TASK_TI_USER_SP]
+	block_next_direct _save_context
 
 _save_context:
 /*
@@ -190,21 +192,29 @@ after_save_bstate:
 /* construct PT_TP(sp) */
  /*
   * current state:
-  * tp hold(thread info)
-  *	etemp hold(0/tls)
+  *	tp holds thread_info
+  *	etemp holds user tls for user-origin traps, but interrupted x1 for
+  *	kernel-origin traps.  Use the saved source ACR to decide which value
+  *	must be restored into SSR_TP.
   */
-	BSTART.std cond, ETEMP_IS_TLS
-	hl.ssrget SSR_ETEMP, -> s5
-	setc.nei s5, 0
+	BSTART.std cond, PT_TP_FROM_KERNEL
+	andi s1, CSTATE_ACR_MASK, -> t
+	addi zero, CSTATE_ACR2, -> u
+	setc.ne t#1, u#1
 
-ETEMP_IS_ZERO:
+PT_TP_FROM_USER:
+	BSTART.sys fall
+	hl.ssrget SSR_ETEMP, -> s5
+	block_next_direct PT_TP_READY
+
+PT_TP_FROM_KERNEL:
 	BSTART.std fall
 	ssrget SSR_TP, -> s5
-ETEMP_IS_TLS:
+
+PT_TP_READY:
  /*
-  * current state:
-  * etemp hold(0/tls)
-  *	s5 hold(thread info/tls), same as the old tp, so we put it in PT_TP(sp)
+  * s5 holds thread_info for kernel-origin traps or user tls for user-origin
+  * traps, matching the value that restore_all must put back into SSR_TP.
   */
 	BSTART.sys fall
 	sdi s5, [sp, PT_TP] /* pt_regs(tp) keeps the old tp, which can be restored directly */
@@ -366,6 +376,11 @@ ret_from_syscall_rejected:
 	block_next_bnez_tif _TIF_SYSCALL_WORK, handle_syscall_trace_exit
 
 ret_from_exception:
+#ifdef CONFIG_LINX_INTC
+	BSTART.std fall
+	addi sp, 0, -> a0
+	block_next_indcall linx_trace_ret_from_exception
+#endif
 	/* clear SSR_CSTATE.I */
 	/* disable interrupt */
 	BSTART.sys fall

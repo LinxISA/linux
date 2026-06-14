@@ -63,20 +63,6 @@
 #define arch_mmap_check(addr, len, flags)	(0)
 #endif
 
-#ifdef CONFIG_LINX
-static __always_inline void linx_mmap_mark(char c)
-{
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)'~';
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-	barrier();
-}
-#else
-static __always_inline void linx_mmap_mark(char c)
-{
-	(void)c;
-}
-#endif
-
 #ifdef CONFIG_HAVE_ARCH_MMAP_RND_BITS
 const int mmap_rnd_bits_min = CONFIG_ARCH_MMAP_RND_BITS_MIN;
 int mmap_rnd_bits_max __ro_after_init = CONFIG_ARCH_MMAP_RND_BITS_MAX;
@@ -1589,16 +1575,12 @@ void __init mmap_init(void)
 {
 	int ret;
 
-	linx_mmap_mark('h');
 	ret = percpu_counter_init(&vm_committed_as, 0, GFP_KERNEL);
 	VM_BUG_ON(ret);
-	linx_mmap_mark('i');
 #ifdef CONFIG_SYSCTL
 	register_sysctl_init("vm", mmap_table);
 #endif
-	linx_mmap_mark('j');
 	vma_state_init();
-	linx_mmap_mark('k');
 }
 
 /*

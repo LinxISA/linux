@@ -32,14 +32,9 @@
 #include <asm/numa.h>
 #include <asm/ssr.h>
 
-#define LINX_BOOT_TRACE_MMIO ((void __iomem *)(unsigned long)0x10000000)
-
-#define linx_boot_trace_ch(_ch) writeb((_ch), LINX_BOOT_TRACE_MMIO)
-
 #include "../kernel/head.h"
 
 extern void handle_exception(void);
-extern void memblock_free_all(void);
 extern unsigned long max_mapnr;
 struct task_struct;
 extern struct task_struct init_task;
@@ -141,7 +136,6 @@ void __init mem_init(void)
 	swiotlb_init(swiotlb, SWIOTLB_VERBOSE);
 #endif
 	high_memory = (void *)(__va(PFN_PHYS(max_low_pfn)));
-	memblock_free_all();
 
 	print_vm_layout();
 }
@@ -1335,14 +1329,12 @@ static void __init reserve_crashkernel(void)
 
 void __init paging_init(void)
 {
-	linx_boot_trace_ch('P');
 	setup_bootmem();
 	setup_vm_final();
 }
 
 void __init misc_mem_init(void)
 {
-	linx_boot_trace_ch('M');
 	early_memtest(min_low_pfn << PAGE_SHIFT, max_low_pfn << PAGE_SHIFT);
 	arch_numa_init();
 	sparse_init();

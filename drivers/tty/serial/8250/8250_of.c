@@ -367,7 +367,15 @@ static struct platform_driver of_platform_serial_driver = {
 	.remove = of_platform_serial_remove,
 };
 
-module_platform_driver(of_platform_serial_driver);
+static int __init of_platform_serial_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_info("of-serial: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&of_platform_serial_driver);
+}
+module_init(of_platform_serial_driver_init);
 
 MODULE_AUTHOR("Arnd Bergmann <arnd@arndb.de>");
 MODULE_LICENSE("GPL");

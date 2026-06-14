@@ -38,38 +38,6 @@
 
 #include <asm/setup.h>
 
-#ifdef CONFIG_LINX
-#define LINX_VIRT_UART_BASE 0x10000000UL
-
-static __always_inline void linx_mm_init_mark(char c)
-{
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
-}
-
-static __always_inline void linx_mm_init_mark_hex64(u64 v)
-{
-	static const char hexdigits[] = "0123456789abcdef";
-	int i;
-
-	for (i = 15; i >= 0; i--) {
-		unsigned int nibble = (unsigned int)((v >> (i * 4)) & 0xf);
-
-		linx_mm_init_mark(hexdigits[nibble]);
-	}
-}
-#else
-static __always_inline void linx_mm_init_mark(char c)
-{
-	(void)c;
-}
-
-static __always_inline void linx_mm_init_mark_hex64(u64 v)
-{
-	(void)v;
-}
-#endif
-
 #ifndef CONFIG_NUMA
 unsigned long max_mapnr;
 EXPORT_SYMBOL(max_mapnr);
@@ -1694,8 +1662,6 @@ static void __init alloc_node_mem_map(struct pglist_data *pgdat)
 	unsigned long start, offset, size, end;
 	struct page *map;
 
-	linx_mm_init_mark('a');
-
 	/* Skip empty nodes */
 	if (!pgdat->node_spanned_pages)
 		return;
@@ -1709,15 +1675,12 @@ static void __init alloc_node_mem_map(struct pglist_data *pgdat)
 	 */
 	end = ALIGN(pgdat_end_pfn(pgdat), MAX_ORDER_NR_PAGES);
 	size =  (end - start) * sizeof(struct page);
-	linx_mm_init_mark('b');
 	map = memmap_alloc(size, SMP_CACHE_BYTES, MEMBLOCK_LOW_LIMIT,
 			   pgdat->node_id, false);
-	linx_mm_init_mark('c');
 	if (!map)
 		panic("Failed to allocate %ld bytes for node %d memory map\n",
 		      size, pgdat->node_id);
 	pgdat->node_mem_map = map + offset;
-	linx_mm_init_mark('d');
 	memmap_boot_pages_add(DIV_ROUND_UP(size, PAGE_SIZE));
 	pr_debug("%s: node %d, pgdat %08lx, node_mem_map %08lx\n",
 		 __func__, pgdat->node_id, (unsigned long)pgdat,
@@ -1738,7 +1701,6 @@ static void __init alloc_node_mem_map(struct pglist_data *pgdat)
 #endif
 
 	max_mapnr = end - start;
-	linx_mm_init_mark('e');
 }
 #else
 static inline void alloc_node_mem_map(struct pglist_data *pgdat) { }
@@ -1778,8 +1740,6 @@ static void __init free_area_init_node(int nid)
 	unsigned long start_pfn = 0;
 	unsigned long end_pfn = 0;
 
-	linx_mm_init_mark('L');
-
 	/* pg_data_t should be reset to zero when it's allocated */
 	WARN_ON(pgdat->nr_zones || pgdat->kswapd_highest_zoneidx);
 
@@ -1789,16 +1749,9 @@ static void __init free_area_init_node(int nid)
 		get_pfn_range_for_nid(MAX_NUMNODES, &start_pfn, &end_pfn);
 	if (!start_pfn && !end_pfn && nid == 0) {
 		start_pfn = PFN_UP(memblock_start_of_DRAM());
-		end_pfn = PFN_DOWN(memblock_end_of_DRAM());
+			end_pfn = PFN_DOWN(memblock_end_of_DRAM());
 	}
 #endif
-	linx_mm_init_mark('M');
-	linx_mm_init_mark('X');
-	linx_mm_init_mark_hex64((u64)(unsigned int)nid);
-	linx_mm_init_mark('Y');
-	linx_mm_init_mark_hex64((u64)start_pfn);
-	linx_mm_init_mark('Z');
-	linx_mm_init_mark_hex64((u64)end_pfn);
 
 	pgdat->node_id = nid;
 	pgdat->node_start_pfn = start_pfn;
@@ -1806,33 +1759,23 @@ static void __init free_area_init_node(int nid)
 
 	if (start_pfn != end_pfn) {
 #ifndef CONFIG_LINX
-		pr_info("Initmem setup node %d [mem %#018Lx-%#018Lx]\n", nid,
-			(u64)start_pfn << PAGE_SHIFT,
-			end_pfn ? ((u64)end_pfn << PAGE_SHIFT) - 1 : 0);
+			pr_info("Initmem setup node %d [mem %#018Lx-%#018Lx]\n", nid,
+				(u64)start_pfn << PAGE_SHIFT,
+				end_pfn ? ((u64)end_pfn << PAGE_SHIFT) - 1 : 0);
 #endif
-		linx_mm_init_mark('m');
 		calculate_node_totalpages(pgdat, start_pfn, end_pfn);
-		linx_mm_init_mark('n');
 	} else {
 #ifndef CONFIG_LINX
 		pr_info("Initmem setup node %d as memoryless\n", nid);
 #endif
-		linx_mm_init_mark('o');
 		reset_memoryless_node_totalpages(pgdat);
-		linx_mm_init_mark('p');
 	}
-	linx_mm_init_mark('N');
 
-	linx_mm_init_mark('O');
 	alloc_node_mem_map(pgdat);
-	linx_mm_init_mark('P');
 	pgdat_set_deferred_range(pgdat);
-	linx_mm_init_mark('Q');
 
 	free_area_init_core(pgdat);
-	linx_mm_init_mark('R');
 	lru_gen_init_pgdat(pgdat);
-	linx_mm_init_mark('S');
 }
 
 /* Any regular or high memory on that node ? */
@@ -1914,8 +1857,6 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 	int i, nid, zone;
 	bool descending;
 
-	linx_mm_init_mark('F');
-
 	/* Record where the zone boundaries are */
 	memset(arch_zone_lowest_possible_pfn, 0,
 				sizeof(arch_zone_lowest_possible_pfn));
@@ -1940,12 +1881,10 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 
 		start_pfn = end_pfn;
 	}
-	linx_mm_init_mark('G');
 
 	/* Find the PFNs that ZONE_MOVABLE begins at in each node */
 	memset(zone_movable_pfn, 0, sizeof(zone_movable_pfn));
 	find_zone_movable_pfns_for_nodes();
-	linx_mm_init_mark('H');
 
 #ifndef CONFIG_LINX
 	/* Print out the zone ranges */
@@ -1983,22 +1922,18 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 	pr_info("Early memory node ranges\n");
 #endif
 	for_each_mem_pfn_range(i, MAX_NUMNODES, &start_pfn, &end_pfn, &nid) {
-		linx_mm_init_mark('i');
 #ifndef CONFIG_LINX
 		pr_info("  node %3d: [mem %#018Lx-%#018Lx]\n", nid,
 			(u64)start_pfn << PAGE_SHIFT,
 			((u64)end_pfn << PAGE_SHIFT) - 1);
 #endif
 		subsection_map_init(start_pfn, end_pfn - start_pfn);
-		linx_mm_init_mark('j');
 	}
-	linx_mm_init_mark('I');
 
 	/* Initialise every node */
 	mminit_verify_pageflags_layout();
 	setup_nr_node_ids();
 	set_pageblock_order();
-	linx_mm_init_mark('J');
 
 	for_each_node(nid) {
 		pg_data_t *pgdat;
@@ -2007,7 +1942,6 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 			alloc_offline_node_data(nid);
 
 		pgdat = NODE_DATA(nid);
-		linx_mm_init_mark('K');
 		free_area_init_node(nid);
 
 		/*
@@ -2019,31 +1953,21 @@ void __init free_area_init(unsigned long *max_zone_pfn)
 		 *hotadd_init_pgdat() when memory is hotplugged into this node.
 		 */
 		if (pgdat->node_present_pages) {
-			linx_mm_init_mark('T');
 			node_set_state(nid, N_MEMORY);
-			linx_mm_init_mark('U');
 			check_for_memory(pgdat);
-			linx_mm_init_mark('V');
 		}
 	}
 
-	linx_mm_init_mark('W');
 	for_each_node_state(nid, N_MEMORY)
 		sparse_vmemmap_init_nid_late(nid);
-	linx_mm_init_mark('X');
 
-	linx_mm_init_mark('Y');
 	calc_nr_kernel_pages();
-	linx_mm_init_mark('Z');
 	memmap_init();
-	linx_mm_init_mark('0');
 
 	/* disable hash distribution for systems with a single node */
 	fixup_hashdist();
-	linx_mm_init_mark('1');
 
 	set_high_memory();
-	linx_mm_init_mark('2');
 }
 
 /**
@@ -2853,24 +2777,37 @@ void __init mm_core_init(void)
 	memblock_free_all();
 	mem_init();
 	kmem_cache_init();
+	pr_err("Linx dbg: after kmem_cache_init\n");
 	/*
 	 * page_owner must be initialized after buddy is ready, and also after
 	 * slab is ready so that stack_depot_init() works properly
 	 */
 	page_ext_init_flatmem_late();
+	pr_err("Linx dbg: after page_ext_init_flatmem_late\n");
 	kmemleak_init();
+	pr_err("Linx dbg: after kmemleak_init\n");
 	ptlock_cache_init();
+	pr_err("Linx dbg: after ptlock_cache_init\n");
 	pgtable_cache_init();
+	pr_err("Linx dbg: after pgtable_cache_init\n");
 	debug_objects_mem_init();
+	pr_err("Linx dbg: after debug_objects_mem_init\n");
 	vmalloc_init();
+	pr_err("Linx dbg: after vmalloc_init\n");
 	/* If no deferred init page_ext now, as vmap is fully initialized */
 	if (!deferred_struct_pages)
 		page_ext_init();
+	pr_err("Linx dbg: after page_ext_init\n");
 	/* Should be run before the first non-init thread is created */
 	init_espfix_bsp();
+	pr_err("Linx dbg: after init_espfix_bsp\n");
 	/* Should be run after espfix64 is set up. */
 	pti_init();
+	pr_err("Linx dbg: after pti_init\n");
 	kmsan_init_runtime();
+	pr_err("Linx dbg: after kmsan_init_runtime\n");
 	mm_cache_init();
+	pr_err("Linx dbg: after mm_cache_init\n");
 	execmem_init();
+	pr_err("Linx dbg: after execmem_init\n");
 }

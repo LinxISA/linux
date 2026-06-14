@@ -11,6 +11,7 @@
  */
 
 #include <linux/console.h>
+#include <linux/device.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/ioport.h>
@@ -23,6 +24,7 @@
 
 #define LINX_VUART_DATA_REG	0x0
 #define LINX_VUART_STATUS_REG	0x4
+#define LINX_VUART_BASE		0x10000000UL
 
 #define LINX_VUART_STATUS_TX_READY	0x1
 #define LINX_VUART_STATUS_RX_READY	0x2
@@ -37,6 +39,8 @@ static struct uart_driver linx_vuart_uart_driver;
 static struct linx_vuart_port *linx_vuart_ports[1];
 static struct linx_vuart_port linx_vuart_port_storage[1];
 static bool linx_vuart_port_inuse[1];
+static void __iomem *linx_vuart_early_membase;
+static struct device *linx_vuart_builtin_parent;
 
 static inline u32 linx_vuart_read_status(struct uart_port *port)
 {
@@ -256,6 +260,7 @@ static int __init linx_vuart_early_setup(struct earlycon_device *device,
 	if (!device->port.membase)
 		return -ENODEV;
 
+	linx_vuart_early_membase = device->port.membase;
 	device->con->write = linx_vuart_early_write;
 	return 0;
 }
@@ -319,9 +324,11 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	int id;
 	int rc;
 
+	pr_err("Linx dbg: linx_vuart_probe start\n");
 	id = of_alias_get_id(pdev->dev.of_node, "serial");
 	if (id < 0)
 		id = 0;
+	pr_err("Linx dbg: linx_vuart_probe id=%d\n", id);
 	if (id >= linx_vuart_uart_driver.nr)
 		return -EINVAL;
 	if (linx_vuart_port_inuse[id])
@@ -336,6 +343,8 @@ static int linx_vuart_probe(struct platform_device *pdev)
 		linx_vuart_port_inuse[id] = false;
 		return -ENODEV;
 	}
+	pr_err("Linx dbg: linx_vuart_probe resource start=%pa end=%pa\n",
+	       &res->start, &res->end);
 	size = resource_size(res);
 	lport->port.mapbase = res->start;
 #ifdef CONFIG_MMU
@@ -359,14 +368,16 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	lport->port.ops = &linx_vuart_uart_ops;
 	lport->port.flags = UPF_BOOT_AUTOCONF;
 	lport->port.line = id;
+	pr_err("Linx dbg: linx_vuart_probe before tx-ready test membase=%px\n",
+	       lport->port.membase);
 
-	if (linx_vuart_read_status(&lport->port) & LINX_VUART_STATUS_TX_READY)
-		linx_vuart_write_data(&lport->port, 'P');
-
+	pr_err("Linx dbg: linx_vuart_probe before timer_setup\n");
 	timer_setup(&lport->poll_timer, linx_vuart_poll_timer, 0);
 	lport->poll_enabled = false;
 
+	pr_err("Linx dbg: linx_vuart_probe before uart_add_one_port\n");
 	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
+	pr_err("Linx dbg: linx_vuart_probe after uart_add_one_port rc=%d\n", rc);
 	if (rc) {
 		linx_vuart_port_inuse[id] = false;
 		return rc;
@@ -374,6 +385,7 @@ static int linx_vuart_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, lport);
 	linx_vuart_ports[id] = lport;
+	pr_err("Linx dbg: linx_vuart_probe done\n");
 
 	return 0;
 }
@@ -417,17 +429,97 @@ static struct uart_driver linx_vuart_uart_driver = {
 #endif
 };
 
+#ifdef CONFIG_LINX_INTC
+static int __init linx_vuart_register_builtin_port(void)
+{
+	struct linx_vuart_port *lport = &linx_vuart_port_storage[0];
+	int rc;
+
+	pr_err("Linx dbg: linx_vuart builtin helper start\n");
+	if (linx_vuart_port_inuse[0])
+		return -EBUSY;
+
+	memset(lport, 0, sizeof(*lport));
+	linx_vuart_port_inuse[0] = true;
+	lport->port.mapbase = LINX_VUART_BASE;
+#ifdef CONFIG_MMU
+	if (linx_vuart_early_membase) {
+		lport->port.membase = linx_vuart_early_membase;
+		pr_err("Linx dbg: linx_vuart builtin reusing earlycon membase=%px\n",
+		       lport->port.membase);
+	} else {
+		pr_err("Linx dbg: linx_vuart builtin before ioremap\n");
+		lport->port.membase = ioremap(LINX_VUART_BASE, 0x20);
+		pr_err("Linx dbg: linx_vuart builtin after ioremap membase=%px\n",
+		       lport->port.membase);
+		if (!lport->port.membase) {
+			linx_vuart_port_inuse[0] = false;
+			return -ENOMEM;
+		}
+	}
+#else
+	lport->port.membase = (void __iomem *)(unsigned long)LINX_VUART_BASE;
+#endif
+	lport->port.iotype = UPIO_MEM;
+	lport->port.fifosize = 1;
+	lport->port.ops = &linx_vuart_uart_ops;
+	lport->port.flags = UPF_BOOT_AUTOCONF;
+	lport->port.line = 0;
+	if (!linx_vuart_builtin_parent) {
+		linx_vuart_builtin_parent = root_device_register("linx-vuart-builtin");
+		if (IS_ERR(linx_vuart_builtin_parent)) {
+#ifdef CONFIG_MMU
+			if (lport->port.membase != linx_vuart_early_membase)
+				iounmap(lport->port.membase);
+#endif
+			linx_vuart_port_inuse[0] = false;
+			return PTR_ERR(linx_vuart_builtin_parent);
+		}
+	}
+	lport->port.dev = linx_vuart_builtin_parent;
+
+	pr_err("Linx dbg: linx_vuart builtin before timer_setup\n");
+	timer_setup(&lport->poll_timer, linx_vuart_poll_timer, 0);
+	lport->poll_enabled = false;
+
+	pr_err("Linx dbg: linx_vuart builtin before uart_add_one_port\n");
+	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
+	pr_err("Linx dbg: linx_vuart builtin after uart_add_one_port rc=%d\n", rc);
+	if (rc) {
+#ifdef CONFIG_MMU
+		iounmap(lport->port.membase);
+#endif
+		linx_vuart_port_inuse[0] = false;
+		return rc;
+	}
+
+	linx_vuart_ports[0] = lport;
+	return 0;
+}
+#endif
+
 static int __init linx_vuart_init(void)
 {
 	int rc;
 
-	writeb('I', (void __iomem *)(unsigned long)0x10000000);
-
+	pr_err("Linx dbg: linx_vuart_init before uart_register_driver\n");
 	rc = uart_register_driver(&linx_vuart_uart_driver);
+	pr_err("Linx dbg: linx_vuart_init after uart_register_driver rc=%d\n", rc);
 	if (rc)
 		return rc;
 
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: linx_vuart_init using builtin bring-up port\n");
+	rc = linx_vuart_register_builtin_port();
+	pr_err("Linx dbg: linx_vuart_init after builtin bring-up rc=%d\n", rc);
+	if (rc)
+		uart_unregister_driver(&linx_vuart_uart_driver);
+	return rc;
+#endif
+
+	pr_err("Linx dbg: linx_vuart_init before platform_driver_register\n");
 	rc = platform_driver_register(&linx_vuart_platform_driver);
+	pr_err("Linx dbg: linx_vuart_init after platform_driver_register rc=%d\n", rc);
 	if (rc) {
 		uart_unregister_driver(&linx_vuart_uart_driver);
 		return rc;

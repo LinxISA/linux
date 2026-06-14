@@ -2713,6 +2713,10 @@ static inline void nfs_exit_keyring(void)
  */
 static int __init init_nfs_fs(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("nfs: skipping init_nfs_fs during Linx bring-up\n");
+	return 0;
+#endif
 	int err;
 
 	err = nfs_init_keyring();

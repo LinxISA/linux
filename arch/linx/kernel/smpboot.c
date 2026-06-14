@@ -40,7 +40,11 @@ static DECLARE_COMPLETION(cpu_running);
 
 void __init smp_prepare_boot_cpu(void)
 {
+#if defined(CONFIG_LINX_INTC) && !defined(CONFIG_PCI)
+	pr_warn("Skipping init_cpu_topology during Linx no-PCI bring-up\n");
+#else
 	init_cpu_topology();
+#endif
 #ifdef CONFIG_RISCV_ERRATA_ALTERNATIVE
 	apply_boot_alternatives();
 #endif

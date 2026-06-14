@@ -31,7 +31,10 @@ EXPORT_SYMBOL(lisc_ecall);
 void lisc_shutdown(void)
 {
 	pr_info("lisc shut down.\n");
-	// TODO: implement function
+	__asm__ __volatile__(
+		"BSTART.std fall\n"
+		"  ebreak 1\n"
+		"  c.bstop\n");
 	while (1) {}
 }
 

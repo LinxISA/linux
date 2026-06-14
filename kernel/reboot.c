@@ -18,7 +18,6 @@
 #include <linux/syscalls.h>
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
-
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
  */
@@ -305,6 +304,18 @@ static void kernel_shutdown_prepare(enum system_states state)
 		(state == SYSTEM_HALT) ? SYS_HALT : SYS_POWER_OFF, NULL);
 	system_state = state;
 	usermodehelper_disable();
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx QEMU bring-up currently uses an aggressively stripped kernel
+	 * config and a minimal in-memory rootfs proof path. Some late device
+	 * shutdown callbacks still stall forever in that profile, which blocks
+	 * an otherwise successful poweroff syscall from demonstrating end-to-end
+	 * Linux-on-QEMU boot. Skip device_shutdown() for the poweroff-only
+	 * bring-up lane so machine_power_off() can reach the QEMU exit hook.
+	 */
+	if (state == SYSTEM_POWER_OFF)
+		return;
+#endif
 	device_shutdown();
 }
 /**

@@ -3263,14 +3263,23 @@ void __init vfs_caches_init_early(void)
 
 void __init vfs_caches_init(void)
 {
+	pr_err("Linx dbg: vfs_caches_init start\n");
 	names_cachep = kmem_cache_create_usercopy("names_cache", PATH_MAX, 0,
 			SLAB_HWCACHE_ALIGN|SLAB_PANIC, 0, PATH_MAX, NULL);
 
+	pr_err("Linx dbg: vfs_caches_init dcache_init\n");
 	dcache_init();
+	pr_err("Linx dbg: vfs_caches_init inode_init\n");
 	inode_init();
+	pr_err("Linx dbg: vfs_caches_init files_init\n");
 	files_init();
+	pr_err("Linx dbg: vfs_caches_init files_maxfiles_init\n");
 	files_maxfiles_init();
+	pr_err("Linx dbg: vfs_caches_init mnt_init\n");
 	mnt_init();
+	pr_err("Linx dbg: vfs_caches_init bdev_cache_init\n");
 	bdev_cache_init();
+	pr_err("Linx dbg: vfs_caches_init chrdev_init\n");
 	chrdev_init();
+	pr_err("Linx dbg: vfs_caches_init done\n");
 }

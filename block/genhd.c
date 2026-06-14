@@ -996,6 +996,15 @@ static int __init genhd_device_init(void)
 {
 	int error;
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx initramfs bring-up does not require the generic block-class
+	 * registration path. Keep it out of the early boot lane until the
+	 * kernel reaches a stable userspace shell.
+	 */
+	return 0;
+#endif
+
 	error = class_register(&block_class);
 	if (unlikely(error))
 		return error;

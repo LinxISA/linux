@@ -841,6 +841,11 @@ static int __init pcie_portdrv_init(void)
 	if (pcie_ports_disabled)
 		return -EACCES;
 
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("pcieport: skipping PCIe port services during Linx bring-up\n");
+	return 0;
+#endif
+
 	pcie_init_services();
 	dmi_check_system(pcie_portdrv_dmi_table);
 

@@ -7553,6 +7553,10 @@ static const struct ctl_table vmscan_sysctl_table[] = {
 
 static int __init kswapd_init(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("mm: skipping kswapd_init during Linx bring-up\n");
+	return 0;
+#endif
 	int nid;
 
 	swap_setup();

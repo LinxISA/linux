@@ -464,6 +464,13 @@ int load_elf_fdpic_binary(struct linux_binprm *bprm)
 #endif
 	retval = create_elf_fdpic_tables(bprm, current->mm, &exec_params,
 					 &interp_params);
+	if (dbg)
+		pr_err("Linx dbg: elf_fdpic after tables retval=%d exec_entry=%lx interp_entry=%lx start_stack=%lx start_brk=%lx brk=%lx map_addr=%lx interp_map_addr=%lx\n",
+		       retval, exec_params.entry_addr, interp_params.entry_addr,
+		       current->mm ? current->mm->start_stack : 0UL,
+		       current->mm ? current->mm->start_brk : 0UL,
+		       current->mm ? current->mm->brk : 0UL,
+		       exec_params.map_addr, interp_params.map_addr);
 	if (retval < 0)
 		goto error;
 
@@ -490,7 +497,15 @@ int load_elf_fdpic_binary(struct linux_binprm *bprm)
 	finalize_exec(bprm);
 	/* everything is now ready... get the userspace context ready to roll */
 	entryaddr = interp_params.entry_addr ?: exec_params.entry_addr;
+	if (dbg)
+		pr_err("Linx dbg: elf_fdpic before start_thread entryaddr=%lx start_stack=%lx dyn_exec=%lx dyn_interp=%lx\n",
+		       entryaddr,
+		       current->mm ? current->mm->start_stack : 0UL,
+		       exec_params.dynamic_addr, interp_params.dynamic_addr);
 	start_thread(regs, entryaddr, current->mm->start_stack);
+	if (dbg)
+		pr_err("Linx dbg: elf_fdpic after start_thread cstate=%lx tpc=%lx bpc=%lx sp=%lx\n",
+		       regs->cstate, regs->tpc, regs->bpc, regs->sp);
 
 	retval = 0;
 
