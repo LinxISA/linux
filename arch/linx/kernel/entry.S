@@ -79,6 +79,7 @@ from_user_switch_stack:
 		ssrget SSR_TP, -> t
 		ldi [t#1, TASK_TI_KERNEL_SP], -> sp
 		ssrswap x1, SSR_A0_ETEMP, -> x1
+		BSTOP
 
 from_kernel:
 /*
