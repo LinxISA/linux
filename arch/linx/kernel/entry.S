@@ -46,6 +46,31 @@
 	sdi t#1, [\rd, \offset2]
 .endm
 
+.macro restore_user_gprs
+	ldi [sp, PT_A0], -> a0
+	ldi [sp, PT_A1], -> a1
+	ldi [sp, PT_A2], -> a2
+	ldi [sp, PT_A3], -> a3
+	ldi [sp, PT_A4], -> a4
+	ldi [sp, PT_A5], -> a5
+	ldi [sp, PT_A6], -> a6
+	ldi [sp, PT_A7], -> a7
+	ldi [sp, PT_RA], -> ra
+	ldi [sp, PT_S0], -> s0
+	ldi [sp, PT_S1], -> s1
+	ldi [sp, PT_S2], -> s2
+	ldi [sp, PT_S3], -> s3
+	ldi [sp, PT_S4], -> s4
+	ldi [sp, PT_S5], -> s5
+	ldi [sp, PT_S6], -> s6
+	ldi [sp, PT_S7], -> s7
+	ldi [sp, PT_S8], -> s8
+	ldi [sp, PT_X0], -> x0
+	ldi [sp, PT_X1], -> x1
+	ldi [sp, PT_X2], -> x2
+	ldi [sp, PT_X3], -> x3
+.endm
+
 ENTRY(handle_exception)
     /*
 	 * Distinguish user-origin vs kernel-origin traps from the saved source
@@ -463,29 +488,7 @@ restore_all:
 restore_level1_state:
 	BSTART.sys fall
 
-	/* restore necessary UL_GPRs */
-	ldi [sp, PT_A0], -> a0
-	ldi [sp, PT_A1], -> a1
-	ldi [sp, PT_A2], -> a2
-	ldi [sp, PT_A3], -> a3
-	ldi [sp, PT_A4], -> a4
-	ldi [sp, PT_A5], -> a5
-	ldi [sp, PT_A6], -> a6
-	ldi [sp, PT_A7], -> a7
-	ldi [sp, PT_RA], -> ra
-	ldi [sp, PT_S0], -> s0
-	ldi [sp, PT_S1], -> s1
-	ldi [sp, PT_S2], -> s2
-	ldi [sp, PT_S3], -> s3
-	ldi [sp, PT_S4], -> s4
-	ldi [sp, PT_S5], -> s5
-	ldi [sp, PT_S6], -> s6
-	ldi [sp, PT_S7], -> s7
-	ldi [sp, PT_S8], -> s8
-	ldi [sp, PT_X0], -> x0
-	ldi [sp, PT_X1], -> x1
-	ldi [sp, PT_X2], -> x2
-	ldi [sp, PT_X3], -> x3
+	/* User GPRs are restored in the final ACRE block. */
 
 	/* restore BARGs */
 	ldi [sp, PT_TPC], -> t
@@ -494,41 +497,37 @@ restore_level1_state:
 	hl.ssrset t#1, SSR_EBPC
 	ldi [sp, PT_BPCN], -> t
 	hl.ssrset t#1, SSR_EBPCN
-	ldi [sp, PT_EBARG], -> t
-	hl.ssrset t#1, SSR_EBARG
+	/*
+	 * Do not preload user EBARG before the kernel's own return blocks.
+	 * RRAT_RESTORE restores the saved target block state in QEMU; pushing
+	 * user EBARG/ELPR through kernel BSTART boundaries corrupts live sp.
+	 */
 
 	/* check ebstate status */
-	/* if cstate.bi == 0, don't need restore level2 */
+	/* if ecstate.bi == 0, don't need restore level2 */
 	BSTART.std cond, restore_level2_state
 	hl.ssrget SSR_ECSTATE, -> t
-	andi t#1, CSTATE_BI, -> t
+	srli t#1, ECAUSE_BI_SHIFT, -> t
+	andi t#1, 1, -> t
 	setc.nei t#1, 0
 
 /* restored block-head exception */
 	BSTART.sys, fall
-	ldi [sp, PT_SP], -> sp
 	block_next_direct restore_default_acre_enter
 restore_default_acre_enter:
 	BSTART.sys fall
+	restore_user_gprs
+	ldi [sp, PT_SP], -> sp
 	acre RRAT_DEFAULT
 
 
 restore_level2_state:
 	BSTART.sys fall
-	ldi [sp, PT_ELPR3], -> t
-	ldi [sp, PT_ELPR2], -> t
-	ldi [sp, PT_ELPR1], -> t
-	ldi [sp, PT_ELPR0], -> t
-	ldi [sp, PT_ELPR7], -> u
-	ldi [sp, PT_ELPR6], -> u
-	ldi [sp, PT_ELPR5], -> u
-	ldi [sp, PT_ELPR4], -> u
-
-	/* restore sp */
-	ldi [sp, PT_SP], -> sp
 	block_next_direct restore_level2_acre_enter
 restore_level2_acre_enter:
 	BSTART.sys fall
+	restore_user_gprs
+	ldi [sp, PT_SP], -> sp
 	acre RRAT_RESTORE
 
 work_pending:

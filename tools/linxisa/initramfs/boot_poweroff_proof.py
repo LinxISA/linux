@@ -6,6 +6,31 @@ import sys
 import time
 
 
+def resolve_kernel_symbol(out_dir: pathlib.Path, name: str) -> str | None:
+    system_map = out_dir / "System.map"
+    if not system_map.exists():
+        return None
+
+    with system_map.open("r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            fields = line.split()
+            if len(fields) >= 3 and fields[2] == name:
+                return "0x" + fields[0].lower()
+    return None
+
+
+def append_watchpoints(env: dict[str, str], watches: list[str]) -> None:
+    current = [
+        item.strip().lower()
+        for item in env.get("LINX_DEBUG_PC_WATCH", "").split(",")
+        if item.strip()
+    ]
+    for watch in watches:
+        if watch.lower() not in current:
+            current.append(watch.lower())
+    env["LINX_DEBUG_PC_WATCH"] = ",".join(current)
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     super_root = linux_root.parents[1]
@@ -55,7 +80,14 @@ def main() -> int:
 
     run_env = os.environ.copy()
     run_env.setdefault("LINX_DISABLE_TIMER_IRQ", "1")
-    run_env.setdefault("LINX_DEBUG_PC_WATCH", "0x10030,0xffffffff8000164c")
+
+    required = ["linx_pc_watch: pc=0x10030"]
+    watchpoints = ["0x10030"]
+    shutdown_pc = resolve_kernel_symbol(out_dir, "lisc_shutdown")
+    if shutdown_pc is not None:
+        watchpoints.append(shutdown_pc)
+        required.append(f"linx_pc_watch: pc={shutdown_pc}")
+    append_watchpoints(run_env, watchpoints)
 
     start = time.time()
     proc = subprocess.Popen(
@@ -75,10 +107,6 @@ def main() -> int:
     text = out.decode("utf-8", errors="replace")
     elapsed = time.time() - start
 
-    required = [
-        "linx_pc_watch: pc=0x10030",
-        "linx_pc_watch: pc=0xffffffff8000164c",
-    ]
     missing = [item for item in required if item not in text]
 
     if timed_out or proc.returncode != 0 or missing:

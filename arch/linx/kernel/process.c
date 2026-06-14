@@ -90,15 +90,21 @@ void show_regs(struct pt_regs *regs)
 
 void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
+	unsigned long old_cstate = regs->cstate;
+	unsigned long old_tpc = regs->tpc;
+	unsigned long old_bpc = regs->bpc;
+
 	/* called by `load_elf_binary` */
 	pr_err("Linx dbg: start_thread enter pc=%lx sp=%lx old_cstate=%lx old_tpc=%lx old_bpc=%lx\n",
-	       pc, sp, regs->cstate, regs->tpc, regs->bpc);
+	       pc, sp, old_cstate, old_tpc, old_bpc);
+
+	memset(regs, 0, sizeof(*regs));
+
 	regs->cstate = CSTATE_ACR2 | CSTATE_I;
 	/*
 	 * Since the epc have been changed, the bstate of the exception block
 	 * should be discarded also.
 	 */
-	WARN_ON_ONCE(regs->bpc == pc);
 	regs->bpc = pc;
 	regs->tpc = pc;
 	// regs->ebstate.rra = RRAT_DEFAULT;
