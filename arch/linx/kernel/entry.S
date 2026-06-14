@@ -340,26 +340,26 @@ handle_syscall:
 check_syscall_nr:
 	/*
 	 * Check to make sure we don't jump to a bogus syscall number.
-	 * Syscall number held in x1.
+	 * Syscall number held in a7.
 	 * If syscall number is above allowed value, redirect to ni_syscall.
 	 */
 	/*
-	 * if (x1 >= __NR_syscalls) {
+	 * if (a7 >= __NR_syscalls) {
 	 * 	s0 = sys_ni_syscall;
 	 * } else {
-	 * 	s0 = sys_call_table[x1];
+	 * 	s0 = sys_call_table[a7];
 	 * }
 	 */
 	BSTART.std cond, call_syscall
 	addtpc %tpcrel_hi(sys_ni_syscall), -> t
 	addi t#1, %tpcrel_lo(sys_ni_syscall), -> s0
 	addi zero, __NR_syscalls, -> t
-	setc.geu, x1, t#1
+	setc.geu, a7, t#1
 
 	BSTART.std fall
 	addtpc %tpcrel_hi(sys_call_table), -> t
 	addi t#1, %tpcrel_lo(sys_call_table), -> t
-	ld [t#1, x1<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[x1] */
+	ld [t#1, a7<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[a7] */
 
 call_syscall:
 	/* Call syscall */

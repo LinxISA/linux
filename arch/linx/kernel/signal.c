@@ -279,8 +279,8 @@ static void do_signal(struct pt_regs *regs)
 			set_restart_syscall(regs);
 			break;
 		case -ERESTART_RESTARTBLOCK:
-                        regs->a0 = regs->orig_a0;
-			regs->x1 = __NR_restart_syscall;
+			regs->a0 = regs->orig_a0;
+			regs->a7 = __NR_restart_syscall;
 			set_restart_syscall(regs);
 			break;
 		}
