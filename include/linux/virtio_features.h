@@ -2,6 +2,7 @@
 #ifndef _LINUX_VIRTIO_FEATURES_H
 #define _LINUX_VIRTIO_FEATURES_H
 
+#include <asm/byteorder.h>
 #include <linux/bits.h>
 
 #define VIRTIO_FEATURES_U64S	2
@@ -9,6 +10,8 @@
 
 #define VIRTIO_BIT(b)		BIT_ULL((b) & 0x3f)
 #define VIRTIO_U64(b)		((b) >> 6)
+#define VIRTIO_U32(b)		((b) >> 5)
+#define VIRTIO_U32_BIT(b)	BIT((b) & 0x1f)
 
 #define VIRTIO_DECLARE_FEATURES(name)			\
 	union {						\
@@ -34,22 +37,43 @@ static inline bool virtio_features_chk_bit(unsigned int bit)
 static inline bool virtio_features_test_bit(const u64 *features,
 					    unsigned int bit)
 {
+#ifdef __LITTLE_ENDIAN
+	const u32 *feature_words = (const u32 *)features;
+
+	return virtio_features_chk_bit(bit) &&
+	       !!(feature_words[VIRTIO_U32(bit)] & VIRTIO_U32_BIT(bit));
+#else
 	return virtio_features_chk_bit(bit) &&
 	       !!(features[VIRTIO_U64(bit)] & VIRTIO_BIT(bit));
+#endif
 }
 
 static inline void virtio_features_set_bit(u64 *features,
 					   unsigned int bit)
 {
+#ifdef __LITTLE_ENDIAN
+	u32 *feature_words = (u32 *)features;
+
+	if (virtio_features_chk_bit(bit))
+		feature_words[VIRTIO_U32(bit)] |= VIRTIO_U32_BIT(bit);
+#else
 	if (virtio_features_chk_bit(bit))
 		features[VIRTIO_U64(bit)] |= VIRTIO_BIT(bit);
+#endif
 }
 
 static inline void virtio_features_clear_bit(u64 *features,
 					     unsigned int bit)
 {
+#ifdef __LITTLE_ENDIAN
+	u32 *feature_words = (u32 *)features;
+
+	if (virtio_features_chk_bit(bit))
+		feature_words[VIRTIO_U32(bit)] &= ~VIRTIO_U32_BIT(bit);
+#else
 	if (virtio_features_chk_bit(bit))
 		features[VIRTIO_U64(bit)] &= ~VIRTIO_BIT(bit);
+#endif
 }
 
 static inline void virtio_features_zero(u64 *features)
