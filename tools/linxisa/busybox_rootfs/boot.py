@@ -11,6 +11,77 @@ import time
 from typing import Optional
 
 
+ROOTFS_CONFIG_REQUIREMENTS: tuple[str, ...] = (
+    "CONFIG_BLOCK",
+    "CONFIG_DEVTMPFS",
+    "CONFIG_DEVTMPFS_MOUNT",
+    "CONFIG_EXT2_FS",
+    "CONFIG_PROC_FS",
+    "CONFIG_SYSFS",
+    "CONFIG_VIRTIO",
+    "CONFIG_VIRTIO_MMIO",
+    "CONFIG_VIRTIO_BLK",
+)
+
+
+def _parse_kernel_config(path: pathlib.Path) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        disabled = re.match(r"# (CONFIG_[A-Za-z0-9_]+) is not set$", line)
+        if disabled:
+            options[disabled.group(1)] = "n"
+            continue
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            options[key] = value
+    return options
+
+
+def _kernel_config_path(kernel: pathlib.Path, o_dir: pathlib.Path) -> pathlib.Path:
+    explicit = os.environ.get("KERNEL_CONFIG", "")
+    if explicit:
+        return pathlib.Path(explicit)
+    kernel_parent = kernel.parent
+    if (kernel_parent / ".config").is_file():
+        return kernel_parent / ".config"
+    return o_dir / ".config"
+
+
+def _check_kernel_config(kernel: pathlib.Path, o_dir: pathlib.Path) -> bool:
+    flag = os.environ.get("LINX_BUSYBOX_ROOTFS_CONFIG_PREFLIGHT", "1").lower()
+    if flag in {"0", "false", "no"}:
+        return True
+
+    config_path = _kernel_config_path(kernel, o_dir)
+    if not config_path.is_file():
+        sys.stderr.write(
+            "error: kernel config preflight failed; .config not found for rootfs boot\n"
+        )
+        sys.stderr.write("kernel: %s\n" % kernel)
+        sys.stderr.write("expected config: %s\n" % config_path)
+        sys.stderr.write(
+            "set KERNEL_CONFIG=/path/to/.config or LINX_BUSYBOX_ROOTFS_CONFIG_PREFLIGHT=0 "
+            "for externally managed kernels\n"
+        )
+        return False
+
+    options = _parse_kernel_config(config_path)
+    missing = [key for key in ROOTFS_CONFIG_REQUIREMENTS if options.get(key) != "y"]
+    if not missing:
+        return True
+
+    sys.stderr.write(
+        "error: kernel config preflight failed; rootfs boot requires: %s\n"
+        % ", ".join(missing)
+    )
+    sys.stderr.write("kernel: %s\n" % kernel)
+    sys.stderr.write("config: %s\n" % config_path)
+    return False
+
+
 def _irq0_count(text: str) -> Optional[int]:
     # Typical /proc/interrupts row: "  0:       123   ...".
     m = re.search(r"(?m)^\s*0:\s+(\d+)\b", text)
@@ -180,6 +251,9 @@ def main() -> int:
     if os.environ.get("SKIP_BUILD", "") not in {"1", "true", "yes"}:
         build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
         subprocess.run([str(build_sh)], check=True)
+
+    if not _check_kernel_config(kernel, o_dir):
+        return 2
 
     want = [
         "cmds:",
