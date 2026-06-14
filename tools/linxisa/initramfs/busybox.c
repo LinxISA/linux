@@ -74,12 +74,6 @@ enum {
 };
 
 enum {
-	LINX_UART_BASE = 0x10000000UL,
-	LINX_UART_STATUS = LINX_UART_BASE + 0x4,
-	LINX_UART_STATUS_RX_READY = 0x2,
-};
-
-enum {
 	SSR_TIME = 0x0010,
 	SSR_USER_SCRATCH0 = 0x0030,
 };
@@ -359,22 +353,12 @@ static void write_all(const void *buf, ulong count)
 
 static void write_ch(char c)
 {
-	*(volatile unsigned char *)LINX_UART_BASE = (unsigned char)c;
+	(void)sys_write(1, &c, 1);
 }
 
 static void write_nl(void)
 {
 	write_ch('\n');
-}
-
-static int uart_mmio_read_ch(unsigned char *out)
-{
-	unsigned int st = *(volatile unsigned int *)LINX_UART_STATUS;
-
-	if (!(st & LINX_UART_STATUS_RX_READY))
-		return 0;
-	*out = *(volatile unsigned char *)LINX_UART_BASE;
-	return 1;
 }
 
 static void write_uhex(ulong v)
@@ -1658,12 +1642,13 @@ static int applet_poweroff(int argc, char **argv)
 static void shell_loop(void)
 {
 	char line[256];
+	volatile unsigned int keep_return_path = 0;
 
 	/*
 	 * Keep a theoretical return path so codegen does not collapse callers into
 	 * noreturn tail-call form (which violates strict CALL/SETRET adjacency).
 	 */
-	if (*(volatile unsigned int *)LINX_UART_STATUS == 0xffffffffu)
+	if (keep_return_path == 0xffffffffu)
 		return;
 
 	for (;;) {
@@ -1685,15 +1670,6 @@ static void shell_loop(void)
 
 			ch = 0;
 			n = sys_read(fd, &ch, 1);
-			if (n < 0) {
-				/*
-				 * Early bring-up fallback: when stdin wiring is
-				 * incomplete, consume host input directly from
-				 * the virt UART RX queue.
-				 */
-				if (uart_mmio_read_ch(&ch))
-					n = 1;
-			}
 			if (n <= 0)
 				continue;
 			if (ch == '\r')
