@@ -1819,8 +1819,8 @@ __attribute__((noreturn)) void _start(void)
 	 * run as PID1 shell directly. The argv/applet multicall path can be
 	 * re-enabled once entry ABI handling is fully stable.
 	 */
-	mount_basic();
 	console_open();
+	mount_basic();
 	/*
 	 * Do not auto-mount 9p or exec from it in PID1.
 	 * 9p bring-up can block; keep an interactive shell first.
