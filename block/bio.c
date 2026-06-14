@@ -16,6 +16,7 @@
 #include <linux/workqueue.h>
 #include <linux/cgroup.h>
 #include <linux/highmem.h>
+#include <linux/linx_bringup.h>
 #include <linux/blk-crypto.h>
 #include <linux/xarray.h>
 
@@ -1919,3 +1920,10 @@ static int __init init_bio(void)
 	return 0;
 }
 subsys_initcall(init_bio);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_bio_init(void)
+{
+	return init_bio();
+}
+#endif

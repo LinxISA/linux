@@ -20,6 +20,7 @@
 #include <linux/kmod.h>
 #include <linux/major.h>
 #include <linux/mutex.h>
+#include <linux/linx_bringup.h>
 #include <linux/idr.h>
 #include <linux/log2.h>
 #include <linux/pm_runtime.h>
@@ -992,7 +993,7 @@ static const struct seq_operations partitions_op = {
 };
 #endif
 
-static int __init genhd_device_init(void)
+static int __init __genhd_device_init(bool force)
 {
 	int error;
 
@@ -1002,7 +1003,8 @@ static int __init genhd_device_init(void)
 	 * registration path. Keep it out of the early boot lane until the
 	 * kernel reaches a stable userspace shell.
 	 */
-	return 0;
+	if (!force)
+		return 0;
 #endif
 
 	error = class_register(&block_class);
@@ -1017,7 +1019,19 @@ static int __init genhd_device_init(void)
 	return 0;
 }
 
+static int __init genhd_device_init(void)
+{
+	return __genhd_device_init(false);
+}
+
 subsys_initcall(genhd_device_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_genhd_device_init(void)
+{
+	return __genhd_device_init(true);
+}
+#endif
 
 static ssize_t disk_range_show(struct device *dev,
 			       struct device_attribute *attr, char *buf)

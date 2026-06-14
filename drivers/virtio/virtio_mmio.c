@@ -59,9 +59,11 @@
 #include <linux/highmem.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/linx_bringup.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
@@ -878,6 +880,24 @@ static void __exit virtio_mmio_exit(void)
 }
 
 module_init(virtio_mmio_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_virtio_mmio_init(void)
+{
+	return virtio_mmio_init();
+}
+
+int __init linx_virtio_mmio_populate_of(void)
+{
+#ifdef CONFIG_OF
+	struct device_node *node;
+
+	for_each_compatible_node(node, NULL, "virtio,mmio")
+		of_platform_device_create(node, NULL, NULL);
+#endif
+	return 0;
+}
+#endif
 module_exit(virtio_mmio_exit);
 
 MODULE_AUTHOR("Pawel Moll <pawel.moll@arm.com>");

@@ -6,6 +6,7 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/bio.h>
+#include <linux/linx_bringup.h>
 #include <linux/blkdev.h>
 #include <linux/slab.h>
 #include <linux/security.h>
@@ -440,3 +441,10 @@ static int __init blk_ioc_init(void)
 	return 0;
 }
 subsys_initcall(blk_ioc_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_blk_ioc_init(void)
+{
+	return blk_ioc_init();
+}
+#endif

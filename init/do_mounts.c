@@ -15,6 +15,7 @@
 #include <linux/initrd.h>
 #include <linux/async.h>
 #include <linux/fs_struct.h>
+#include <linux/linx_bringup.h>
 #include <linux/slab.h>
 #include <linux/ramfs.h>
 #include <linux/shmem_fs.h>
@@ -67,6 +68,13 @@ static int __init root_dev_setup(char *line)
 }
 
 __setup("root=", root_dev_setup);
+
+#ifdef CONFIG_LINX_INTC
+bool __init linx_root_device_requested(void)
+{
+	return saved_root_name[0] != '\0';
+}
+#endif
 
 static int __init rootwait_setup(char *str)
 {

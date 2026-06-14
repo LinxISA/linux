@@ -3,6 +3,7 @@
 #include <linux/spinlock.h>
 #include <linux/virtio_config.h>
 #include <linux/virtio_anchor.h>
+#include <linux/linx_bringup.h>
 #include <linux/module.h>
 #include <linux/idr.h>
 #include <linux/of.h>
@@ -724,6 +725,13 @@ static void __exit virtio_exit(void)
 	ida_destroy(&virtio_index_ida);
 }
 core_initcall(virtio_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_virtio_init(void)
+{
+	return virtio_init();
+}
+#endif
 module_exit(virtio_exit);
 
 MODULE_DESCRIPTION("Virtio core interface");

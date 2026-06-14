@@ -13,6 +13,7 @@
 #include <linux/string_helpers.h>
 #include <linux/idr.h>
 #include <linux/blk-mq.h>
+#include <linux/linx_bringup.h>
 #include <linux/numa.h>
 #include <linux/vmalloc.h>
 #include <uapi/linux/virtio_ring.h>
@@ -1714,6 +1715,13 @@ static void __exit virtio_blk_fini(void)
 	destroy_workqueue(virtblk_wq);
 }
 module_init(virtio_blk_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_virtio_blk_init(void)
+{
+	return virtio_blk_init();
+}
+#endif
 module_exit(virtio_blk_fini);
 
 MODULE_DEVICE_TABLE(virtio, id_table);

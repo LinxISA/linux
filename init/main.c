@@ -2082,6 +2082,28 @@ static void __init linx_bringup_init_proc_sysfs(void)
 	linx_bringup_log_init_result("proc_interrupts_init", linx_proc_interrupts_init());
 }
 
+static void __init linx_bringup_init_storage(void)
+{
+	/*
+	 * Rootfs lane: register the block, ext2, virtio, and OF pieces needed
+	 * for root=/dev/vda without reopening the full initcall surface.
+	 */
+	if (!linx_root_device_requested())
+		return;
+
+	linx_bringup_log_init_result("bio_init", linx_bio_init());
+	linx_bringup_log_init_result("blk_ioc_init", linx_blk_ioc_init());
+	linx_bringup_log_init_result("blk_mq_init", linx_blk_mq_init());
+	linx_bringup_log_init_result("blkdev_init", linx_blkdev_init());
+	linx_bringup_log_init_result("genhd_device_init", linx_genhd_device_init());
+	linx_bringup_log_init_result("init_ext2_fs", linx_ext2_init_fs());
+	linx_bringup_log_init_result("virtio_init", linx_virtio_init());
+	linx_bringup_log_init_result("virtio_blk_init", linx_virtio_blk_init());
+	linx_bringup_log_init_result("virtio_mmio_init", linx_virtio_mmio_init());
+	linx_bringup_log_init_result("virtio_mmio_populate_of",
+				      linx_virtio_mmio_populate_of());
+}
+
 static void __init linx_bringup_init_userspace_io(void)
 {
 	int rc;
@@ -2365,6 +2387,7 @@ static noinline void __init kernel_init_freeable(void)
 	 */
 	linx_bringup_init_userspace_io();
 	linx_bringup_init_proc_sysfs();
+	linx_bringup_init_storage();
 	linx_populate_rootfs_now();
 	linx_init_elf_binfmt();
 	linx_init_script_binfmt();
