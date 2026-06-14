@@ -2,6 +2,7 @@
 #include <linux/fs.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/linx_bringup.h>
 #include <linux/mm.h>
 #include <linux/hugetlb.h>
 #include <linux/mman.h>
@@ -200,3 +201,10 @@ static int __init proc_meminfo_init(void)
 	return 0;
 }
 fs_initcall(proc_meminfo_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_proc_meminfo_init(void)
+{
+	return proc_meminfo_init();
+}
+#endif

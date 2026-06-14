@@ -29,6 +29,7 @@
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/initrd.h>
+#include <linux/linx_bringup.h>
 #include <linux/memblock.h>
 #include <linux/acpi.h>
 #include <linux/bootconfig.h>
@@ -2061,6 +2062,26 @@ static void __init do_pre_smp_initcalls(void)
 }
 
 #ifdef CONFIG_LINX_INTC
+static void __init linx_bringup_log_init_result(const char *name, int rc)
+{
+	if (rc)
+		pr_err("Linx dbg: %s failed during bring-up rc=%d\n", name, rc);
+}
+
+static void __init linx_bringup_init_proc_sysfs(void)
+{
+	/*
+	 * The Linx interrupt-controller bring-up lane intentionally avoids the
+	 * broad initcall surface while scheduler, kthread, and driver probing are
+	 * still being stabilized. Register the host-observable proc/sysfs nodes
+	 * needed by the QEMU Linux benchmark gate explicitly instead.
+	 */
+	linx_bringup_log_init_result("ksysfs_init", linx_ksysfs_init());
+	linx_bringup_log_init_result("proc_cpuinfo_init", linx_proc_cpuinfo_init());
+	linx_bringup_log_init_result("proc_meminfo_init", linx_proc_meminfo_init());
+	linx_bringup_log_init_result("proc_interrupts_init", linx_proc_interrupts_init());
+}
+
 static void __init linx_bringup_init_userspace_io(void)
 {
 	int rc;
@@ -2343,6 +2364,7 @@ static noinline void __init kernel_init_freeable(void)
 	 * here instead of waiting for the broad late initcall surface.
 	 */
 	linx_bringup_init_userspace_io();
+	linx_bringup_init_proc_sysfs();
 	linx_populate_rootfs_now();
 	linx_init_elf_binfmt();
 	linx_init_script_binfmt();
