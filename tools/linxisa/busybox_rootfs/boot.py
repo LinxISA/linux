@@ -100,8 +100,8 @@ def _attempt_appends(base_append: str) -> list[tuple[str, Optional[str]]]:
     if retry_flag not in {"0", "false", "no"}:
         attempts.append((base_append, "same-config retry"))
 
-    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
-    if fallback_flag not in {"0", "false", "no"} and "virtio_mmio.device=" not in base_append:
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "0").lower()
+    if fallback_flag in {"1", "true", "yes"} and "virtio_mmio.device=" not in base_append:
         attempts.append((f"{base_append} virtio_mmio.device=0x200@0x30001000:1".strip(), "virtio-mmio cmdline fallback"))
 
     return attempts
@@ -237,6 +237,7 @@ def main() -> int:
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
         qemu_extra_args.extend(["-bios", "none"])
+    virtio_device = os.environ.get("VIRTIO_BLK_DEVICE", "virtio-blk-device,drive=vd0")
 
     script = os.environ.get(
         "SCRIPT",
@@ -285,7 +286,7 @@ def main() -> int:
             "-drive",
             f"if=none,id=vd0,file={rootfs},format=raw",
             "-device",
-            "virtio-blk-device,drive=vd0",
+            virtio_device,
             "-append",
             attempt_append,
         ]

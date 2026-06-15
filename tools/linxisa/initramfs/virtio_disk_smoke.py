@@ -2,15 +2,17 @@
 import os
 import pathlib
 import select
+import shlex
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Optional
 
 
 def _retry_with_virtio_cmdline_fallback(append: str) -> Optional[int]:
-    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
-    if fallback_flag in {"0", "false", "no"}:
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "0").lower()
+    if fallback_flag not in {"1", "true", "yes"}:
         return None
     if "virtio_mmio.device=" in append:
         return None
@@ -80,7 +82,8 @@ def main() -> int:
     initrd = pathlib.Path(
         os.environ.get("INITRD", str(o_dir / "linx-initramfs" / "initramfs.cpio"))
     )
-    disk_img = pathlib.Path(os.environ.get("DISK_IMG", str(o_dir / "linx-disk-smoke.img")))
+    disk_default = pathlib.Path(tempfile.gettempdir()) / f"linx-disk-smoke-{os.getpid()}.img"
+    disk_img = pathlib.Path(os.environ.get("DISK_IMG", str(disk_default)))
 
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
@@ -92,6 +95,10 @@ def main() -> int:
     prompt_settle_s = float(os.environ.get("PROMPT_SETTLE", "2.0"))
     disk_mb = int(os.environ.get("DISK_MB", "64"))
     debug_log_lines = int(os.environ.get("DEBUG_LOG_LINES", "240"))
+    qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
+    if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
+        qemu_extra_args.extend(["-bios", "none"])
+    virtio_device = os.environ.get("VIRTIO_BLK_DEVICE", "virtio-blk-device,drive=vd0")
 
     script = os.environ.get(
         "SCRIPT",
@@ -129,10 +136,11 @@ def main() -> int:
         "-drive",
         f"if=none,id=vd0,file={disk_img},format=raw",
         "-device",
-        "virtio-blk-device,drive=vd0",
+        virtio_device,
         "-append",
         append,
     ]
+    cmd.extend(qemu_extra_args)
 
     proc = subprocess.Popen(
         cmd,
@@ -202,7 +210,6 @@ def main() -> int:
             sys.stderr.write("\n")
 
     want = [
-        "cmds:",
         "# ls /dev",
         "# ls /sys/block",
         "# probe /sys/block/vda/dev",
