@@ -22,11 +22,13 @@ def main() -> int:
         return 2
 
     kernel = out_dir / "vmlinux"
-    initrd = out_dir / "linx-initramfs" / "initramfs.cpio"
+    initrd_out_dir = out_dir / "linx-initramfs-userspace-proof"
+    initrd = initrd_out_dir / "initramfs.cpio"
     build_sh = pathlib.Path(__file__).with_name("build.sh")
 
     build_env = os.environ.copy()
     build_env["INIT_VARIANT"] = "tinytrap"
+    build_env["OUT_DIR"] = str(initrd_out_dir)
     subprocess.run([str(build_sh)], check=True, env=build_env)
 
     cmd = [
