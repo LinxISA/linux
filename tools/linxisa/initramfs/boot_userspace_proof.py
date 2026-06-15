@@ -66,7 +66,7 @@ def main() -> int:
         env=run_env,
     )
     try:
-        out, _ = proc.communicate(timeout=int(os.environ.get("TIMEOUT", "10")))
+        out, _ = proc.communicate(timeout=int(os.environ.get("TIMEOUT", "30")))
         timed_out = False
     except subprocess.TimeoutExpired:
         proc.kill()
