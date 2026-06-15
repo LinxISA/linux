@@ -3539,7 +3539,7 @@ static int blk_mq_get_hctx_node(struct blk_mq_tag_set *set,
 
 static inline gfp_t blk_mq_request_gfp_flags(void)
 {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 	/*
 	 * Linx bring-up profile: avoid premature ENOMEM from queue-tag
 	 * allocations on early boot paths (virtio-blk rootfs bring-up).
@@ -3923,6 +3923,9 @@ static void blk_mq_add_hw_queues_cpuhp(struct request_queue *q)
 {
 	struct blk_mq_hw_ctx *hctx;
 	unsigned long i;
+
+	if (IS_ENABLED(CONFIG_LINX_INTC) && !IS_ENABLED(CONFIG_HOTPLUG_CPU))
+		return;
 
 	mutex_lock(&blk_mq_cpuhp_lock);
 	queue_for_each_hw_ctx(q, hctx, i)

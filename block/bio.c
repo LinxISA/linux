@@ -1826,7 +1826,7 @@ int bioset_init(struct bio_set *bs,
 
 	bs->bio_slab = bio_find_or_create_slab(bs);
 	if (!bs->bio_slab) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 		pr_emerg("bioset_init: bio_find_or_create_slab failed pool=%u front_pad=%u back_pad=%u flags=0x%x\n",
 			 pool_size, front_pad, bs->back_pad, flags);
 #endif
@@ -1834,7 +1834,7 @@ int bioset_init(struct bio_set *bs,
 	}
 
 	if (mempool_init_slab_pool(&bs->bio_pool, pool_size, bs->bio_slab)) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 		pr_emerg("bioset_init: mempool_init_slab_pool failed pool=%u flags=0x%x\n",
 			 pool_size, flags);
 #endif
@@ -1843,7 +1843,7 @@ int bioset_init(struct bio_set *bs,
 
 	if ((flags & BIOSET_NEED_BVECS) &&
 	    biovec_init_pool(&bs->bvec_pool, pool_size)) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 		pr_emerg("bioset_init: biovec_init_pool failed pool=%u flags=0x%x\n",
 			 pool_size, flags);
 #endif
@@ -1854,7 +1854,7 @@ int bioset_init(struct bio_set *bs,
 		bs->rescue_workqueue = alloc_workqueue("bioset",
 							WQ_MEM_RECLAIM, 0);
 		if (!bs->rescue_workqueue) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 			pr_emerg("bioset_init: alloc_workqueue failed flags=0x%x\n",
 				 flags);
 #endif
@@ -1864,7 +1864,7 @@ int bioset_init(struct bio_set *bs,
 	if (flags & BIOSET_PERCPU_CACHE) {
 		bs->cache = alloc_percpu(struct bio_alloc_cache);
 		if (!bs->cache) {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 			pr_emerg("bioset_init: alloc_percpu(bio_alloc_cache) failed flags=0x%x\n",
 				 flags);
 #endif
@@ -1899,7 +1899,7 @@ static int __init init_bio(void)
 	cpuhp_setup_state_multi(CPUHP_BIO_DEAD, "block/bio:dead", NULL,
 					bio_cpu_dead);
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 	/*
 	 * LinxISA bring-up: BIOSET_PERCPU_CACHE currently fails early in
 	 * init_bio() (per-cpu cache allocation path). Keep fs_bio_set usable by

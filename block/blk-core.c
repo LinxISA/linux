@@ -51,7 +51,7 @@
 #include "blk-throttle.h"
 #include "blk-ioprio.h"
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 #define LINX_BLKCORE_FN __attribute__((optnone)) noinline
 #else
 #define LINX_BLKCORE_FN
@@ -59,7 +59,7 @@
 
 struct dentry *blk_debugfs_root;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 static LINX_BLKCORE_FN void linx_blk_percpu_ref_put(struct percpu_ref *ref)
 {
 	percpu_ref_put(ref);
@@ -381,7 +381,7 @@ dead:
 
 LINX_BLKCORE_FN void blk_queue_exit(struct request_queue *q)
 {
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 	linx_blk_percpu_ref_put(&q->q_usage_counter);
 #else
 	percpu_ref_put(&q->q_usage_counter);
@@ -643,14 +643,14 @@ static inline blk_status_t blk_check_zone_append(struct request_queue *q,
 LINX_BLKCORE_FN static void __submit_bio(struct bio *bio)
 {
 	/* If plug is not used, add new plug here to cache nsecs time. */
-#ifndef CONFIG_LINX
+#ifndef CONFIG_LINX_INTC
 	struct blk_plug plug;
 #endif
 
 	if (unlikely(!blk_crypto_bio_prep(&bio)))
 		return;
 
-#ifndef CONFIG_LINX
+#ifndef CONFIG_LINX_INTC
 	blk_start_plug(&plug);
 #endif
 
@@ -669,7 +669,7 @@ LINX_BLKCORE_FN static void __submit_bio(struct bio *bio)
 		blk_queue_exit(disk->queue);
 	}
 
-#ifndef CONFIG_LINX
+#ifndef CONFIG_LINX_INTC
 	blk_finish_plug(&plug);
 #endif
 }

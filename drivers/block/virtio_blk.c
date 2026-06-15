@@ -1514,7 +1514,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->disk->private_data = vblk;
 	vblk->disk->fops = &virtblk_fops;
 	vblk->index = index;
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 	vblk->disk->flags |= GENHD_FL_NO_PART;
 #endif
 
