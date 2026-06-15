@@ -147,6 +147,65 @@ static int get_ebreak_imm(struct pt_regs *regs, u8 *imm)
 	return 0;
 }
 
+static void add_linx_bugaddr(unsigned long *candidates, unsigned int *count,
+			     unsigned int max, unsigned long addr)
+{
+	if (addr && *count < max)
+		candidates[(*count)++] = addr;
+}
+
+static void add_linx_bugaddr_before(unsigned long *candidates,
+				    unsigned int *count, unsigned int max,
+				    unsigned long base, unsigned long delta)
+{
+	if (base >= delta)
+		add_linx_bugaddr(candidates, count, max, base - delta);
+}
+
+static enum bug_trap_type report_linx_bug(struct pt_regs *regs)
+{
+	unsigned long candidates[32];
+	unsigned int count = 0;
+	unsigned int i, j;
+
+	/*
+	 * Linx blockified BUG sites can report the ebreak TPC, the following
+	 * block TPC, or one of the block PCs. The bug table is anchored at the
+	 * inline BUG asm label, which is the BSTART.sys header immediately
+	 * before ebreak.
+	 */
+	for (i = 0; i <= 16; i += 2)
+		add_linx_bugaddr_before(candidates, &count,
+					ARRAY_SIZE(candidates),
+					regs->tpc, i);
+
+	add_linx_bugaddr(candidates, &count, ARRAY_SIZE(candidates), regs->bpc);
+	add_linx_bugaddr(candidates, &count, ARRAY_SIZE(candidates), regs->bpc + 2);
+	add_linx_bugaddr(candidates, &count, ARRAY_SIZE(candidates), regs->bpc + 4);
+	add_linx_bugaddr(candidates, &count, ARRAY_SIZE(candidates), regs->bpcn);
+	for (i = 2; i <= 16; i += 2)
+		add_linx_bugaddr_before(candidates, &count,
+					ARRAY_SIZE(candidates),
+					regs->bpcn, i);
+
+	for (i = 0; i < count; i++) {
+		enum bug_trap_type bug;
+
+		for (j = 0; j < i; j++) {
+			if (candidates[j] == candidates[i])
+				break;
+		}
+		if (j != i)
+			continue;
+
+		bug = report_bug(candidates[i], regs);
+		if (bug != BUG_TRAP_TYPE_NONE)
+			return bug;
+	}
+
+	return BUG_TRAP_TYPE_NONE;
+}
+
 asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 {
 	u8 ebreak_imm;
@@ -161,11 +220,8 @@ asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 
 	if (user_mode(regs))
 		force_sig_fault(SIGTRAP, TRAP_BRKPT, (void __user *)regs->tpc);
-	else {
-		bug = report_bug(regs->tpc, regs);
-		if (bug == BUG_TRAP_TYPE_NONE && regs->tpc >= 4)
-			bug = report_bug(regs->tpc - 4, regs);
-	}
+	else
+		bug = report_linx_bug(regs);
 
 	if (!user_mode(regs) && bug == BUG_TRAP_TYPE_WARN)
 		skip_over_break(regs);
@@ -177,18 +233,31 @@ asmlinkage __visible void do_trap_break(struct pt_regs *regs)
 NOKPROBE_SYMBOL(do_trap_break);
 
 #ifdef CONFIG_GENERIC_BUG
-int is_valid_bugaddr(unsigned long pc)
+static int is_linx_bug_insn(unsigned long pc)
 {
 	bug_insn_t insn;
 
-	if (pc < VMALLOC_START)
-		return 0;
 	if (get_kernel_nofault(insn, (bug_insn_t *)pc))
 		return 0;
+
 	if ((insn & __INSN_LENGTH_MASK) == __INSN_LENGTH_32)
-		return (insn == __BUG_INSN_32);
-	else
-		return ((insn & __COMPRESSED_INSN_MASK) == __BUG_INSN_16);
+		return insn == __BUG_INSN_32;
+
+	return (insn & __COMPRESSED_INSN_MASK) == __BUG_INSN_16;
+}
+
+int is_valid_bugaddr(unsigned long pc)
+{
+	if (pc < VMALLOC_START)
+		return 0;
+
+	/*
+	 * __BUG_FLAGS labels the BSTART.sys header before ebreak, so bug table
+	 * entries can name the block header while the real trap instruction is
+	 * one instruction later.
+	 */
+	return is_linx_bug_insn(pc) || is_linx_bug_insn(pc + 2) ||
+	       is_linx_bug_insn(pc + 4);
 }
 #endif /* CONFIG_GENERIC_BUG */
 
