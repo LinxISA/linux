@@ -12,6 +12,7 @@
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
+#include <linux/init.h>
 #include <linux/tick.h>
 #include <linux/ptrace.h>
 #include <linux/uaccess.h>
@@ -121,9 +122,20 @@ void flush_thread(void)
 }
 
 #ifdef CONFIG_LINX_INTC
+static bool linx_trace_ret_from_exception_enabled;
+
+static int __init linx_trace_ret_from_exception_setup(char *str)
+{
+	linx_trace_ret_from_exception_enabled =
+		!str || !(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_trace_ret_from_exception",
+	    linx_trace_ret_from_exception_setup);
+
 asmlinkage void linx_trace_ret_from_exception(struct pt_regs *regs)
 {
-	if (current && current->pid == 1) {
+	if (linx_trace_ret_from_exception_enabled && current && current->pid == 1) {
 		pr_err("Linx dbg: ret_from_exception trace pid=1 flags=%lx pt_cstate=%lx pt_tpc=%lx pt_bpc=%lx pt_sp=%lx live_ssr_cstate=%lx user_mode=%d\n",
 		       current_thread_info()->flags,
 		       regs->cstate, regs->tpc, regs->bpc, regs->sp,
