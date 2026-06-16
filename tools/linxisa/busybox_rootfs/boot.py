@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import pathlib
 import pty
@@ -8,7 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
 
 
 ROOTFS_CONFIG_REQUIREMENTS: tuple[str, ...] = (
@@ -211,6 +212,52 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     return b"".join(out_chunks).decode("utf-8", errors="replace"), timed_out
 
 
+def _artifact_path(env_name: str, fallback_env_name: str = "") -> Optional[pathlib.Path]:
+    value = os.environ.get(env_name, "")
+    if not value and fallback_env_name:
+        value = os.environ.get(fallback_env_name, "")
+    if not value:
+        return None
+    return pathlib.Path(value)
+
+
+def _write_text(path: Optional[pathlib.Path], text: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", errors="replace")
+
+
+def _write_json(path: Optional[pathlib.Path], payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _default_transcript_path(report_path: Optional[pathlib.Path]) -> Optional[pathlib.Path]:
+    if report_path is None:
+        return None
+    return report_path.with_suffix(".transcript.txt")
+
+
+def _format_transcript(attempts: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for attempt in attempts:
+        note = attempt.get("recovery_note") or "primary"
+        parts.append(f"===== attempt {attempt['index']}: {note} =====")
+        parts.append("cmd: %s" % " ".join(attempt["command"]))
+        parts.append("append: %s" % attempt["append"])
+        parts.append("timed_out: %s" % attempt["timed_out"])
+        parts.append("missing: %s" % ", ".join(attempt["missing"]))
+        if attempt.get("irq_error"):
+            parts.append("irq_error: %s" % attempt["irq_error"])
+        parts.append("")
+        parts.append(attempt.get("output", ""))
+        parts.append("")
+    return "\n".join(parts)
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     super_root = linux_root.parents[1]
@@ -248,6 +295,12 @@ def main() -> int:
         "cat /proc/interrupts\n"
         "poweroff\n",
     )
+    report_path = _artifact_path("LINX_BUSYBOX_BOOT_REPORT", "LINX_FLOW_COMMAND_REPORT")
+    transcript_path = _artifact_path(
+        "LINX_BUSYBOX_BOOT_TRANSCRIPT", "LINX_FLOW_COMMAND_TRANSCRIPT"
+    )
+    if transcript_path is None:
+        transcript_path = _default_transcript_path(report_path)
 
     if os.environ.get("SKIP_BUILD", "") not in {"1", "true", "yes"}:
         build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
@@ -268,8 +321,11 @@ def main() -> int:
     last_missing: list[str] = []
     last_timed_out = False
     last_irq_error: Optional[str] = None
+    attempts_report: list[dict[str, Any]] = []
 
-    for attempt_append, recovery_note in _attempt_appends(append):
+    for attempt_index, (attempt_append, recovery_note) in enumerate(
+        _attempt_appends(append), start=1
+    ):
         cmd = [
             str(qemu),
             "-nographic",
@@ -305,10 +361,44 @@ def main() -> int:
         last_missing = missing
         last_timed_out = timed_out
         last_irq_error = irq_error
+        attempts_report.append(
+            {
+                "index": attempt_index,
+                "recovery_note": recovery_note,
+                "append": attempt_append,
+                "command": cmd,
+                "timed_out": timed_out,
+                "missing": missing,
+                "irq_counts": irq_counts,
+                "irq_error": irq_error,
+                "output_lines": len(text.splitlines()),
+                "output_tail": text.splitlines()[-80:],
+                "output": text,
+            }
+        )
 
         if missing or irq_error:
             continue
 
+        _write_text(transcript_path, _format_transcript(attempts_report))
+        _write_json(
+            report_path,
+            {
+                "schema_version": 1,
+                "ok": True,
+                "status": "pass",
+                "kernel": str(kernel),
+                "rootfs": str(rootfs),
+                "qemu": str(qemu),
+                "timeout_seconds": timeout_s,
+                "disable_timer_irq": disable_timer_irq,
+                "attempts": [
+                    {k: v for k, v in attempt.items() if k != "output"}
+                    for attempt in attempts_report
+                ],
+                "transcript": str(transcript_path) if transcript_path is not None else None,
+            },
+        )
         if recovery_note:
             sys.stderr.write(f"note: boot.py used {recovery_note}\n")
         if timed_out:
@@ -340,6 +430,28 @@ def main() -> int:
     sys.stderr.write("cmd: %s\n" % " ".join(last_cmd))
     if last_timed_out:
         sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
+    _write_text(transcript_path, _format_transcript(attempts_report))
+    _write_json(
+        report_path,
+        {
+            "schema_version": 1,
+            "ok": False,
+            "status": "fail",
+            "kernel": str(kernel),
+            "rootfs": str(rootfs),
+            "qemu": str(qemu),
+            "timeout_seconds": timeout_s,
+            "disable_timer_irq": disable_timer_irq,
+            "missing": last_missing,
+            "timed_out": last_timed_out,
+            "irq_error": last_irq_error,
+            "attempts": [
+                {k: v for k, v in attempt.items() if k != "output"}
+                for attempt in attempts_report
+            ],
+            "transcript": str(transcript_path) if transcript_path is not None else None,
+        },
+    )
     sys.stderr.write("\n")
     sys.stderr.write("\n".join(last_text.splitlines()[-240:]))
     sys.stderr.write("\n")
