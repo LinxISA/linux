@@ -322,7 +322,7 @@ static irqreturn_t vm_interrupt(int irq, void *opaque)
 {
 	struct virtio_mmio_device *vm_dev = opaque;
 	struct virtqueue *vq;
-	unsigned long status;
+	u32 status;
 	irqreturn_t ret = IRQ_NONE;
 
 	/* Read and acknowledge interrupts */
