@@ -221,6 +221,27 @@ def _artifact_path(env_name: str, fallback_env_name: str = "") -> Optional[pathl
     return pathlib.Path(value)
 
 
+def _rootfs_path(default: pathlib.Path) -> pathlib.Path:
+    rootfs_img = os.environ.get("ROOTFS_IMG", "")
+    legacy_rootfs = os.environ.get("ROOTFS", "")
+
+    if rootfs_img:
+        if legacy_rootfs and legacy_rootfs != rootfs_img:
+            sys.stderr.write(
+                "note: ROOTFS is ignored because ROOTFS_IMG is set; "
+                "ROOTFS_IMG is the canonical rootfs selector\n"
+            )
+        return pathlib.Path(rootfs_img)
+
+    if legacy_rootfs:
+        sys.stderr.write(
+            "note: ROOTFS is accepted as a compatibility alias; prefer ROOTFS_IMG\n"
+        )
+        return pathlib.Path(legacy_rootfs)
+
+    return default
+
+
 def _write_text(path: Optional[pathlib.Path], text: str) -> None:
     if path is None:
         return
@@ -270,7 +291,7 @@ def main() -> int:
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
 
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
-    rootfs = pathlib.Path(os.environ.get("ROOTFS_IMG", str(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")))
+    rootfs = _rootfs_path(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
