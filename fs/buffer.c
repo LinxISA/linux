@@ -1002,13 +1002,17 @@ static sector_t blkdev_max_block(struct block_device *bdev, unsigned int size)
  * Initialise the state of a blockdev folio's buffers.
  */ 
 static sector_t folio_init_buffers(struct folio *folio,
-		struct block_device *bdev, unsigned size)
+		struct block_device *bdev, unsigned size, sector_t wanted_block,
+		struct buffer_head **grown_bhp)
 {
 	struct buffer_head *head = folio_buffers(folio);
 	struct buffer_head *bh = head;
 	bool uptodate = folio_test_uptodate(folio);
 	sector_t block = div_u64(folio_pos(folio), size);
 	sector_t end_block = blkdev_max_block(bdev, size);
+
+	if (grown_bhp)
+		*grown_bhp = NULL;
 
 	do {
 		if (!buffer_mapped(bh)) {
@@ -1020,6 +1024,11 @@ static sector_t folio_init_buffers(struct folio *folio,
 				set_buffer_uptodate(bh);
 			if (block < end_block)
 				set_buffer_mapped(bh);
+		}
+		if (grown_bhp && !*grown_bhp && block == wanted_block &&
+		    buffer_mapped(bh)) {
+			get_bh(bh);
+			*grown_bhp = bh;
 		}
 		block++;
 		bh = bh->b_this_page;
@@ -1040,12 +1049,16 @@ static sector_t folio_init_buffers(struct folio *folio,
  * without sleeping.  Returns true if we succeeded, or the caller should retry.
  */
 static bool grow_dev_folio(struct block_device *bdev, sector_t block,
-		pgoff_t index, unsigned size, gfp_t gfp)
+		pgoff_t index, unsigned size, gfp_t gfp,
+		struct buffer_head **grown_bhp)
 {
 	struct address_space *mapping = bdev->bd_mapping;
 	struct folio *folio;
 	struct buffer_head *bh;
 	sector_t end_block = 0;
+
+	if (grown_bhp)
+		*grown_bhp = NULL;
 
 	folio = __filemap_get_folio(mapping, index,
 			FGP_LOCK | FGP_ACCESSED | FGP_CREAT, gfp);
@@ -1055,7 +1068,8 @@ static bool grow_dev_folio(struct block_device *bdev, sector_t block,
 	bh = folio_buffers(folio);
 	if (bh) {
 		if (bh->b_size == size) {
-			end_block = folio_init_buffers(folio, bdev, size);
+			end_block = folio_init_buffers(folio, bdev, size, block,
+					grown_bhp);
 			goto unlock;
 		}
 
@@ -1083,7 +1097,7 @@ static bool grow_dev_folio(struct block_device *bdev, sector_t block,
 	 */
 	spin_lock(&mapping->i_private_lock);
 	link_dev_buffers(folio, bh);
-	end_block = folio_init_buffers(folio, bdev, size);
+	end_block = folio_init_buffers(folio, bdev, size, block, grown_bhp);
 	spin_unlock(&mapping->i_private_lock);
 unlock:
 	folio_unlock(folio);
@@ -1097,9 +1111,12 @@ unlock:
  * if we've hit a permanent error.
  */
 static bool grow_buffers(struct block_device *bdev, sector_t block,
-		unsigned size, gfp_t gfp)
+		unsigned size, gfp_t gfp, struct buffer_head **grown_bhp)
 {
 	loff_t pos;
+
+	if (grown_bhp)
+		*grown_bhp = NULL;
 
 	/*
 	 * Check for a block which lies outside our maximum possible
@@ -1113,7 +1130,8 @@ static bool grow_buffers(struct block_device *bdev, sector_t block,
 	}
 
 	/* Create a folio with the proper size buffers */
-	return grow_dev_folio(bdev, block, pos / PAGE_SIZE, size, gfp);
+	return grow_dev_folio(bdev, block, pos / PAGE_SIZE, size, gfp,
+			grown_bhp);
 }
 
 static struct buffer_head *
@@ -1130,9 +1148,17 @@ __getblk_slow(struct block_device *bdev, sector_t block,
 
 	for (;;) {
 		struct buffer_head *bh;
+#ifdef CONFIG_LINX_INTC
+		struct buffer_head *grown_bh = NULL;
 
-		if (!grow_buffers(bdev, block, size, gfp))
+		if (!grow_buffers(bdev, block, size, gfp, &grown_bh))
 			return NULL;
+		if (grown_bh)
+			return grown_bh;
+#else
+		if (!grow_buffers(bdev, block, size, gfp, NULL))
+			return NULL;
+#endif
 
 		if (blocking)
 			bh = __find_get_block_nonatomic(bdev, block, size);
@@ -1262,7 +1288,14 @@ EXPORT_SYMBOL(__bforget);
 
 static struct buffer_head *__bread_slow(struct buffer_head *bh)
 {
+#ifdef CONFIG_LINX_INTC
+	if (buffer_locked(bh))
+		__lock_buffer(bh);
+	else
+		bh->b_state |= 1UL << BH_Lock;
+#else
 	lock_buffer(bh);
+#endif
 	if (buffer_uptodate(bh)) {
 		unlock_buffer(bh);
 		return bh;
