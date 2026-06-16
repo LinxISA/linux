@@ -70,9 +70,24 @@ static int __init root_dev_setup(char *line)
 __setup("root=", root_dev_setup);
 
 #ifdef CONFIG_LINX_INTC
+static bool __initdata linx_force_storage_init;
+
+static int __init linx_storage_init_setup(char *str)
+{
+	linx_force_storage_init = !(str && str[0] == '0' && str[1] == '\0');
+	return 1;
+}
+
+__setup("linx_storage_init=", linx_storage_init_setup);
+
 bool __init linx_root_device_requested(void)
 {
 	return saved_root_name[0] != '\0';
+}
+
+bool __init linx_storage_init_requested(void)
+{
+	return linx_root_device_requested() || linx_force_storage_init;
 }
 #endif
 

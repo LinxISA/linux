@@ -87,7 +87,9 @@ def main() -> int:
 
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
-    append = os.environ.get("APPEND", "lpj=1000000 loglevel=1 console=ttyS0")
+    append = os.environ.get(
+        "APPEND", "lpj=1000000 loglevel=1 console=ttyS0 linx_storage_init=1"
+    )
     disable_timer_irq = os.environ.get("LINX_DISABLE_TIMER_IRQ", "").lower() in {"1", "true", "yes"}
     if disable_timer_irq and "linx_disable_timer_irq=" not in append:
         append = f"{append} linx_disable_timer_irq=1".strip()
@@ -95,6 +97,11 @@ def main() -> int:
     prompt_settle_s = float(os.environ.get("PROMPT_SETTLE", "2.0"))
     disk_mb = int(os.environ.get("DISK_MB", "64"))
     debug_log_lines = int(os.environ.get("DEBUG_LOG_LINES", "240"))
+    require_dev_node = os.environ.get("LINX_VIRTIO_DISK_REQUIRE_DEV", "0").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
         qemu_extra_args.extend(["-bios", "none"])
@@ -261,7 +268,7 @@ def main() -> int:
         return probe_lines
 
     dev_lines = section_lines_for("# ls /dev")
-    if "vda" not in dev_lines:
+    if require_dev_node and "vda" not in dev_lines:
         retry_rc = _retry_once_same_config(append)
         if retry_rc == 0:
             return 0

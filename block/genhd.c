@@ -429,6 +429,22 @@ static void add_disk_final(struct gendisk *disk)
 	set_bit(GD_ADDED, &disk->state);
 }
 
+static bool linx_skip_early_bdi_registration(struct gendisk *disk)
+{
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx storage bring-up currently exercises a hard-break block lane:
+	 * virtio-blk is registered without partition scanning while broad
+	 * initcalls remain disabled. Keep the disk visible, but avoid the BDI
+	 * sysfs device-registration path until that full driver-core surface is
+	 * ready for the Linx boot lane.
+	 */
+	return disk->flags & GENHD_FL_NO_PART;
+#else
+	return false;
+#endif
+}
+
 static int __add_disk(struct device *parent, struct gendisk *disk,
 		      const struct attribute_group **groups,
 		      struct fwnode_handle *fwnode)
@@ -530,7 +546,8 @@ static int __add_disk(struct device *parent, struct gendisk *disk,
 	if (ret)
 		goto out_put_slave_dir;
 
-	if (!(disk->flags & GENHD_FL_HIDDEN)) {
+	if (!(disk->flags & GENHD_FL_HIDDEN) &&
+	    !linx_skip_early_bdi_registration(disk)) {
 		ret = bdi_register(disk->bdi, "%u:%u",
 				   disk->major, disk->first_minor);
 		if (ret)
@@ -551,7 +568,8 @@ static int __add_disk(struct device *parent, struct gendisk *disk,
 	return 0;
 
 out_unregister_bdi:
-	if (!(disk->flags & GENHD_FL_HIDDEN))
+	if (!(disk->flags & GENHD_FL_HIDDEN) &&
+	    !linx_skip_early_bdi_registration(disk))
 		bdi_unregister(disk->bdi);
 out_unregister_queue:
 	blk_unregister_queue(disk);
@@ -731,7 +749,8 @@ static void __del_gendisk(struct gendisk *disk)
 		drop_partition(part);
 	mutex_unlock(&disk->open_mutex);
 
-	if (!(disk->flags & GENHD_FL_HIDDEN)) {
+	if (!(disk->flags & GENHD_FL_HIDDEN) &&
+	    !linx_skip_early_bdi_registration(disk)) {
 		sysfs_remove_link(&disk_to_dev(disk)->kobj, "bdi");
 
 		/*
