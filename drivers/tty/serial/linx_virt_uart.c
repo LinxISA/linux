@@ -496,15 +496,16 @@ static int linx_vuart_probe(struct platform_device *pdev)
 	lport->poll_enabled = false;
 
 	pr_err("Linx dbg: linx_vuart_probe before uart_add_one_port\n");
+	linx_vuart_ports[id] = lport;
 	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
 	pr_err("Linx dbg: linx_vuart_probe after uart_add_one_port rc=%d\n", rc);
 	if (rc) {
+		linx_vuart_ports[id] = NULL;
 		linx_vuart_port_inuse[id] = false;
 		return rc;
 	}
 
 	platform_set_drvdata(pdev, lport);
-	linx_vuart_ports[id] = lport;
 	pr_err("Linx dbg: linx_vuart_probe done\n");
 
 	return 0;
@@ -590,8 +591,13 @@ static int __init linx_vuart_register_builtin_port(void)
 	timer_setup(&lport->poll_timer, linx_vuart_poll_timer, 0);
 	lport->poll_enabled = false;
 
+	linx_vuart_ports[0] = lport;
+#ifdef CONFIG_SERIAL_LINX_VIRT_UART_CONSOLE
+	linx_vuart_console.index = 0;
+#endif
 	rc = uart_add_one_port(&linx_vuart_uart_driver, &lport->port);
 	if (rc) {
+		linx_vuart_ports[0] = NULL;
 #ifdef CONFIG_MMU
 		early_iounmap(lport->port.membase, LINX_VUART_SIZE);
 #endif
@@ -599,7 +605,6 @@ static int __init linx_vuart_register_builtin_port(void)
 		return rc;
 	}
 
-	linx_vuart_ports[0] = lport;
 	return 0;
 }
 #endif

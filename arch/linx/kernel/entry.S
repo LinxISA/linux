@@ -236,7 +236,7 @@ after_save_bstate:
 
 PT_TP_FROM_USER:
 	BSTART.sys fall
-	hl.ssrget SSR_ETEMP, -> s5
+	hl.ssrget SSR_A1_ETEMP0, -> s5
 	block_next_direct PT_TP_READY
 
 PT_TP_FROM_KERNEL:
@@ -255,6 +255,7 @@ PT_TP_READY:
 	 * occurs, the exception vector knows it came from the kernel
 	 */
 	hl.ssrset zero, SSR_ETEMP // it's already zero
+	hl.ssrset zero, SSR_A1_ETEMP0
 
 	/* Load the global pointer */
 	addtpc %tpcrel_hi(__global_pointer$), -> t
@@ -350,8 +351,8 @@ handle_syscall:
 	sdi t#1, [sp, PT_ORIG_TPC]
 	ldi [sp, PT_BPC], -> t
 	sdi t#1, [sp, PT_ORIG_BPC]
-	/* advance bpc and tpc with length of `acrc`, because it always ends a block */
-	addi t#2, 4, -> t
+	/* PT_TPC points at the enforced 16-bit C.BSTOP after acrc; resume at the next block header. */
+	addi t#2, 2, -> t
 	sdi t#1, [sp, PT_TPC]
 	sdi t#1, [sp, PT_BPC]
 
@@ -437,6 +438,7 @@ resume_userspace:
 	andi s0, _TIF_WORK_MASK, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_WORK_MASK */
 	setc.nei s1, 0
 
+	BSTART.std fall
 	/*
 	 * Save unwound kernel stack pointer in thread_info.
 	 * Save SSR_TP into the SSR_ETEMP register, so we can find the kernel data

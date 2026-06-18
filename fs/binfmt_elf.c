@@ -447,16 +447,8 @@ static unsigned long elf_load(struct file *filep, unsigned long addr,
 			 * Zero the end of the last mapped page but ignore
 			 * any errors if the segment isn't writable.
 			 */
-#ifdef CONFIG_LINX_INTC
-			if (prot & PROT_WRITE)
-				pr_err("Linx dbg: elf_load skipping padzero zero_start=%lx zero_end=%lx filesz=%llx memsz=%llx\n",
-				       zero_start, zero_end,
-				       (unsigned long long)eppnt->p_filesz,
-				       (unsigned long long)eppnt->p_memsz);
-#else
 			if (padzero(zero_start) && (prot & PROT_WRITE))
 				return -EFAULT;
-#endif
 		}
 	} else {
 		map_addr = zero_start = ELF_PAGESTART(addr);
