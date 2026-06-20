@@ -182,8 +182,7 @@ static inline void vmalloc_fault(struct pt_regs *regs, int code, unsigned long a
 
 static inline bool access_error(unsigned long cause, struct vm_area_struct *vma)
 {
-	if (is_insn_abort(cause) &&
-	    ECAUSE_SYNDROME(cause) == ECAUSE_INSN_SYD_PAGE_FAULT){
+	if (is_insn_abort(cause)) {
 		if (!(vma->vm_flags & VM_EXEC))
 			return true;
 	}

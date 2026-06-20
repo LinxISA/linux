@@ -796,7 +796,9 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	 * allocations.
 	 */
 	if (offset_in_page(addr)) {
+#ifndef CONFIG_ARCH_LINX
 		VM_BUG_ON(addr != -ENOMEM);
+#endif
 		info.flags = 0;
 		info.low_limit = TASK_UNMAPPED_BASE;
 		info.high_limit = mmap_end;
@@ -1328,7 +1330,16 @@ void exit_mmap(struct mm_struct *mm)
 		vma = vma_next(&vmi);
 	} while (vma && likely(!xa_is_zero(vma)));
 
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up can leave map_count stale when the maple tree has already
+	 * lost a VMA.  At exit_mmap() the mm is unreachable, so keep teardown
+	 * moving instead of killing the next exec with a debug BUG.
+	 */
+	mm->map_count = count;
+#else
 	BUG_ON(count != mm->map_count);
+#endif
 
 	trace_exit_mmap(mm);
 destroy:

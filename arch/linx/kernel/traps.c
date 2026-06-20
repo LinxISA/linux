@@ -318,8 +318,7 @@ asmlinkage __visible void do_trap_insn_exception(struct pt_regs *regs)
 		break;
 	case ECAUSE_INSN_SYD_TRANS_FAULT: /* 这两个异常的意义待明确是否有必要 */
 	case ECAUSE_INSN_SYD_PERM_FAULT:
-		do_trap_error(regs, SIGILL, ILL_ILLOPC, regs->tpc,
-				"Oops - instruction trans/perm fault");
+		do_page_fault(regs);
 		break;
 	case ECAUSE_INSN_SYD_PAGE_FAULT:
 		do_page_fault(regs);
