@@ -30,6 +30,7 @@
 #include <linux/rcupdate.h>
 #include <linux/hrtimer.h>
 #include <linux/freezer.h>
+#include <linux/ptrace.h>
 #include <net/busy_poll.h>
 #include <linux/vmalloc.h>
 
@@ -1098,7 +1099,6 @@ SYSCALL_DEFINE5(ppoll, struct pollfd __user *, ufds, unsigned int, nfds,
 {
 	struct timespec64 ts, end_time, *to = NULL;
 	int ret;
-
 	if (tsp) {
 		if (get_timespec64(&ts, tsp))
 			return -EFAULT;

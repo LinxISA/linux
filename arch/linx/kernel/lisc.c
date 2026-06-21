@@ -10,6 +10,7 @@
 #include <asm/lisc.h>
 #include <asm/smp.h>
 #include <asm/block-def.h>
+#include <asm/debug_uart.h>
 
 struct lisc_ret lisc_ecall(int ext, int fid, unsigned long arg0,
 			unsigned long arg1, unsigned long arg2,
@@ -30,6 +31,7 @@ EXPORT_SYMBOL(lisc_ecall);
  */
 void lisc_shutdown(void)
 {
+	linx_debug_uart_puts("LINX_REBOOT lisc_shutdown\n");
 	pr_info("lisc shut down.\n");
 	__asm__ __volatile__(
 		"BSTART.std fall\n"

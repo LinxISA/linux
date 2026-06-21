@@ -76,6 +76,8 @@ uintptr_t _dtb_early_pa __initdata;
 
 static phys_addr_t dma32_phys_limit __initdata;
 
+extern unsigned long highest_memmap_pfn;
+
 static void __init zone_sizes_init(void)
 {
 	unsigned long max_zone_pfns[MAX_NR_ZONES] = { 0, };
@@ -1339,6 +1341,10 @@ void __init misc_mem_init(void)
 	arch_numa_init();
 	sparse_init();
 	zone_sizes_init();
+#ifdef CONFIG_FLATMEM
+	if (!highest_memmap_pfn && max_low_pfn)
+		highest_memmap_pfn = max_low_pfn - 1;
+#endif
 #ifdef CONFIG_KEXEC_CORE
 	reserve_crashkernel();
 #endif

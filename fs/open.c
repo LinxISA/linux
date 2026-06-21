@@ -936,6 +936,10 @@ static int do_dentry_open(struct file *f,
 	f->f_op = fops_get(inode->i_fop);
 	if (WARN_ON(!f->f_op)) {
 		error = -ENODEV;
+#ifdef CONFIG_ARCH_LINX
+		if (current->pid <= 64)
+			error = -124;
+#endif
 		goto cleanup_all;
 	}
 
@@ -1590,6 +1594,11 @@ SYSCALL_DEFINE1(close, unsigned int, fd)
 {
 	int retval;
 	struct file *file;
+
+#ifdef CONFIG_ARCH_LINX
+	if (current->pid <= 64)
+		pr_err("Linx dbg: sys_close pid=%d fd=%u\n", current->pid, fd);
+#endif
 
 	file = file_close_fd(fd);
 	if (!file)

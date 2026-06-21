@@ -80,7 +80,7 @@ core_param(ignore_rlimit_data, ignore_rlimit_data, bool, 0644);
 
 static bool linx_trace_mmap_failure_p(struct file *file)
 {
-	return current->pid == 1 && file != NULL;
+	return current->pid <= 64 && file != NULL;
 }
 
 /* Update vma->vm_page_prot to reflect vma->vm_flags. */
@@ -490,7 +490,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			}
 
 			if (!can_mmap_file(file))
-				return -ENODEV;
+				return -123;
 			if (vm_flags & (VM_GROWSDOWN|VM_GROWSUP))
 				return -EINVAL;
 			break;
@@ -1307,6 +1307,16 @@ void exit_mmap(struct mm_struct *mm)
 	 * because the memory has been already freed.
 	 */
 	mm_flags_set(MMF_OOM_SKIP, mm);
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up atomics can leave mmap_lock's reader count stale after
+	 * the final mmap_read_unlock().  The mm is unreachable here: exit_mm()
+	 * has cleared current->mm and mm_users is zero, so reset the lock state
+	 * before taking the write side for page-table and VMA destruction.
+	 */
+	atomic_long_set(&mm->mmap_lock.count, 0);
+	atomic_long_set(&mm->mmap_lock.owner, 0);
+#endif
 	mmap_write_lock(mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);

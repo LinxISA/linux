@@ -4292,6 +4292,11 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 	size_t chunk = mapping_max_folio_size(mapping);
 	long status = 0;
 	ssize_t written = 0;
+	bool linx_dbg = current->pid <= 64 && file && file->f_path.dentry;
+
+	if (linx_dbg)
+		pr_err("Linx dbg: generic_perform_write enter pid=%d file=%pd2 count=%zu pos=%lld chunk=%zu\n",
+		       current->pid, file->f_path.dentry, iov_iter_count(i), pos, chunk);
 
 	do {
 		struct folio *folio;
@@ -4311,8 +4316,16 @@ retry:
 			break;
 		}
 
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before write_begin pid=%d file=%pd2 pos=%lld bytes=%zu offset=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, pos, bytes,
+			       offset, iov_iter_count(i));
 		status = a_ops->write_begin(iocb, mapping, pos, bytes,
 						&folio, &fsdata);
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after write_begin pid=%d file=%pd2 status=%ld folio=%px\n",
+			       current->pid, file->f_path.dentry, status,
+			       status < 0 ? NULL : folio);
 		if (unlikely(status < 0))
 			break;
 
@@ -4329,11 +4342,31 @@ retry:
 		 * deadlock. Use an atomic copy to avoid deadlocking
 		 * in page fault handling.
 		 */
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before copy pid=%d file=%pd2 offset=%zu bytes=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, offset, bytes,
+			       iov_iter_count(i));
+#ifdef CONFIG_ARCH_LINX
+		copied = copy_page_from_iter(&folio->page, offset, bytes, i);
+#else
 		copied = copy_folio_from_iter_atomic(folio, offset, bytes, i);
+#endif
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after copy pid=%d file=%pd2 copied=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, copied,
+			       iov_iter_count(i));
 		flush_dcache_folio(folio);
 
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before write_end pid=%d file=%pd2 pos=%lld bytes=%zu copied=%zu\n",
+			       current->pid, file->f_path.dentry, pos, bytes,
+			       copied);
 		status = a_ops->write_end(iocb, mapping, pos, bytes, copied,
 						folio, fsdata);
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after write_end pid=%d file=%pd2 status=%ld count=%zu\n",
+			       current->pid, file->f_path.dentry, status,
+			       iov_iter_count(i));
 		if (unlikely(status != copied)) {
 			iov_iter_revert(i, copied - max(status, 0L));
 			if (unlikely(status < 0))
@@ -4373,6 +4406,10 @@ retry:
 	if (!written)
 		return status;
 	iocb->ki_pos += written;
+	if (linx_dbg)
+		pr_err("Linx dbg: generic_perform_write exit pid=%d file=%pd2 written=%zd pos=%lld count=%zu\n",
+		       current->pid, file->f_path.dentry, written, iocb->ki_pos,
+		       iov_iter_count(i));
 	return written;
 }
 EXPORT_SYMBOL(generic_perform_write);

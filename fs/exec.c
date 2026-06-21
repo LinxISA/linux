@@ -274,6 +274,27 @@ static bool valid_arg_len(struct linux_binprm *bprm, long len)
 
 #endif /* CONFIG_MMU */
 
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+static long linx_exec_strnlen_user(const char __user *str, long count)
+{
+	long len;
+
+	if (unlikely(count <= 0))
+		return 0;
+
+	for (len = 0; len < count; len++) {
+		char c;
+
+		if (get_user(c, str + len))
+			return 0;
+		if (!c)
+			return len + 1;
+	}
+
+	return count + 1;
+}
+#endif
+
 /*
  * Create a new mm_struct and populate it with a temporary stack
  * vm_area_struct.  We don't have enough context at this point to set the stack
@@ -485,25 +506,74 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 	struct page *kmapped_page = NULL;
 	char *kaddr = NULL;
 	unsigned long kpos = 0;
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+	struct linx_arg_copy {
+		const char __user *str;
+		int len;
+	} *linx_args = NULL;
+	int i;
+#endif
 	int ret;
+
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+	if (argc > 0) {
+		linx_args = kvmalloc_array(argc, sizeof(*linx_args), GFP_KERNEL);
+		if (!linx_args)
+			return -ENOMEM;
+
+		for (i = 0; i < argc; i++) {
+			const char __user *str;
+			int len;
+
+			ret = -EFAULT;
+			str = get_user_arg_ptr(argv, i);
+			if (IS_ERR(str)) {
+				if (current->pid <= 64)
+					ret = -160 - i;
+				goto out;
+			}
+
+			len = linx_exec_strnlen_user(str, MAX_ARG_STRLEN);
+			if (!len) {
+				if (current->pid <= 64)
+					ret = -170 - i;
+				goto out;
+			}
+
+			ret = -E2BIG;
+			if (!valid_arg_len(bprm, len))
+				goto out;
+
+			linx_args[i].str = str;
+			linx_args[i].len = len;
+		}
+	}
+#endif
 
 	while (argc-- > 0) {
 		const char __user *str;
 		int len;
 		unsigned long pos;
 
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+		str = linx_args[argc].str;
+		len = linx_args[argc].len;
+#else
 		ret = -EFAULT;
 		str = get_user_arg_ptr(argv, argc);
-		if (IS_ERR(str))
+		if (IS_ERR(str)) {
 			goto out;
+		}
 
 		len = strnlen_user(str, MAX_ARG_STRLEN);
-		if (!len)
+		if (!len) {
 			goto out;
+		}
 
 		ret = -E2BIG;
 		if (!valid_arg_len(bprm, len))
 			goto out;
+#endif
 
 		/* We're going to work our way backwards. */
 		pos = bprm->p;
@@ -553,10 +623,31 @@ static int copy_strings(int argc, struct user_arg_ptr argv,
 				kpos = pos & PAGE_MASK;
 				flush_arg_page(bprm, kpos, kmapped_page);
 			}
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+			if (user_read_access_begin(str, bytes_to_copy)) {
+				int i;
+
+				for (i = 0; i < bytes_to_copy; i++) {
+					char c;
+
+					if (__get_user(c, str + i)) {
+						ret = -150 - i;
+						user_read_access_end();
+						goto out;
+					}
+					kaddr[offset + i] = c;
+				}
+				user_read_access_end();
+			} else {
+				ret = -EFAULT;
+				goto out;
+			}
+#else
 			if (copy_from_user(kaddr+offset, str, bytes_to_copy)) {
 				ret = -EFAULT;
 				goto out;
 			}
+#endif
 		}
 	}
 	ret = 0;
@@ -566,7 +657,16 @@ out:
 		kunmap_local(kaddr);
 		put_arg_page(kmapped_page);
 	}
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+	kvfree(linx_args);
+#endif
 	return ret;
+#if defined(CONFIG_ARCH_LINX) || defined(CONFIG_LINX)
+efault:
+	user_read_access_end();
+	ret = -EFAULT;
+	goto out;
+#endif
 }
 
 /*
@@ -581,15 +681,6 @@ int copy_string_kernel(const char *arg, struct linux_binprm *bprm)
 		return -EFAULT;
 	if (!valid_arg_len(bprm, len))
 		return -E2BIG;
-
-#ifdef CONFIG_LINX_INTC
-	bprm->p -= len;
-	if (bprm_hit_stack_limit(bprm))
-		return -E2BIG;
-	pr_err("Linx dbg: copy_string_kernel reserving-only len=%d new_p=%016lx arg=%s\n",
-	       len, bprm->p, arg);
-	return 0;
-#endif
 
 	/* We're going to work our way backwards. */
 	arg += len;
@@ -606,31 +697,11 @@ int copy_string_kernel(const char *arg, struct linux_binprm *bprm)
 		arg -= bytes_to_copy;
 		len -= bytes_to_copy;
 
-#ifdef CONFIG_LINX_INTC
-		pr_err("Linx dbg: copy_string_kernel before get_arg_page pos=%016lx bytes=%u remaining=%d arg_tail=%px\n",
-		       pos, bytes_to_copy, len, arg);
-#endif
 		page = get_arg_page(bprm, pos, 1);
-#ifdef CONFIG_LINX_INTC
-		pr_err("Linx dbg: copy_string_kernel after get_arg_page page=%px pos=%016lx\n",
-		       page, pos);
-#endif
 		if (!page)
 			return -E2BIG;
-#ifdef CONFIG_LINX_INTC
-		pr_err("Linx dbg: copy_string_kernel before flush pos=%016lx page=%px\n",
-		       pos, page);
-#endif
 		flush_arg_page(bprm, pos & PAGE_MASK, page);
-#ifdef CONFIG_LINX_INTC
-		pr_err("Linx dbg: copy_string_kernel before memcpy pos=%016lx off=%lu bytes=%u\n",
-		       pos, offset_in_page(pos), bytes_to_copy);
-#endif
 		memcpy_to_page(page, offset_in_page(pos), arg, bytes_to_copy);
-#ifdef CONFIG_LINX_INTC
-		pr_err("Linx dbg: copy_string_kernel before put_arg_page page=%px\n",
-		       page);
-#endif
 		put_arg_page(page);
 	}
 
@@ -647,9 +718,6 @@ static int copy_strings_kernel(int argc, const char *const *argv,
 			return ret;
 		if (fatal_signal_pending(current))
 			return -ERESTARTNOHAND;
-#ifdef CONFIG_LINX_INTC
-		continue;
-#endif
 		cond_resched();
 	}
 	return 0;
@@ -859,8 +927,13 @@ static struct file *do_open_execat(int fd, struct filename *name, int flags)
 		open_exec_flags.lookup_flags |= LOOKUP_EMPTY;
 
 	file = do_filp_open(fd, name, &open_exec_flags);
-	if (IS_ERR(file))
+	if (IS_ERR(file)) {
+#ifdef CONFIG_ARCH_LINX
+		if (PTR_ERR(file) == -ENODEV && current->pid <= 64)
+			return ERR_PTR(-125);
+#endif
 		return file;
+	}
 
 	if (path_noexec(&file->f_path))
 		return ERR_PTR(-EACCES);
@@ -1871,10 +1944,14 @@ static int search_binary_handler(struct linux_binprm *bprm)
 			pr_err("LinxISA binfmt: try fmt=%px load_binary=%px\n", fmt,
 			       fmt->load_binary);
 #endif
-			retval = fmt->load_binary(bprm);
+		retval = fmt->load_binary(bprm);
+#ifdef CONFIG_ARCH_LINX
+		if (retval == -ENODEV && current->pid <= 64)
+			retval = -136;
+#endif
 #ifdef CONFIG_LINX_INTC
-			pr_err("Linx dbg: search_binary_handler done fmt=%px load_binary=%px ret=%d point_of_no_return=%d interp=%px\n",
-			       fmt, fmt->load_binary, retval,
+				pr_err("Linx dbg: search_binary_handler done fmt=%px load_binary=%px ret=%d point_of_no_return=%d interp=%px\n",
+				       fmt, fmt->load_binary, retval,
 			       bprm->point_of_no_return ? 1 : 0, bprm->interpreter);
 #endif
 #ifdef CONFIG_LINX_DEBUG
@@ -1927,8 +2004,12 @@ static int exec_binprm(struct linux_binprm *bprm)
 			       bprm->interpreter);
 #endif
 			ret = search_binary_handler(bprm);
+#ifdef CONFIG_ARCH_LINX
+			if (ret == -ENODEV && current->pid <= 64)
+				ret = -133;
+#endif
 #ifdef CONFIG_LINX
-			linx_debug_uart_putc('r');
+				linx_debug_uart_putc('r');
 #endif
 #ifdef CONFIG_LINX_INTC
 			pr_err("Linx dbg: exec_binprm after search depth=%d ret=%d point_of_no_return=%d interp=%px file=%pd2\n",
@@ -1990,8 +2071,12 @@ static int bprm_execve(struct linux_binprm *bprm)
 
 	/* Set the unchanging part of bprm->cred */
 	retval = security_bprm_creds_for_exec(bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -131;
+#endif
 #ifdef CONFIG_LINX
-	linx_debug_uart_putc('3');
+		linx_debug_uart_putc('3');
 #endif
 	if (retval || bprm->is_check)
 		goto out;
@@ -2004,6 +2089,10 @@ static int bprm_execve(struct linux_binprm *bprm)
 	       bprm->file ? bprm->file->f_path.dentry : NULL, bprm->argc, bprm->envc);
 #endif
 	retval = exec_binprm(bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -132;
+#endif
 #ifdef CONFIG_LINX_INTC
 	pr_err("Linx dbg: bprm_execve after exec_binprm retval=%d file=%pd2\n",
 	       retval, bprm->file ? bprm->file->f_path.dentry : NULL);
@@ -2047,9 +2136,24 @@ static int do_execveat_common(int fd, struct filename *filename,
 {
 	struct linux_binprm *bprm;
 	int retval;
+#ifdef CONFIG_ARCH_LINX
+	bool linx_dbg_exec = current->parent && current->parent->pid == 1;
+#endif
 
-	if (IS_ERR(filename))
+	if (IS_ERR(filename)) {
+#ifdef CONFIG_ARCH_LINX
+		if (PTR_ERR(filename) == -ENODEV && current->pid <= 64)
+			return -121;
+		if (PTR_ERR(filename) == -EFAULT && current->pid <= 64)
+			return -141;
+#endif
 		return PTR_ERR(filename);
+	}
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat start pid=%d comm=%s file=%s flags=0x%x\n",
+		       current->pid, current->comm, filename->name, flags);
+#endif
 
 	/*
 	 * We move the actual failure in case of RLIMIT_NPROC excess from
@@ -2072,33 +2176,98 @@ static int do_execveat_common(int fd, struct filename *filename,
 		retval = PTR_ERR(bprm);
 		goto out_ret;
 	}
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after alloc_bprm pid=%d p=%lx\n",
+		       current->pid, bprm->p);
+#endif
 
 	retval = count(argv, MAX_ARG_STRINGS);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -126;
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -142;
+#endif
 	if (retval < 0)
 		goto out_free;
 	bprm->argc = retval;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after count argv pid=%d argc=%d p=%lx\n",
+		       current->pid, bprm->argc, bprm->p);
+#endif
 
 	retval = count(envp, MAX_ARG_STRINGS);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -127;
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -143;
+#endif
 	if (retval < 0)
 		goto out_free;
 	bprm->envc = retval;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after count env pid=%d envc=%d p=%lx\n",
+		       current->pid, bprm->envc, bprm->p);
+#endif
 
 	retval = bprm_stack_limits(bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -128;
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -144;
+#endif
 	if (retval < 0)
 		goto out_free;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after stack_limits pid=%d p=%lx\n",
+		       current->pid, bprm->p);
+#endif
 
 	retval = copy_string_kernel(bprm->filename, bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -145;
+#endif
 	if (retval < 0)
 		goto out_free;
 	bprm->exec = bprm->p;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after copy filename pid=%d p=%lx exec=%lx\n",
+		       current->pid, bprm->p, bprm->exec);
+#endif
 
 	retval = copy_strings(bprm->envc, envp, bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -146;
+#endif
 	if (retval < 0)
 		goto out_free;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after copy env pid=%d p=%lx\n",
+		       current->pid, bprm->p);
+#endif
 
 	retval = copy_strings(bprm->argc, argv, bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -147;
+#endif
 	if (retval < 0)
 		goto out_free;
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after copy argv pid=%d p=%lx\n",
+		       current->pid, bprm->p);
+#endif
 
 	/*
 	 * When argv is empty, add an empty string ("") as argv[0] to
@@ -2108,6 +2277,10 @@ static int do_execveat_common(int fd, struct filename *filename,
 	 */
 	if (bprm->argc == 0) {
 		retval = copy_string_kernel("", bprm);
+#ifdef CONFIG_ARCH_LINX
+		if (retval == -EFAULT && current->pid <= 64)
+			retval = -148;
+#endif
 		if (retval < 0)
 			goto out_free;
 		bprm->argc = 1;
@@ -2116,11 +2289,30 @@ static int do_execveat_common(int fd, struct filename *filename,
 			     current->comm, bprm->filename);
 	}
 
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat before bprm_execve pid=%d argc=%d envc=%d\n",
+		       current->pid, bprm->argc, bprm->envc);
+#endif
 	retval = bprm_execve(bprm);
+#ifdef CONFIG_ARCH_LINX
+	if (retval == -ENODEV && current->pid <= 64)
+		retval = -130;
+	if (retval == -EFAULT && current->pid <= 64)
+		retval = -149;
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat after bprm_execve pid=%d retval=%d\n",
+		       current->pid, retval);
+#endif
 out_free:
 	free_bprm(bprm);
 
 out_ret:
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exec)
+		pr_err("Linx dbg: do_execveat ret pid=%d retval=%d\n",
+		       current->pid, retval);
+#endif
 	putname(filename);
 	return retval;
 }

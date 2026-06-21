@@ -12,7 +12,13 @@ int __init linx_vuart_bringup_init(void);
 bool linx_vuart_tty_is_active(struct tty_struct *tty);
 unsigned int linx_vuart_poll_tty_rx(struct tty_struct *tty);
 int linx_vuart_read_tty_char(struct tty_struct *tty, u8 *out);
+void linx_vuart_debug_putc(char c);
 #else
+static inline void linx_vuart_debug_putc(char c)
+{
+	(void)c;
+}
+
 static inline bool linx_vuart_tty_is_active(struct tty_struct *tty)
 {
 	(void)tty;

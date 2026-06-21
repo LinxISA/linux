@@ -20,6 +20,9 @@
 
 #include <asm/asm-prototypes.h>
 #include <asm/bug.h>
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 
@@ -27,12 +30,72 @@ int show_unhandled_signals = 1;
 
 static DEFINE_SPINLOCK(die_lock);
 
+#ifdef CONFIG_ARCH_LINX
+static void linx_regs_debug_dump(const char *tag, struct pt_regs *regs)
+{
+	linx_debug_uart_puts(tag);
+	linx_debug_uart_puts(" tpc=0x");
+	linx_debug_uart_puthex_ulong(regs->tpc);
+	linx_debug_uart_puts(" bpc=0x");
+	linx_debug_uart_puthex_ulong(regs->bpc);
+	linx_debug_uart_puts(" bpcn=0x");
+	linx_debug_uart_puthex_ulong(regs->bpcn);
+	linx_debug_uart_puts(" orig_tpc=0x");
+	linx_debug_uart_puthex_ulong(regs->orig_tpc);
+	linx_debug_uart_puts(" orig_bpc=0x");
+	linx_debug_uart_puthex_ulong(regs->orig_bpc);
+	linx_debug_uart_puts(" sp=0x");
+	linx_debug_uart_puthex_ulong(user_stack_pointer(regs));
+	linx_debug_uart_puts(" ra=0x");
+	linx_debug_uart_puthex_ulong(regs->ra);
+	linx_debug_uart_puts(" a0=0x");
+	linx_debug_uart_puthex_ulong(regs->a0);
+	linx_debug_uart_puts(" a1=0x");
+	linx_debug_uart_puthex_ulong(regs->a1);
+	linx_debug_uart_puts(" a2=0x");
+	linx_debug_uart_puthex_ulong(regs->a2);
+	linx_debug_uart_puts(" a3=0x");
+	linx_debug_uart_puthex_ulong(regs->a3);
+	linx_debug_uart_puts(" a7=0x");
+	linx_debug_uart_puthex_ulong(regs->a7);
+	linx_debug_uart_puts(" cstate=0x");
+	linx_debug_uart_puthex_ulong(regs->cstate);
+	linx_debug_uart_puts(" traparg0=0x");
+	linx_debug_uart_puthex_ulong(regs->traparg0);
+	linx_debug_uart_puts(" trapno=0x");
+	linx_debug_uart_puthex_ulong(regs->trapno);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_user_trap_debug_dump(struct pt_regs *regs, int signo,
+				      int code, unsigned long addr)
+{
+	struct task_struct *tsk = current;
+
+	linx_debug_uart_puts("LINX_USER_TRAP pid=0x");
+	linx_debug_uart_puthex_ulong(task_pid_nr(tsk));
+	linx_debug_uart_puts(" signo=0x");
+	linx_debug_uart_puthex_ulong(signo);
+	linx_debug_uart_puts(" code=0x");
+	linx_debug_uart_puthex_ulong(code);
+	linx_debug_uart_puts(" addr=0x");
+	linx_debug_uart_puthex_ulong(addr);
+	linx_regs_debug_dump("", regs);
+}
+#endif
+
 void die(struct pt_regs *regs, const char *str)
 {
 	static int die_counter;
 	int ret;
 
 	oops_enter();
+
+#ifdef CONFIG_ARCH_LINX
+	linx_debug_uart_puts("LINX_DIE msg=");
+	linx_debug_uart_puts(str);
+	linx_regs_debug_dump("", regs);
+#endif
 
 	spin_lock_irq(&die_lock);
 	console_verbose();
@@ -60,6 +123,17 @@ void die(struct pt_regs *regs, const char *str)
 void do_trap(struct pt_regs *regs, int signo, int code, unsigned long addr)
 {
 	struct task_struct *tsk = current;
+
+	if (user_mode(regs) &&
+	    (signo == SIGSEGV || signo == SIGBUS || signo == SIGILL)) {
+#ifdef CONFIG_ARCH_LINX
+		linx_user_trap_debug_dump(regs, signo, code, addr);
+#endif
+		pr_info("Linx dbg: user fault comm=%s pid=%d signo=%d code=0x%x addr=0x" REG_FMT " tpc=0x" REG_FMT " bpc=0x" REG_FMT " sp=0x" REG_FMT " trapno=0x" REG_FMT "\n",
+			tsk->comm, task_pid_nr(tsk), signo, code, addr,
+			regs->tpc, regs->bpc, user_stack_pointer(regs),
+			regs->trapno);
+	}
 
 	if (show_unhandled_signals && unhandled_signal(tsk, signo)
 	    && printk_ratelimit()) {

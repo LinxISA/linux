@@ -76,6 +76,9 @@
 
 #include <asm/unistd.h>
 #include <asm/mmu_context.h>
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #include "exit.h"
 
@@ -894,32 +897,37 @@ static void synchronize_group_exit(struct task_struct *tsk, long code)
 		coredump_task_exit(tsk, core_state);
 }
 
+#ifdef CONFIG_ARCH_LINX
+static __always_inline void __noreturn linx_tail_do_task_dead(void)
+{
+	asm volatile(
+		"bstart.std ind\n"
+		"1: addtpc %%tpcrel_hi(do_task_dead), -> t\n"
+		"addi t#1, %%tpcrel_lo(1b), -> t\n"
+		"setc.tgt t#1\n"
+		"bstop\n"
+		:
+		:
+		: "memory");
+	unreachable();
+}
+#endif
+
 void __noreturn do_exit(long code)
 {
 	struct task_struct *tsk = current;
 	int group_dead;
-	static unsigned int linx_exit_dbg_left = 128;
+#ifdef CONFIG_ARCH_LINX
+bool linx_dbg_exit = tsk->pid <= 64;
+
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit start pid=%d comm=%s code=0x%lx flags=0x%x state=0x%x mm=%px files=%px\n",
+		       tsk->pid, tsk->comm, code, tsk->flags, tsk->__state,
+		       tsk->mm, tsk->files);
+#endif
 
 	WARN_ON(irqs_disabled());
 	WARN_ON(tsk->plug);
-
-	if (unlikely(tsk->pid == 20)) {
-		pr_err("linx: do_exit pid20 code=0x%lx flags=0x%x exit_code=0x%x state=0x%x parent=%d real_parent=%d\n",
-		       code, tsk->flags, tsk->exit_code, tsk->__state,
-		       tsk->parent ? tsk->parent->pid : -1,
-		       tsk->real_parent ? tsk->real_parent->pid : -1);
-	}
-
-	if (unlikely(linx_exit_dbg_left > 0 &&
-		     (tsk->pid <= 64 ||
-		      (tsk->real_parent && tsk->real_parent->pid == 1)))) {
-		pr_err("linx: do_exit pid=%d tgid=%d ppid=%d real_ppid=%d code=0x%lx flags=0x%x exit_code=0x%x state=0x%x\n",
-		       tsk->pid, tsk->tgid,
-		       tsk->parent ? tsk->parent->pid : -1,
-		       tsk->real_parent ? tsk->real_parent->pid : -1,
-		       code, tsk->flags, tsk->exit_code, tsk->__state);
-		linx_exit_dbg_left--;
-	}
 
 	kcov_task_exit(tsk);
 	kmsan_task_exit(tsk);
@@ -940,9 +948,41 @@ void __noreturn do_exit(long code)
 		 * If the last thread of global init has exited, panic
 		 * immediately to get a useable coredump.
 		 */
-		if (unlikely(is_global_init(tsk)))
+		if (unlikely(is_global_init(tsk))) {
+#ifdef CONFIG_ARCH_LINX
+			struct pt_regs *regs = task_pt_regs(tsk);
+
+			linx_debug_uart_puts("LINX_EXIT_INIT code=0x");
+			linx_debug_uart_puthex_ulong((unsigned long)code);
+			linx_debug_uart_puts(" tpc=0x");
+			linx_debug_uart_puthex_ulong(regs->tpc);
+			linx_debug_uart_puts(" bpc=0x");
+			linx_debug_uart_puthex_ulong(regs->bpc);
+			linx_debug_uart_puts(" orig_tpc=0x");
+			linx_debug_uart_puthex_ulong(regs->orig_tpc);
+			linx_debug_uart_puts(" orig_bpc=0x");
+			linx_debug_uart_puthex_ulong(regs->orig_bpc);
+			linx_debug_uart_puts(" sp=0x");
+			linx_debug_uart_puthex_ulong(regs->sp);
+			linx_debug_uart_puts(" ra=0x");
+			linx_debug_uart_puthex_ulong(regs->ra);
+			linx_debug_uart_puts(" a0=0x");
+			linx_debug_uart_puthex_ulong(regs->a0);
+			linx_debug_uart_puts(" a1=0x");
+			linx_debug_uart_puthex_ulong(regs->a1);
+			linx_debug_uart_puts(" a2=0x");
+			linx_debug_uart_puthex_ulong(regs->a2);
+			linx_debug_uart_puts(" a7=0x");
+			linx_debug_uart_puthex_ulong(regs->a7);
+			linx_debug_uart_puts(" cstate=0x");
+			linx_debug_uart_puthex_ulong(regs->cstate);
+			linx_debug_uart_puts(" trapno=0x");
+			linx_debug_uart_puthex_ulong(regs->trapno);
+			linx_debug_uart_puts("\n");
+#endif
 			panic("Attempted to kill init! exitcode=0x%08x\n",
 				tsk->signal->group_exit_code ?: (int)code);
+		}
 
 #ifdef CONFIG_POSIX_TIMERS
 		hrtimer_cancel(&tsk->signal->real_timer);
@@ -971,22 +1011,52 @@ void __noreturn do_exit(long code)
 	perf_event_exit_task(tsk);
 
 	exit_mm();
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_mm pid=%d state=0x%x mm=%px files=%px\n",
+		       tsk->pid, tsk->__state, tsk->mm, tsk->files);
+#endif
 
 	if (group_dead)
 		acct_process();
 
 	exit_sem(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_sem pid=%d state=0x%x files=%px\n",
+		       tsk->pid, tsk->__state, tsk->files);
+#endif
 	exit_shm(tsk);
 	exit_files(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_files pid=%d state=0x%x files=%px\n",
+		       tsk->pid, tsk->__state, tsk->files);
+#endif
 	exit_fs(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_fs pid=%d state=0x%x\n",
+		       tsk->pid, tsk->__state);
+#endif
 	if (group_dead)
 		disassociate_ctty(1);
 	exit_task_namespaces(tsk);
 	exit_task_work(tsk);
 	exit_thread(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_thread pid=%d state=0x%x\n",
+		       tsk->pid, tsk->__state);
+#endif
 
 	sched_autogroup_exit_task(tsk);
 	cgroup_exit(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after cgroup_exit pid=%d state=0x%x\n",
+		       tsk->pid, tsk->__state);
+#endif
 
 	/*
 	 * FIXME: do that only when needed, using sched_exit tracepoint
@@ -995,6 +1065,13 @@ void __noreturn do_exit(long code)
 
 	exit_tasks_rcu_start();
 	exit_notify(tsk, group_dead);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit after exit_notify pid=%d state=0x%x exit_state=0x%x parent=%d real_parent=%d\n",
+		       tsk->pid, tsk->__state, tsk->exit_state,
+		       tsk->parent ? tsk->parent->pid : -1,
+		       tsk->real_parent ? tsk->real_parent->pid : -1);
+#endif
 	proc_exit_connector(tsk);
 	mpol_put_task_policy(tsk);
 #ifdef CONFIG_FUTEX
@@ -1025,7 +1102,16 @@ void __noreturn do_exit(long code)
 	exit_tasks_rcu_finish();
 
 	lockdep_free_task(tsk);
+#ifdef CONFIG_ARCH_LINX
+	if (linx_dbg_exit)
+		pr_err("Linx dbg: do_exit before do_task_dead pid=%d state=0x%x exit_state=0x%x\n",
+		       tsk->pid, tsk->__state, tsk->exit_state);
+#endif
+#ifdef CONFIG_ARCH_LINX
+	linx_tail_do_task_dead();
+#else
 	do_task_dead();
+#endif
 }
 
 void __noreturn make_task_dead(int signr)
@@ -1082,7 +1168,11 @@ void __noreturn make_task_dead(int signr)
 		futex_exit_recursive(tsk);
 		tsk->exit_state = EXIT_DEAD;
 		refcount_inc(&tsk->rcu_users);
+#ifdef CONFIG_ARCH_LINX
+		linx_tail_do_task_dead();
+#else
 		do_task_dead();
+#endif
 	}
 
 	do_exit(signr);
@@ -1090,6 +1180,11 @@ void __noreturn make_task_dead(int signr)
 
 SYSCALL_DEFINE1(exit, int, error_code)
 {
+#ifdef CONFIG_ARCH_LINX
+	if (current->pid <= 64)
+		pr_err("Linx dbg: sys_exit pid=%d code=%d\n",
+		       current->pid, error_code);
+#endif
 	do_exit((error_code&0xff)<<8);
 }
 
@@ -1134,6 +1229,11 @@ do_group_exit(int exit_code)
  */
 SYSCALL_DEFINE1(exit_group, int, error_code)
 {
+#ifdef CONFIG_ARCH_LINX
+	if (current->pid <= 64)
+		pr_err("Linx dbg: sys_exit_group pid=%d code=%d\n",
+		       current->pid, error_code);
+#endif
 	do_group_exit((error_code & 0xff) << 8);
 	/* NOTREACHED */
 	return 0;
@@ -1468,27 +1568,11 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 	 */
 	int exit_state = READ_ONCE(p->exit_state);
 	int ret;
-	static unsigned int linx_wait_consider_dbg_left = 4096;
-	bool linx_dbg = unlikely(current->pid == 1 && linx_wait_consider_dbg_left > 0);
-
-	if (linx_dbg) {
-		pr_err("linx: wait_consider enter pid=%d tgid=%d ptrace=%d wo_flags=0x%x state=0x%x exit_state=0x%x notask=%d parent=%d real_parent=%d ptraced=%d exit_sig=%d\n",
-		       p->pid, p->tgid, ptrace, wo->wo_flags, p->__state, exit_state,
-		       wo->notask_error,
-		       p->parent ? p->parent->pid : -1,
-		       p->real_parent ? p->real_parent->pid : -1,
-		       !!p->ptrace, p->exit_signal);
-		linx_wait_consider_dbg_left--;
-	}
 
 	if (unlikely(exit_state == EXIT_DEAD))
 		return 0;
 
 	ret = eligible_child(wo, ptrace, p);
-	if (linx_dbg) {
-		pr_err("linx: wait_consider eligible pid=%d ptrace=%d ret=%d notask=%d\n",
-		       p->pid, ptrace, ret, wo->notask_error);
-	}
 	if (!ret)
 		return ret;
 
@@ -1499,10 +1583,6 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 		 */
 		if (likely(!ptrace))
 			wo->notask_error = 0;
-		if (linx_dbg) {
-			pr_err("linx: wait_consider trace pid=%d ptrace=%d notask=%d\n",
-			       p->pid, ptrace, wo->notask_error);
-		}
 		return 0;
 	}
 
@@ -1557,20 +1637,12 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 		 */
 		if (likely(!ptrace) || (wo->wo_flags & (WCONTINUED | WEXITED)))
 			wo->notask_error = 0;
-		if (linx_dbg) {
-			pr_err("linx: wait_consider zombie pid=%d ptrace=%d notask=%d delay=%d\n",
-			       p->pid, ptrace, wo->notask_error, delay_group_leader(p));
-		}
 	} else {
 		/*
 		 * @p is alive and it's gonna stop, continue or exit, so
 		 * there always is something to wait for.
 		 */
 		wo->notask_error = 0;
-		if (linx_dbg) {
-			pr_err("linx: wait_consider live pid=%d ptrace=%d notask=%d\n",
-			       p->pid, ptrace, wo->notask_error);
-		}
 	}
 
 	/*
@@ -1578,10 +1650,6 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 	 * is used and the two don't interact with each other.
 	 */
 	ret = wait_task_stopped(wo, ptrace, p);
-	if (linx_dbg) {
-		pr_err("linx: wait_consider stopped pid=%d ptrace=%d ret=%d notask=%d\n",
-		       p->pid, ptrace, ret, wo->notask_error);
-	}
 	if (ret)
 		return ret;
 
@@ -1591,10 +1659,6 @@ static int wait_consider_task(struct wait_opts *wo, int ptrace,
 	 * use WCONTINUED from ptracer.  You don't need or want it.
 	 */
 	ret = wait_task_continued(wo, p);
-	if (linx_dbg) {
-		pr_err("linx: wait_consider continued pid=%d ret=%d notask=%d\n",
-		       p->pid, ret, wo->notask_error);
-	}
 	return ret;
 }
 
@@ -1652,31 +1716,7 @@ static int child_wait_callback(wait_queue_entry_t *wait, unsigned mode,
 	struct wait_opts *wo = container_of(wait, struct wait_opts,
 						child_wait);
 	struct task_struct *p = key;
-	struct task_struct *waiter = wo->child_wait.private;
-	struct pid *candidate_pid = p ? task_pid_type(p, wo->wo_type) : NULL;
-	int candidate_nr = candidate_pid ? pid_nr(candidate_pid) : -1;
-	int wanted_nr = wo->wo_pid ? pid_nr(wo->wo_pid) : -1;
-	bool pid_match = candidate_pid == wo->wo_pid;
-	bool pid_ok = eligible_pid(wo, p);
-	bool nothread_block = !!(p && (wo->wo_flags & __WNOTHREAD) &&
-				 wo->child_wait.private != p->parent);
-	bool parent_match = !!(p && wo->child_wait.private == p->parent);
 	bool should_wake = pid_child_should_wake(wo, p);
-	static unsigned int linx_child_wait_cb_dbg_left = 1024;
-
-	if (unlikely(linx_child_wait_cb_dbg_left > 0 &&
-		     waiter && waiter->pid == 1)) {
-		pr_err("linx: child_wait_cb waiter=%d current=%d key_pid=%d mode=0x%x sync=%d should_wake=%d pid_ok=%d nothread_block=%d parent_match=%d wo_type=%d wo_flags=0x%x wanted_pid=%d candidate_pid=%d pid_match=%d waiter_state=0x%x child_state=0x%x child_exit_state=0x%x child_parent=%d child_real_parent=%d\n",
-		       waiter->pid, current->pid, p ? p->pid : -1,
-		       mode, sync, should_wake, pid_ok, nothread_block,
-		       parent_match, wo->wo_type, wo->wo_flags,
-		       wanted_nr, candidate_nr, pid_match,
-		       waiter->__state, p ? p->__state : 0,
-		       p ? p->exit_state : 0,
-		       p && p->parent ? p->parent->pid : -1,
-		       p && p->real_parent ? p->real_parent->pid : -1);
-		linx_child_wait_cb_dbg_left--;
-	}
 
 	if (should_wake)
 		return default_wake_function(wait, mode, sync, key);
@@ -1686,20 +1726,6 @@ static int child_wait_callback(wait_queue_entry_t *wait, unsigned mode,
 
 void __wake_up_parent(struct task_struct *p, struct task_struct *parent)
 {
-	static unsigned int linx_wake_parent_dbg_left = 1024;
-
-	if (unlikely(linx_wake_parent_dbg_left > 0 &&
-		     parent && parent->pid == 1)) {
-		pr_err("linx: wake_up_parent child=%d parent=%d parent_state=0x%x child_state=0x%x child_exit_state=0x%x child_flags=0x%x parent_wait_active=%d child_parent=%d child_real_parent=%d\n",
-		       p ? p->pid : -1, parent->pid, parent->__state,
-		       p ? p->__state : 0, p ? p->exit_state : 0,
-		       p ? p->flags : 0,
-		       waitqueue_active(&parent->signal->wait_chldexit),
-		       p && p->parent ? p->parent->pid : -1,
-		       p && p->real_parent ? p->real_parent->pid : -1);
-		linx_wake_parent_dbg_left--;
-	}
-
 	__wake_up_sync_key(&parent->signal->wait_chldexit,
 			   TASK_INTERRUPTIBLE, p);
 }
@@ -1723,83 +1749,20 @@ static int do_wait_pid(struct wait_opts *wo)
 	bool ptrace;
 	struct task_struct *target;
 	int retval;
-	static unsigned int linx_wait_pid_dbg_left = 1024;
 
 	ptrace = false;
 	target = pid_task(wo->wo_pid, PIDTYPE_TGID);
-	if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1 && target)) {
-		bool eff = is_effectively_child(wo, ptrace, target);
-		struct pt_regs *tregs = task_pt_regs(target);
-		pr_err("linx: do_wait_pid tgid target pid=%d tgid=%d ptrace=%d eff=%d parent=%d real_parent=%d exit_sig=%d state=0x%x exit_state=0x%x ptraced=%d flags=0x%x files=%px cur_files=%px files_shared=%d mm=%px wo_flags=0x%x\n",
-		       target->pid, target->tgid, ptrace, eff,
-		       target->parent ? target->parent->pid : -1,
-		       target->real_parent ? target->real_parent->pid : -1,
-		       target->exit_signal, target->__state, target->exit_state,
-		       !!target->ptrace, target->flags, target->files, current->files,
-		       target->files == current->files, target->mm,
-		       wo->wo_flags);
-		pr_err("linx: do_wait_pid tgid regs pid=%d pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx orig_a0=0x%lx cstate=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx ebarg=0x%lx\n",
-		       target->pid, instruction_pointer(tregs), user_stack_pointer(tregs),
-		       tregs->a0, tregs->a2, tregs->orig_a0,
-		       tregs->cstate, tregs->trapno, tregs->tpc, tregs->ra,
-		       tregs->ebarg);
-		linx_wait_pid_dbg_left--;
-	}
 	if (target && is_effectively_child(wo, ptrace, target)) {
-		struct pt_regs *tregs = task_pt_regs(target);
-
 		retval = wait_consider_task(wo, ptrace, target);
-		if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1)) {
-			pr_err("linx: do_wait_pid tgid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx\n",
-			       retval, target->pid, target->__state, target->exit_state,
-			       target->exit_code,
-			       target->signal ? target->signal->group_exit_code : 0,
-			       target->flags,
-			       instruction_pointer(tregs), user_stack_pointer(tregs),
-			       tregs->a0, tregs->a2,
-			       tregs->trapno, tregs->tpc, tregs->ra);
-			linx_wait_pid_dbg_left--;
-		}
 		if (retval)
 			return retval;
 	}
 
 	ptrace = true;
 	target = pid_task(wo->wo_pid, PIDTYPE_PID);
-	if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1 && target)) {
-		bool eff = is_effectively_child(wo, ptrace, target);
-		struct pt_regs *tregs = task_pt_regs(target);
-		pr_err("linx: do_wait_pid pid target pid=%d tgid=%d ptrace=%d eff=%d parent=%d real_parent=%d exit_sig=%d state=0x%x exit_state=0x%x ptraced=%d flags=0x%x files=%px cur_files=%px files_shared=%d mm=%px wo_flags=0x%x\n",
-		       target->pid, target->tgid, ptrace, eff,
-		       target->parent ? target->parent->pid : -1,
-		       target->real_parent ? target->real_parent->pid : -1,
-		       target->exit_signal, target->__state, target->exit_state,
-		       !!target->ptrace, target->flags, target->files, current->files,
-		       target->files == current->files, target->mm,
-		       wo->wo_flags);
-		pr_err("linx: do_wait_pid pid regs pid=%d pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx orig_a0=0x%lx cstate=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx ebarg=0x%lx\n",
-		       target->pid, instruction_pointer(tregs), user_stack_pointer(tregs),
-		       tregs->a0, tregs->a2, tregs->orig_a0,
-		       tregs->cstate, tregs->trapno, tregs->tpc, tregs->ra,
-		       tregs->ebarg);
-		linx_wait_pid_dbg_left--;
-	}
 	if (target && target->ptrace &&
 	    is_effectively_child(wo, ptrace, target)) {
-		struct pt_regs *tregs = task_pt_regs(target);
-
 		retval = wait_consider_task(wo, ptrace, target);
-		if (unlikely(linx_wait_pid_dbg_left > 0 && current->pid == 1)) {
-			pr_err("linx: do_wait_pid pid ret=%d target pid=%d state=0x%x exit_state=0x%x exit_code=0x%x signal_group_exit=0x%x flags=0x%x pc=0x%lx sp=0x%lx a0=0x%lx a2=0x%lx trapno=0x%lx tpc=0x%lx ra=0x%lx\n",
-			       retval, target->pid, target->__state, target->exit_state,
-			       target->exit_code,
-			       target->signal ? target->signal->group_exit_code : 0,
-			       target->flags,
-			       instruction_pointer(tregs), user_stack_pointer(tregs),
-			       tregs->a0, tregs->a2,
-			       tregs->trapno, tregs->tpc, tregs->ra);
-			linx_wait_pid_dbg_left--;
-		}
 		if (retval)
 			return retval;
 	}
@@ -1810,7 +1773,6 @@ static int do_wait_pid(struct wait_opts *wo)
 long __do_wait(struct wait_opts *wo)
 {
 	long retval;
-	static unsigned int linx_do_wait_dbg_left = 1024;
 
 	/*
 	 * If there is nothing that can match our criteria, just get out.
@@ -1819,13 +1781,6 @@ long __do_wait(struct wait_opts *wo)
 	 * it yet.
 	 */
 	wo->notask_error = -ECHILD;
-	if (unlikely(current->pid == 1 && linx_do_wait_dbg_left > 0)) {
-		pr_err("linx: __do_wait enter type=%d flags=0x%x pid_ptr=%px pid=%d notask=%d\n",
-		       wo->wo_type, wo->wo_flags, wo->wo_pid,
-		       wo->wo_pid ? pid_nr(wo->wo_pid) : -1,
-		       wo->notask_error);
-		linx_do_wait_dbg_left--;
-	}
 	if ((wo->wo_type < PIDTYPE_MAX) &&
 	   (!wo->wo_pid || !pid_has_task(wo->wo_pid, wo->wo_type)))
 		goto notask;
@@ -1856,12 +1811,6 @@ long __do_wait(struct wait_opts *wo)
 
 notask:
 	retval = wo->notask_error;
-	if (unlikely(current->pid == 1 && linx_do_wait_dbg_left > 0)) {
-		pr_err("linx: __do_wait exit retval=%ld notask=%d type=%d flags=0x%x pid_ptr=%px pid=%d\n",
-		       retval, wo->notask_error, wo->wo_type, wo->wo_flags,
-		       wo->wo_pid, wo->wo_pid ? pid_nr(wo->wo_pid) : -1);
-		linx_do_wait_dbg_left--;
-	}
 	if (!retval && !(wo->wo_flags & WNOHANG))
 		return -ERESTARTSYS;
 
@@ -1871,57 +1820,25 @@ notask:
 static long do_wait(struct wait_opts *wo)
 {
 	int retval;
-	static unsigned int linx_do_wait_loop_dbg_left = 1024;
 
 	trace_sched_process_wait(wo->wo_pid);
 
 	init_waitqueue_func_entry(&wo->child_wait, child_wait_callback);
 	wo->child_wait.private = current;
 	add_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
-	if (unlikely(current->pid == 1 && linx_do_wait_loop_dbg_left > 0)) {
-		pr_err("linx: do_wait add waiter pid=%d state=0x%x wo_type=%d wo_flags=0x%x wo_pid=%d\n",
-		       current->pid, current->__state, wo->wo_type, wo->wo_flags,
-		       wo->wo_pid ? pid_nr(wo->wo_pid) : -1);
-		linx_do_wait_loop_dbg_left--;
-	}
 
 	do {
 		set_current_state(TASK_INTERRUPTIBLE);
 		retval = __do_wait(wo);
 		if (retval != -ERESTARTSYS)
 			break;
-		if (signal_pending(current)) {
-			if (unlikely(current->pid == 1 &&
-				     linx_do_wait_loop_dbg_left > 0)) {
-				pr_err("linx: do_wait signal-pending pid=%d state=0x%x wo_flags=0x%x\n",
-				       current->pid, current->__state, wo->wo_flags);
-				linx_do_wait_loop_dbg_left--;
-			}
+		if (signal_pending(current))
 			break;
-		}
-		if (unlikely(current->pid == 1 && linx_do_wait_loop_dbg_left > 0)) {
-			pr_err("linx: do_wait schedule-enter pid=%d state=0x%x wo_flags=0x%x wo_pid=%d\n",
-			       current->pid, current->__state, wo->wo_flags,
-			       wo->wo_pid ? pid_nr(wo->wo_pid) : -1);
-			linx_do_wait_loop_dbg_left--;
-		}
 		schedule();
-		if (unlikely(current->pid == 1 && linx_do_wait_loop_dbg_left > 0)) {
-			pr_err("linx: do_wait schedule-exit pid=%d state=0x%x wo_flags=0x%x wo_pid=%d\n",
-			       current->pid, current->__state, wo->wo_flags,
-			       wo->wo_pid ? pid_nr(wo->wo_pid) : -1);
-			linx_do_wait_loop_dbg_left--;
-		}
 	} while (1);
 
 	__set_current_state(TASK_RUNNING);
 	remove_wait_queue(&current->signal->wait_chldexit, &wo->child_wait);
-	if (unlikely(current->pid == 1 && linx_do_wait_loop_dbg_left > 0)) {
-		pr_err("linx: do_wait remove waiter pid=%d retval=%d state=0x%x wo_flags=0x%x wo_pid=%d\n",
-		       current->pid, retval, current->__state, wo->wo_flags,
-		       wo->wo_pid ? pid_nr(wo->wo_pid) : -1);
-		linx_do_wait_loop_dbg_left--;
-	}
 	return retval;
 }
 
@@ -2073,53 +1990,9 @@ long kernel_wait4(pid_t upid, int __user *stat_addr, int options,
 	wo.wo_rusage	= ru;
 	ret = do_wait(&wo);
 	put_pid(pid);
-	if (ret > 0 && stat_addr && put_user(wo.wo_stat, stat_addr))
+	if (ret > 0 && stat_addr &&
+	    copy_to_user(stat_addr, &wo.wo_stat, sizeof(wo.wo_stat)))
 		ret = -EFAULT;
-	if (unlikely(ret == -ECHILD && current->pid == 1)) {
-		unsigned int dbg_left = 8;
-		int child_count = 0;
-		int zombie_count = 0;
-		struct task_struct *p;
-		struct task_struct *pid_task_pid = NULL;
-		struct task_struct *pid_task_tgid = NULL;
-		int has_pid_slot = -1;
-		int has_tgid_slot = -1;
-		void __user *sigchld_handler = NULL;
-		unsigned long sigchld_flags = 0;
-
-		if (current->sighand) {
-			sigchld_handler = current->sighand->action[SIGCHLD - 1].sa.sa_handler;
-			sigchld_flags = current->sighand->action[SIGCHLD - 1].sa.sa_flags;
-		}
-		read_lock(&tasklist_lock);
-		list_for_each_entry(p, &current->children, sibling) {
-			child_count++;
-			if (p->exit_state)
-				zombie_count++;
-			if (dbg_left > 0) {
-				pr_err("linx: wait4-echild child pid=%d tgid=%d state=0x%x exit_state=0x%x exit_sig=%d parent=%d real_parent=%d\n",
-				       p->pid, p->tgid, p->__state, p->exit_state, p->exit_signal,
-				       p->parent ? p->parent->pid : -1,
-				       p->real_parent ? p->real_parent->pid : -1);
-				dbg_left--;
-			}
-		}
-		read_unlock(&tasklist_lock);
-		if (pid) {
-			has_pid_slot = pid_has_task(pid, PIDTYPE_PID);
-			has_tgid_slot = pid_has_task(pid, PIDTYPE_TGID);
-			pid_task_pid = get_pid_task(pid, PIDTYPE_PID);
-			pid_task_tgid = get_pid_task(pid, PIDTYPE_TGID);
-		}
-		pr_err("linx: wait4-echild pid1 upid=%d options=0x%x type=%d pid_ptr=%px has_pid=%d has_tgid=%d pid_task_pid=%px pid_task_tgid=%px sigchld_handler=%px sigchld_flags=0x%lx child_count=%d zombie_count=%d\n",
-		       upid, options, type, pid, has_pid_slot, has_tgid_slot,
-		       pid_task_pid, pid_task_tgid,
-		       sigchld_handler, sigchld_flags, child_count, zombie_count);
-		if (pid_task_tgid)
-			put_task_struct(pid_task_tgid);
-		if (pid_task_pid)
-			put_task_struct(pid_task_pid);
-	}
 
 	return ret;
 }

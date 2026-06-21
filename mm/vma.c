@@ -9,7 +9,7 @@
 
 static bool linx_trace_mmap_failure_p(struct file *file)
 {
-	return current->pid == 1 && file != NULL;
+	return current->pid <= 64 && file != NULL;
 }
 
 struct mmap_state {

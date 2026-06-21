@@ -40,10 +40,18 @@
 #include <trace/events/error_report.h>
 #include <asm/sections.h>
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+
 static void linx_panic_putc(char c)
 {
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
+	linx_debug_uart_putc(c);
+}
+
+static void linx_panic_puts(const char *s)
+{
+	while (*s)
+		linx_panic_putc(*s++);
 }
 
 static void linx_panic_puthex(unsigned long v)
@@ -68,6 +76,15 @@ static void linx_panic_mark(unsigned long caller)
 	linx_panic_putc('!');
 	linx_panic_putc('P');
 	linx_panic_puthex(caller);
+}
+
+static void linx_panic_report(unsigned long caller, const char *msg)
+{
+	linx_panic_puts("\nLINX_PANIC caller=0x");
+	linx_panic_puthex(caller);
+	linx_panic_puts(" msg=");
+	linx_panic_puts(msg);
+	linx_panic_putc('\n');
 }
 #endif
 
@@ -464,7 +481,7 @@ void vpanic(const char *fmt, va_list args)
 	int state = 0;
 	bool _crash_kexec_post_notifiers = crash_kexec_post_notifiers;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_ARCH_LINX
 	linx_panic_mark(linx_panic_return_address());
 #endif
 
@@ -514,6 +531,10 @@ void vpanic(const char *fmt, va_list args)
 
 	if (len && buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
+
+#ifdef CONFIG_ARCH_LINX
+	linx_panic_report(linx_panic_return_address(), buf);
+#endif
 
 	pr_emerg("Kernel panic - not syncing: %s\n", buf);
 	/*
@@ -658,7 +679,7 @@ void panic(const char *fmt, ...)
 {
 	va_list args;
 
-#ifdef CONFIG_LINX
+#ifdef CONFIG_ARCH_LINX
 	linx_panic_mark(linx_panic_return_address());
 #endif
 

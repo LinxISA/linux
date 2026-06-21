@@ -1744,12 +1744,12 @@ static void __init free_area_init_node(int nid)
 	WARN_ON(pgdat->nr_zones || pgdat->kswapd_highest_zoneidx);
 
 	get_pfn_range_for_nid(nid, &start_pfn, &end_pfn);
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(CONFIG_ARCH_LINX)
 	if (!start_pfn && !end_pfn && nid == 0)
 		get_pfn_range_for_nid(MAX_NUMNODES, &start_pfn, &end_pfn);
 	if (!start_pfn && !end_pfn && nid == 0) {
 		start_pfn = PFN_UP(memblock_start_of_DRAM());
-			end_pfn = PFN_DOWN(memblock_end_of_DRAM());
+		end_pfn = PFN_DOWN(memblock_end_of_DRAM());
 	}
 #endif
 

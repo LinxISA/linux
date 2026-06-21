@@ -163,6 +163,29 @@ static int padzero(unsigned long address)
 #define ELF_BASE_PLATFORM NULL
 #endif
 
+#ifdef CONFIG_ARCH_LINX
+static long linx_elf_strnlen_user(const char __user *str, long count)
+{
+	long len;
+
+	if (unlikely(count <= 0))
+		return 0;
+
+	for (len = 0; len < count; len++) {
+		char c;
+
+		if (get_user(c, str + len))
+			return 0;
+		if (!c)
+			return len + 1;
+	}
+
+	return count + 1;
+}
+#else
+#define linx_elf_strnlen_user(str, count) strnlen_user((str), (count))
+#endif
+
 static int
 create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 		unsigned long interp_load_addr,
@@ -344,11 +367,13 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	/* Populate list of argv pointers back to argv strings. */
 	p = mm->arg_end = mm->arg_start;
 	while (argc-- > 0) {
-		size_t len;
+		long len;
 		if (put_user((elf_addr_t)p, sp++))
 			return -EFAULT;
-		len = strnlen_user((void __user *)p, MAX_ARG_STRLEN);
-		if (!len || len > MAX_ARG_STRLEN)
+		len = linx_elf_strnlen_user((void __user *)p, MAX_ARG_STRLEN);
+		if (!len)
+			return -EINVAL;
+		if (len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -359,11 +384,13 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	/* Populate list of envp pointers back to envp strings. */
 	mm->env_end = mm->env_start = p;
 	while (envc-- > 0) {
-		size_t len;
+		long len;
 		if (put_user((elf_addr_t)p, sp++))
 			return -EFAULT;
-		len = strnlen_user((void __user *)p, MAX_ARG_STRLEN);
-		if (!len || len > MAX_ARG_STRLEN)
+		len = linx_elf_strnlen_user((void __user *)p, MAX_ARG_STRLEN);
+		if (!len)
+			return -EINVAL;
+		if (len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -470,6 +497,16 @@ static unsigned long elf_load(struct file *filep, unsigned long addr,
 				     prot & PROT_EXEC ? VM_EXEC : 0);
 		if (error)
 			map_addr = error;
+#ifdef CONFIG_ARCH_LINX
+		else if ((prot & PROT_WRITE) && zero_end > zero_start)
+			/*
+			 * Linx user block replay is still sensitive to repeated
+			 * demand-zero faults inside one open block.  Populate ELF
+			 * BSS at exec time so large SPEC globals do not exercise
+			 * that fragile path before userspace begins running.
+			 */
+			mm_populate(zero_start, zero_end - zero_start);
+#endif
 	}
 	return map_addr;
 }
@@ -1281,6 +1318,10 @@ out_free_interp:
 					if (BAD_ADDR(load_bias)) {
 						retval = IS_ERR_VALUE(load_bias) ?
 							 PTR_ERR((void*)load_bias) : -EINVAL;
+#ifdef CONFIG_ARCH_LINX
+						if (retval == -ENODEV && current->pid <= 64)
+							retval = -119;
+#endif
 						goto out_free_dentry;
 					}
 					vm_munmap(load_bias, total_size);
@@ -1310,6 +1351,10 @@ out_free_interp:
 			if (BAD_ADDR(error)) {
 				retval = IS_ERR_VALUE(error) ?
 					PTR_ERR((void*)error) : -EINVAL;
+#ifdef CONFIG_ARCH_LINX
+				if (retval == -ENODEV && current->pid <= 64)
+					retval = -120 - i;
+#endif
 				goto out_free_dentry;
 			}
 

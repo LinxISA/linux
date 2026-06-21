@@ -18,6 +18,9 @@
 #include <linux/syscalls.h>
 #include <linux/syscore_ops.h>
 #include <linux/uaccess.h>
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
 /*
  * this indicates whether you can reboot with ctrl-alt-del: the default is yes
  */
@@ -300,6 +303,11 @@ EXPORT_SYMBOL_GPL(kernel_restart);
 
 static void kernel_shutdown_prepare(enum system_states state)
 {
+#ifdef CONFIG_ARCH_LINX
+	linx_debug_uart_puts("LINX_REBOOT shutdown_prepare state=0x");
+	linx_debug_uart_puthex_ulong(state);
+	linx_debug_uart_puts("\n");
+#endif
 	blocking_notifier_call_chain(&reboot_notifier_list,
 		(state == SYSTEM_HALT) ? SYS_HALT : SYS_POWER_OFF, NULL);
 	system_state = state;
@@ -715,6 +723,9 @@ EXPORT_SYMBOL_GPL(kernel_can_power_off);
  */
 void kernel_power_off(void)
 {
+#ifdef CONFIG_ARCH_LINX
+	linx_debug_uart_puts("LINX_REBOOT kernel_power_off\n");
+#endif
 	kernel_shutdown_prepare(SYSTEM_POWER_OFF);
 	do_kernel_power_off_prepare();
 	migrate_to_reboot_cpu();
@@ -742,6 +753,16 @@ SYSCALL_DEFINE4(reboot, int, magic1, int, magic2, unsigned int, cmd,
 	struct pid_namespace *pid_ns = task_active_pid_ns(current);
 	char buffer[256];
 	int ret = 0;
+
+#ifdef CONFIG_ARCH_LINX
+	linx_debug_uart_puts("LINX_REBOOT sys magic1=0x");
+	linx_debug_uart_puthex_ulong((unsigned int)magic1);
+	linx_debug_uart_puts(" magic2=0x");
+	linx_debug_uart_puthex_ulong((unsigned int)magic2);
+	linx_debug_uart_puts(" cmd=0x");
+	linx_debug_uart_puthex_ulong(cmd);
+	linx_debug_uart_puts("\n");
+#endif
 
 	/* We only trust the superuser with rebooting the system. */
 	if (!ns_capable(pid_ns->user_ns, CAP_SYS_BOOT))

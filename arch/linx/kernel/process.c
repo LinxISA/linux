@@ -34,6 +34,17 @@ EXPORT_SYMBOL(__stack_chk_guard);
 
 extern asmlinkage void ret_from_fork(void);
 extern asmlinkage void ret_from_kernel_thread(void);
+
+static struct pt_regs *linx_child_pt_regs(struct task_struct *p)
+{
+	unsigned long regs = (unsigned long)task_pt_regs(p);
+
+	if (!IS_ENABLED(CONFIG_VMAP_STACK) && regs < PAGE_OFFSET)
+		regs = (unsigned long)__va(regs);
+
+	return (struct pt_regs *)regs;
+}
+
 void arch_cpu_idle(void)
 {
 	wait_for_interrupt();
@@ -155,7 +166,7 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	unsigned long clone_flags = args->flags;
 	unsigned long usp = args->stack;
 	unsigned long tls = args->tls;
-	struct pt_regs *childregs = task_pt_regs(p);
+	struct pt_regs *childregs = linx_child_pt_regs(p);
 
 	/* p->thread holds context to be restored by __switch_to() */
 	if (unlikely(args->fn)) {
@@ -175,8 +186,11 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 		if (clone_flags & CLONE_SETTLS)
 			childregs->tp = tls;
 		childregs->a0 = 0; /* Return value of fork() */
+		childregs->cstate &= ~ECAUSE_BI_MASK;
+		p->thread_info.user_sp = childregs->sp;
 		p->thread.ra = (unsigned long)ret_from_fork;
 	}
 	p->thread.sp = (unsigned long)childregs; /* kernel sp */
+	p->thread_info.kernel_sp = (unsigned long)childregs + sizeof(*childregs);
 	return 0;
 }

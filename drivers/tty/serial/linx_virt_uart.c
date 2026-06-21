@@ -60,6 +60,21 @@ static inline void linx_vuart_write_data(struct uart_port *port, u8 v)
 	writeb(v, port->membase + LINX_VUART_DATA_REG);
 }
 
+void linx_vuart_debug_putc(char c)
+{
+	struct linx_vuart_port *lport = READ_ONCE(linx_vuart_ports[0]);
+	struct uart_port *port;
+
+	if (!lport)
+		return;
+
+	port = &lport->port;
+	if (!port->membase)
+		return;
+
+	linx_vuart_write_data(port, (u8)c);
+}
+
 static void linx_vuart_rx_poll(struct linx_vuart_port *lport)
 {
 	struct uart_port *port = &lport->port;
