@@ -2,6 +2,7 @@
 #include <linux/cpufreq.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/linx_bringup.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
@@ -26,3 +27,10 @@ static int __init proc_cpuinfo_init(void)
 	return 0;
 }
 fs_initcall(proc_cpuinfo_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_proc_cpuinfo_init(void)
+{
+	return proc_cpuinfo_init();
+}
+#endif

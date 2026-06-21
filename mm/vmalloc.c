@@ -5264,10 +5264,12 @@ void __init vmalloc_init(void)
 	struct vm_struct *tmp;
 	int i;
 
+	pr_err("Linx dbg: vmalloc_init entry\n");
 	/*
 	 * Create the cache for vmap_area objects.
 	 */
 	vmap_area_cachep = KMEM_CACHE(vmap_area, SLAB_PANIC);
+	pr_err("Linx dbg: vmalloc_init after cache\n");
 
 	for_each_possible_cpu(i) {
 		struct vmap_block_queue *vbq;
@@ -5281,14 +5283,18 @@ void __init vmalloc_init(void)
 		INIT_WORK(&p->wq, delayed_vfree_work);
 		xa_init(&vbq->vmap_blocks);
 	}
+	pr_err("Linx dbg: vmalloc_init after percpu\n");
 
 	/*
 	 * Setup nodes before importing vmlist.
 	 */
 	vmap_init_nodes();
+	pr_err("Linx dbg: vmalloc_init after nodes\n");
 
 	/* Import existing vmlist entries. */
 	for (tmp = vmlist; tmp; tmp = tmp->next) {
+		pr_err("Linx dbg: vmalloc_init import %px size=%lx\n",
+		       tmp->addr, tmp->size);
 		va = kmem_cache_zalloc(vmap_area_cachep, GFP_NOWAIT);
 		if (WARN_ON_ONCE(!va))
 			continue;
@@ -5300,11 +5306,13 @@ void __init vmalloc_init(void)
 		vn = addr_to_node(va->va_start);
 		insert_vmap_area(va, &vn->busy.root, &vn->busy.head);
 	}
+	pr_err("Linx dbg: vmalloc_init after import\n");
 
 	/*
 	 * Now we can initialize a free vmap space.
 	 */
 	vmap_init_free_space();
+	pr_err("Linx dbg: vmalloc_init after free space\n");
 	vmap_initialized = true;
 
 	vmap_node_shrinker = shrinker_alloc(0, "vmap-node");

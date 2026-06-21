@@ -1237,20 +1237,35 @@ struct vfsmount *vfs_kern_mount(struct file_system_type *type,
 	if (!type)
 		return ERR_PTR(-EINVAL);
 
+	if (!strcmp(type->name, "tmpfs"))
+		pr_err("Linx dbg: vfs_kern_mount tmpfs start flags=0x%x\n", flags);
 	fc = fs_context_for_mount(type, flags);
 	if (IS_ERR(fc))
 		return ERR_CAST(fc);
+	if (!strcmp(type->name, "tmpfs"))
+		pr_err("Linx dbg: vfs_kern_mount tmpfs after fs_context\n");
 
 	if (name)
 		ret = vfs_parse_fs_string(fc, "source", name);
+	if (!strcmp(type->name, "tmpfs"))
+		pr_err("Linx dbg: vfs_kern_mount tmpfs after source ret=%d\n", ret);
 	if (!ret)
 		ret = parse_monolithic_mount_data(fc, data);
-	if (!ret)
+	if (!strcmp(type->name, "tmpfs"))
+		pr_err("Linx dbg: vfs_kern_mount tmpfs after data ret=%d\n", ret);
+	if (!ret) {
+		if (!strcmp(type->name, "tmpfs"))
+			pr_err("Linx dbg: vfs_kern_mount tmpfs before fc_mount\n");
 		mnt = fc_mount(fc);
-	else
+		if (!strcmp(type->name, "tmpfs"))
+			pr_err("Linx dbg: vfs_kern_mount tmpfs after fc_mount mnt=%px\n", mnt);
+	} else {
 		mnt = ERR_PTR(ret);
+	}
 
 	put_fs_context(fc);
+	if (!strcmp(type->name, "tmpfs"))
+		pr_err("Linx dbg: vfs_kern_mount tmpfs done\n");
 	return mnt;
 }
 EXPORT_SYMBOL_GPL(vfs_kern_mount);
@@ -6028,14 +6043,17 @@ void __init mnt_init(void)
 {
 	int err;
 
+	pr_err("Linx dbg: mnt_init start\n");
 	mnt_cache = kmem_cache_create("mnt_cache", sizeof(struct mount),
 			0, SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT, NULL);
 
+	pr_err("Linx dbg: mnt_init mount hash\n");
 	mount_hashtable = alloc_large_system_hash("Mount-cache",
 				sizeof(struct hlist_head),
 				mhash_entries, 19,
 				HASH_ZERO,
 				&m_hash_shift, &m_hash_mask, 0, 0);
+	pr_err("Linx dbg: mnt_init mountpoint hash\n");
 	mountpoint_hashtable = alloc_large_system_hash("Mountpoint-cache",
 				sizeof(struct hlist_head),
 				mphash_entries, 19,
@@ -6045,18 +6063,25 @@ void __init mnt_init(void)
 	if (!mount_hashtable || !mountpoint_hashtable)
 		panic("Failed to allocate mount hash table\n");
 
+	pr_err("Linx dbg: mnt_init kernfs_init\n");
 	kernfs_init();
 
+	pr_err("Linx dbg: mnt_init sysfs_init\n");
 	err = sysfs_init();
 	if (err)
 		printk(KERN_WARNING "%s: sysfs_init error: %d\n",
 			__func__, err);
+	pr_err("Linx dbg: mnt_init fs kobject\n");
 	fs_kobj = kobject_create_and_add("fs", NULL);
 	if (!fs_kobj)
 		printk(KERN_WARNING "%s: kobj create error\n", __func__);
+	pr_err("Linx dbg: mnt_init shmem_init\n");
 	shmem_init();
+	pr_err("Linx dbg: mnt_init init_rootfs\n");
 	init_rootfs();
+	pr_err("Linx dbg: mnt_init init_mount_tree\n");
 	init_mount_tree();
+	pr_err("Linx dbg: mnt_init done\n");
 }
 
 void put_mnt_ns(struct mnt_namespace *ns)

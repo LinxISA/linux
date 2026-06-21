@@ -755,6 +755,15 @@ static int __init chr_dev_init(void)
 	if (retval)
 		return retval;
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx initramfs bring-up only needs the tty path here. Defer the
+	 * legacy /dev/mem-style device population until the userspace boot lane
+	 * is stable.
+	 */
+	return tty_init();
+#endif
+
 	for (minor = 1; minor < ARRAY_SIZE(devlist); minor++) {
 		if (!devlist[minor].name)
 			continue;

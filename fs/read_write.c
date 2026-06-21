@@ -610,12 +610,21 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf, size_t 
 	struct kiocb kiocb;
 	struct iov_iter iter;
 	ssize_t ret;
+	bool linx_dbg = current->pid <= 64 && filp && filp->f_path.dentry;
 
 	init_sync_kiocb(&kiocb, filp);
 	kiocb.ki_pos = (ppos ? *ppos : 0);
 	iov_iter_ubuf(&iter, ITER_SOURCE, (void __user *)buf, len);
 
+	if (linx_dbg)
+		pr_err("Linx dbg: new_sync_write enter pid=%d file=%pd2 len=%zu pos=%lld iter_count=%zu\n",
+		       current->pid, filp->f_path.dentry, len, kiocb.ki_pos,
+		       iov_iter_count(&iter));
 	ret = filp->f_op->write_iter(&kiocb, &iter);
+	if (linx_dbg)
+		pr_err("Linx dbg: new_sync_write exit pid=%d file=%pd2 ret=%zd pos=%lld iter_count=%zu\n",
+		       current->pid, filp->f_path.dentry, ret, kiocb.ki_pos,
+		       iov_iter_count(&iter));
 	BUG_ON(ret == -EIOCBQUEUED);
 	if (ret > 0 && ppos)
 		*ppos = kiocb.ki_pos;
@@ -661,6 +670,18 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	};
 	struct iov_iter iter;
 	ssize_t ret;
+	bool linx_trace = false;
+
+#ifdef CONFIG_LINX_INTC
+	if (file && file->f_path.dentry) {
+		const char *name = file->f_path.dentry->d_name.name;
+		linx_trace = !strcmp(name, "busybox") || !strcmp(name, "init");
+	}
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write enter file=%s count=%zu iov_len=%zu pos=%lld\n",
+		       file->f_path.dentry->d_name.name, count, iov.iov_len,
+		       pos ? *pos : 0);
+#endif
 
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
@@ -670,6 +691,13 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	}
 #endif
 	iov_iter_kvec(&iter, ITER_SOURCE, &iov, 1, iov.iov_len);
+#ifdef CONFIG_LINX_INTC
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write iter file=%s count=%zu type=%u write_iter=%px write=%px\n",
+		       file->f_path.dentry->d_name.name, iter.count, iter.iter_type,
+		       file->f_op ? file->f_op->write_iter : NULL,
+		       file->f_op ? file->f_op->write : NULL);
+#endif
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
 	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
@@ -680,6 +708,11 @@ ssize_t __kernel_write(struct file *file, const void *buf, size_t count, loff_t 
 	}
 #endif
 	ret = __kernel_write_iter(file, &iter, pos);
+#ifdef CONFIG_LINX_INTC
+	if (linx_trace)
+		pr_err("Linx dbg: __kernel_write exit file=%s ret=%zd pos=%lld\n",
+		       file->f_path.dentry->d_name.name, ret, pos ? *pos : 0);
+#endif
 #ifdef CONFIG_LINX_DEBUG
 	if (file && file->f_path.dentry &&
 	    !strcmp(file->f_path.dentry->d_name.name, "init")) {
@@ -717,6 +750,7 @@ EXPORT_SYMBOL(kernel_write);
 ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_t *pos)
 {
 	ssize_t ret;
+	bool linx_dbg = current->pid <= 64 && file && file->f_path.dentry;
 
 	if (!(file->f_mode & FMODE_WRITE))
 		return -EBADF;
@@ -730,6 +764,11 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		return ret;
 	if (count > MAX_RW_COUNT)
 		count =  MAX_RW_COUNT;
+	if (linx_dbg)
+		pr_err("Linx dbg: vfs_write enter pid=%d file=%pd2 count=%zu pos=%lld fop_write=%px write_iter=%px\n",
+		       current->pid, file->f_path.dentry, count, pos ? *pos : -1,
+		       file->f_op ? file->f_op->write : NULL,
+		       file->f_op ? file->f_op->write_iter : NULL);
 	file_start_write(file);
 	if (file->f_op->write)
 		ret = file->f_op->write(file, buf, count, pos);
@@ -737,6 +776,9 @@ ssize_t vfs_write(struct file *file, const char __user *buf, size_t count, loff_
 		ret = new_sync_write(file, buf, count, pos);
 	else
 		ret = -EINVAL;
+	if (linx_dbg)
+		pr_err("Linx dbg: vfs_write after-op pid=%d file=%pd2 ret=%zd pos=%lld\n",
+		       current->pid, file->f_path.dentry, ret, pos ? *pos : -1);
 	if (ret > 0) {
 		fsnotify_modify(file);
 		add_wchar(current, ret);
@@ -1218,6 +1260,11 @@ SYSCALL_DEFINE3(readv, unsigned long, fd, const struct iovec __user *, vec,
 SYSCALL_DEFINE3(writev, unsigned long, fd, const struct iovec __user *, vec,
 		unsigned long, vlen)
 {
+#ifdef CONFIG_ARCH_LINX
+	if (current->pid <= 64)
+		pr_err("Linx dbg: sys_writev pid=%d fd=%lu vec=%px vlen=%lu\n",
+		       current->pid, fd, vec, vlen);
+#endif
 	return do_writev(fd, vec, vlen, 0);
 }
 

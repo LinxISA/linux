@@ -54,24 +54,11 @@
 
 #ifdef CONFIG_LINX
 #include <asm/debug_uart.h>
-#define LINX_VIRT_UART_BASE 0x10000000UL
 
 static __always_inline bool linx_slub_watch_ptr(const void *p)
 {
 	(void)p;
 	return false;
-}
-
-static __always_inline void linx_slub_mark(const char *tag)
-{
-	while (*tag)
-		*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-			(unsigned char)*tag++;
-}
-#else
-static __always_inline void linx_slub_mark(const char *tag)
-{
-	(void)tag;
 }
 #endif
 
@@ -8946,7 +8933,6 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 {
 	int err = -EINVAL;
 
-	linx_slub_mark("DC0");
 	s->name = name;
 	s->size = s->object_size = size;
 
@@ -8963,7 +8949,6 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 
 	if (!calculate_sizes(args, s))
 		goto out;
-	linx_slub_mark("DC1");
 	if (disable_higher_order_debug) {
 		/*
 		 * Disable debugging flags that store metadata if the min slab
@@ -9016,11 +9001,9 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 
 	if (!init_kmem_cache_nodes(s))
 		goto out;
-	linx_slub_mark("DC2");
 
 	if (!alloc_kmem_cache_cpus(s))
 		goto out;
-	linx_slub_mark("DC3");
 
 	if (s->cpu_sheaves) {
 		err = init_percpu_sheaves(s);
@@ -9029,7 +9012,6 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 	}
 
 	err = 0;
-	linx_slub_mark("DC4");
 
 	/* Mutex is not taken during early boot */
 	if (slab_state <= UP)
@@ -9046,8 +9028,6 @@ int do_kmem_cache_create(struct kmem_cache *s, const char *name,
 		debugfs_slab_add(s);
 
 out:
-	if (err)
-		linx_slub_mark("DCE");
 	if (err)
 		__kmem_cache_release(s);
 	return err;

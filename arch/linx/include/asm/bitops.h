@@ -208,11 +208,18 @@ static inline void __clear_bit_unlock(
 static __always_inline bool arch_xor_unlock_is_negative_byte(unsigned long mask,
 		volatile unsigned long *addr)
 {
-	unsigned long res = test_and_change_bit(0, addr) ? BIT(7) : 0;
+	unsigned long res;
 
-	if (!(mask & BIT(0)))
-		clear_bit(0, addr);
-
+	__asm__ __volatile__ (
+		"BSTART.std fall\n"
+		"b.attr rl\n"
+			""__LOAD" [%1, 0], -> t\n"
+			"xor t#1, %2, -> t\n"
+			""__STORE" t#1, [%1, 0]\n"
+			"addi t#2, 0, -> %0\n"
+		: "=r" (res), "+r" (addr)
+		: "r" (mask)
+		: "memory");
 	return (res & BIT(7)) != 0;
 }
 

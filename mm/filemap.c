@@ -48,6 +48,9 @@
 #include <linux/rcupdate_wait.h>
 #include <linux/sched/mm.h>
 #include <linux/sysctl.h>
+#ifdef CONFIG_LINX_INTC
+#include <asm/ssr.h>
+#endif
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include "internal.h"
@@ -3207,8 +3210,16 @@ unlock:
 static int lock_folio_maybe_drop_mmap(struct vm_fault *vmf, struct folio *folio,
 				     struct file **fpin)
 {
-	if (folio_trylock(folio))
+	if (folio_trylock(folio)) {
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf300);
+#endif
 		return 1;
+	}
+
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf301);
+#endif
 
 	/*
 	 * NOTE! This will make us return with VM_FAULT_RETRY, but with
@@ -3219,6 +3230,9 @@ static int lock_folio_maybe_drop_mmap(struct vm_fault *vmf, struct folio *folio,
 		return 0;
 
 	*fpin = maybe_unlock_mmap_for_io(vmf, *fpin);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf302);
+#endif
 	if (vmf->flags & FAULT_FLAG_KILLABLE) {
 		if (__folio_lock_killable(folio)) {
 			/*
@@ -3234,6 +3248,10 @@ static int lock_folio_maybe_drop_mmap(struct vm_fault *vmf, struct folio *folio,
 		}
 	} else
 		__folio_lock(folio);
+
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf303);
+#endif
 
 	return 1;
 }
@@ -3456,9 +3474,17 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 	vm_fault_t ret = 0;
 	bool mapping_locked = false;
 
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf100);
+#endif
+
 	max_idx = DIV_ROUND_UP(i_size_read(inode), PAGE_SIZE);
-	if (unlikely(index >= max_idx))
+	if (unlikely(index >= max_idx)) {
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf101);
+#endif
 		return VM_FAULT_SIGBUS;
+	}
 
 	trace_mm_filemap_fault(mapping, index);
 
@@ -3471,13 +3497,17 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 		 * We found the page, so try async readahead before waiting for
 		 * the lock.
 		 */
-		if (!(vmf->flags & FAULT_FLAG_TRIED))
+		if (!(vmf->flags & FAULT_FLAG_TRIED) &&
+		    !(vmf->flags & FAULT_FLAG_INSTRUCTION))
 			fpin = do_async_mmap_readahead(vmf, folio);
 		if (unlikely(!folio_test_uptodate(folio))) {
 			filemap_invalidate_lock_shared(mapping);
 			mapping_locked = true;
 		}
 	} else {
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf110);
+#endif
 		ret = filemap_fault_recheck_pte_none(vmf);
 		if (unlikely(ret))
 			return ret;
@@ -3486,7 +3516,11 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 		count_vm_event(PGMAJFAULT);
 		count_memcg_event_mm(vmf->vma->vm_mm, PGMAJFAULT);
 		ret = VM_FAULT_MAJOR;
-		fpin = do_sync_mmap_readahead(vmf);
+		if (!(vmf->flags & FAULT_FLAG_INSTRUCTION))
+			fpin = do_sync_mmap_readahead(vmf);
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf111);
+#endif
 retry_find:
 		/*
 		 * See comment in filemap_create_folio() why we need
@@ -3499,6 +3533,9 @@ retry_find:
 		folio = __filemap_get_folio(mapping, index,
 					  FGP_CREAT|FGP_FOR_MMAP,
 					  vmf->gfp_mask);
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf112);
+#endif
 		if (IS_ERR(folio)) {
 			if (fpin)
 				goto out_retry;
@@ -3507,8 +3544,16 @@ retry_find:
 		}
 	}
 
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf113);
+	if (folio_test_locked(folio))
+		ssr_write(SSR_CW, 0xf118);
+#endif
 	if (!lock_folio_maybe_drop_mmap(vmf, folio, &fpin))
 		goto out_retry;
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf114);
+#endif
 
 	/* Did it get truncated? */
 	if (unlikely(folio->mapping != mapping)) {
@@ -3524,6 +3569,9 @@ retry_find:
 	 * or because readahead was otherwise unable to retrieve it.
 	 */
 	if (unlikely(!folio_test_uptodate(folio))) {
+#ifdef CONFIG_LINX_INTC
+		ssr_write(SSR_CW, 0xf115);
+#endif
 		/*
 		 * If the invalidate lock is not held, the folio was in cache
 		 * and uptodate and now it is not. Strange but possible since we
@@ -3568,6 +3616,9 @@ retry_find:
 	}
 
 	vmf->page = folio_file_page(folio, index);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf102);
+#endif
 	return ret | VM_FAULT_LOCKED;
 
 page_not_uptodate:
@@ -3579,6 +3630,9 @@ page_not_uptodate:
 	 */
 	fpin = maybe_unlock_mmap_for_io(vmf, fpin);
 	error = filemap_read_folio(file, mapping->a_ops->read_folio, folio);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf116 | (error & 0xff));
+#endif
 	if (fpin)
 		goto out_retry;
 	folio_put(folio);
@@ -3586,7 +3640,9 @@ page_not_uptodate:
 	if (!error || error == AOP_TRUNCATED_PAGE)
 		goto retry_find;
 	filemap_invalidate_unlock_shared(mapping);
-
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf103);
+#endif
 	return VM_FAULT_SIGBUS;
 
 out_retry:
@@ -3601,6 +3657,9 @@ out_retry:
 		filemap_invalidate_unlock_shared(mapping);
 	if (fpin)
 		fput(fpin);
+#ifdef CONFIG_LINX_INTC
+	ssr_write(SSR_CW, 0xf117);
+#endif
 	return ret | VM_FAULT_RETRY;
 }
 EXPORT_SYMBOL(filemap_fault);
@@ -4233,6 +4292,11 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 	size_t chunk = mapping_max_folio_size(mapping);
 	long status = 0;
 	ssize_t written = 0;
+	bool linx_dbg = current->pid <= 64 && file && file->f_path.dentry;
+
+	if (linx_dbg)
+		pr_err("Linx dbg: generic_perform_write enter pid=%d file=%pd2 count=%zu pos=%lld chunk=%zu\n",
+		       current->pid, file->f_path.dentry, iov_iter_count(i), pos, chunk);
 
 	do {
 		struct folio *folio;
@@ -4252,8 +4316,16 @@ retry:
 			break;
 		}
 
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before write_begin pid=%d file=%pd2 pos=%lld bytes=%zu offset=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, pos, bytes,
+			       offset, iov_iter_count(i));
 		status = a_ops->write_begin(iocb, mapping, pos, bytes,
 						&folio, &fsdata);
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after write_begin pid=%d file=%pd2 status=%ld folio=%px\n",
+			       current->pid, file->f_path.dentry, status,
+			       status < 0 ? NULL : folio);
 		if (unlikely(status < 0))
 			break;
 
@@ -4270,11 +4342,31 @@ retry:
 		 * deadlock. Use an atomic copy to avoid deadlocking
 		 * in page fault handling.
 		 */
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before copy pid=%d file=%pd2 offset=%zu bytes=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, offset, bytes,
+			       iov_iter_count(i));
+#ifdef CONFIG_ARCH_LINX
+		copied = copy_page_from_iter(&folio->page, offset, bytes, i);
+#else
 		copied = copy_folio_from_iter_atomic(folio, offset, bytes, i);
+#endif
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after copy pid=%d file=%pd2 copied=%zu count=%zu\n",
+			       current->pid, file->f_path.dentry, copied,
+			       iov_iter_count(i));
 		flush_dcache_folio(folio);
 
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw before write_end pid=%d file=%pd2 pos=%lld bytes=%zu copied=%zu\n",
+			       current->pid, file->f_path.dentry, pos, bytes,
+			       copied);
 		status = a_ops->write_end(iocb, mapping, pos, bytes, copied,
 						folio, fsdata);
+		if (linx_dbg)
+			pr_err("Linx dbg: gpw after write_end pid=%d file=%pd2 status=%ld count=%zu\n",
+			       current->pid, file->f_path.dentry, status,
+			       iov_iter_count(i));
 		if (unlikely(status != copied)) {
 			iov_iter_revert(i, copied - max(status, 0L));
 			if (unlikely(status < 0))
@@ -4314,6 +4406,10 @@ retry:
 	if (!written)
 		return status;
 	iocb->ki_pos += written;
+	if (linx_dbg)
+		pr_err("Linx dbg: generic_perform_write exit pid=%d file=%pd2 written=%zd pos=%lld count=%zu\n",
+		       current->pid, file->f_path.dentry, written, iocb->ki_pos,
+		       iov_iter_count(i));
 	return written;
 }
 EXPORT_SYMBOL(generic_perform_write);

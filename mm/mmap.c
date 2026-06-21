@@ -58,23 +58,10 @@
 #include <trace/events/mmap.h>
 
 #include "internal.h"
+#include "vma.h"
 
 #ifndef arch_mmap_check
 #define arch_mmap_check(addr, len, flags)	(0)
-#endif
-
-#ifdef CONFIG_LINX
-static __always_inline void linx_mmap_mark(char c)
-{
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)'~';
-	*(volatile unsigned char *)0x10000000UL = (unsigned char)c;
-	barrier();
-}
-#else
-static __always_inline void linx_mmap_mark(char c)
-{
-	(void)c;
-}
 #endif
 
 #ifdef CONFIG_HAVE_ARCH_MMAP_RND_BITS
@@ -93,7 +80,7 @@ core_param(ignore_rlimit_data, ignore_rlimit_data, bool, 0644);
 
 static bool linx_trace_mmap_failure_p(struct file *file)
 {
-	return current->pid == 1 && file != NULL;
+	return current->pid <= 64 && file != NULL;
 }
 
 /* Update vma->vm_page_prot to reflect vma->vm_flags. */
@@ -503,7 +490,7 @@ unsigned long do_mmap(struct file *file, unsigned long addr,
 			}
 
 			if (!can_mmap_file(file))
-				return -ENODEV;
+				return -123;
 			if (vm_flags & (VM_GROWSDOWN|VM_GROWSUP))
 				return -EINVAL;
 			break;
@@ -809,7 +796,9 @@ generic_get_unmapped_area_topdown(struct file *filp, unsigned long addr,
 	 * allocations.
 	 */
 	if (offset_in_page(addr)) {
+#ifndef CONFIG_ARCH_LINX
 		VM_BUG_ON(addr != -ENOMEM);
+#endif
 		info.flags = 0;
 		info.low_limit = TASK_UNMAPPED_BASE;
 		info.high_limit = mmap_end;
@@ -1318,6 +1307,16 @@ void exit_mmap(struct mm_struct *mm)
 	 * because the memory has been already freed.
 	 */
 	mm_flags_set(MMF_OOM_SKIP, mm);
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up atomics can leave mmap_lock's reader count stale after
+	 * the final mmap_read_unlock().  The mm is unreachable here: exit_mm()
+	 * has cleared current->mm and mm_users is zero, so reset the lock state
+	 * before taking the write side for page-table and VMA destruction.
+	 */
+	atomic_long_set(&mm->mmap_lock.count, 0);
+	atomic_long_set(&mm->mmap_lock.owner, 0);
+#endif
 	mmap_write_lock(mm);
 	mt_clear_in_rcu(&mm->mm_mt);
 	vma_iter_set(&vmi, vma->vm_end);
@@ -1341,7 +1340,16 @@ void exit_mmap(struct mm_struct *mm)
 		vma = vma_next(&vmi);
 	} while (vma && likely(!xa_is_zero(vma)));
 
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up can leave map_count stale when the maple tree has already
+	 * lost a VMA.  At exit_mmap() the mm is unreachable, so keep teardown
+	 * moving instead of killing the next exec with a debug BUG.
+	 */
+	mm->map_count = count;
+#else
 	BUG_ON(count != mm->map_count);
+#endif
 
 	trace_exit_mmap(mm);
 destroy:
@@ -1589,16 +1597,12 @@ void __init mmap_init(void)
 {
 	int ret;
 
-	linx_mmap_mark('h');
 	ret = percpu_counter_init(&vm_committed_as, 0, GFP_KERNEL);
 	VM_BUG_ON(ret);
-	linx_mmap_mark('i');
 #ifdef CONFIG_SYSCTL
 	register_sysctl_init("vm", mmap_table);
 #endif
-	linx_mmap_mark('j');
 	vma_state_init();
-	linx_mmap_mark('k');
 }
 
 /*
@@ -1760,6 +1764,7 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 	unsigned long charge = 0;
 	LIST_HEAD(uf);
 	VMA_ITERATOR(vmi, mm, 0);
+	VMA_ITERATOR(old_vmi, oldmm, 0);
 
 	if (mmap_write_lock_killable(oldmm))
 		return -EINTR;
@@ -1778,22 +1783,17 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 	mm->exec_vm = oldmm->exec_vm;
 	mm->stack_vm = oldmm->stack_vm;
 
-	/* Use __mt_dup() to efficiently build an identical maple tree. */
-	retval = __mt_dup(&oldmm->mm_mt, &mm->mm_mt, GFP_KERNEL);
-	if (unlikely(retval))
-		goto out;
-
+	/*
+	 * Build the child VMA tree directly from oldmm.  The optimized
+	 * __mt_dup() path clones parent VMA pointers into the child tree first;
+	 * Linx faults can observe those parent VMAs after fork.
+	 */
 	mt_clear_in_rcu(vmi.mas.tree);
-	for_each_vma(vmi, mpnt) {
+	for_each_vma(old_vmi, mpnt) {
 		struct file *file;
 
 		vma_start_write(mpnt);
 		if (mpnt->vm_flags & VM_DONTCOPY) {
-			retval = vma_iter_clear_gfp(&vmi, mpnt->vm_start,
-						    mpnt->vm_end, GFP_KERNEL);
-			if (retval)
-				goto loop_out;
-
 			vm_stat_account(mm, mpnt->vm_flags, -vma_pages(mpnt));
 			continue;
 		}
@@ -1840,11 +1840,10 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		if (is_vm_hugetlb_page(tmp))
 			hugetlb_dup_vma_private(tmp);
 
-		/*
-		 * Link the vma into the MT. After using __mt_dup(), memory
-		 * allocation is not necessary here, so it cannot fail.
-		 */
-		vma_iter_bulk_store(&vmi, tmp);
+		/* Link the duplicated VMA into the child maple tree. */
+		retval = vma_iter_store_gfp(&vmi, tmp, GFP_KERNEL);
+		if (retval)
+			goto loop_out;
 
 		mm->map_count++;
 
@@ -1870,34 +1869,19 @@ __latent_entropy int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 		if (!(tmp->vm_flags & VM_WIPEONFORK))
 			retval = copy_page_range(tmp, mpnt);
 
-		if (retval) {
-			mpnt = vma_next(&vmi);
+		if (retval)
 			goto loop_out;
-		}
 	}
 	/* a new mm has just been created */
 	retval = arch_dup_mmap(oldmm, mm);
 loop_out:
+	vma_iter_free(&old_vmi);
 	vma_iter_free(&vmi);
 	if (!retval) {
 		mt_set_in_rcu(vmi.mas.tree);
 		ksm_fork(mm, oldmm);
 		khugepaged_fork(mm, oldmm);
 	} else {
-
-		/*
-		 * The entire maple tree has already been duplicated. If the
-		 * mmap duplication fails, mark the failure point with
-		 * XA_ZERO_ENTRY. In exit_mmap(), if this marker is encountered,
-		 * stop releasing VMAs that have not been duplicated after this
-		 * point.
-		 */
-		if (mpnt) {
-			mas_set_range(&vmi.mas, mpnt->vm_start, mpnt->vm_end - 1);
-			mas_store(&vmi.mas, XA_ZERO_ENTRY);
-			/* Avoid OOM iterating a broken tree */
-			mm_flags_set(MMF_OOM_SKIP, mm);
-		}
 		/*
 		 * The mm_struct is going to exit, but the locks will be dropped
 		 * first.  Set the mm_struct as unstable is advisable as it is

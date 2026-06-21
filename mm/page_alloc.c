@@ -716,11 +716,10 @@ static inline int pindex_to_order(unsigned int pindex)
 
 static inline bool pcp_allowed_order(unsigned int order)
 {
-#ifdef CONFIG_LINX
+#ifdef __LINX__
 	/*
-	 * LinxISA bring-up: per-cpu page lists are still unstable (and are also
-	 * bypassed in rmqueue()). Disable PCP usage entirely so allocations and
-	 * frees consistently go through the buddy allocator.
+	 * Linx builds do not carry a CONFIG_LINX symbol, so key bring-up
+	 * allocator overrides must key off the compiler target instead.
 	 */
 	return false;
 #endif
@@ -732,6 +731,19 @@ static inline bool pcp_allowed_order(unsigned int order)
 #endif
 	return false;
 }
+
+#ifdef __LINX__
+static __always_inline struct page *linx_exact_pfn_to_page(unsigned long pfn)
+{
+	return (struct page *)((char *)mem_map +
+			       ((pfn - ARCH_PFN_OFFSET) * sizeof(struct page)));
+}
+#else
+static __always_inline struct page *linx_exact_pfn_to_page(unsigned long pfn)
+{
+	return pfn_to_page(pfn);
+}
+#endif
 
 /*
  * Higher-order pages are called "compound pages".  They are structured thusly:
@@ -1049,8 +1061,8 @@ static inline void __free_one_page(struct page *page,
 		}
 
 		combined_pfn = buddy_pfn & pfn;
-		page = page + (combined_pfn - pfn);
 		pfn = combined_pfn;
+		page = linx_exact_pfn_to_page(pfn);
 		order++;
 	}
 
@@ -1738,9 +1750,12 @@ static inline unsigned int expand(struct zone *zone, struct page *page, int low,
 	unsigned int nr_added = 0;
 
 	while (high > low) {
+		struct page *subpage;
+
 		high--;
 		size >>= 1;
-		VM_BUG_ON_PAGE(bad_range(zone, &page[size]), &page[size]);
+		subpage = linx_exact_pfn_to_page(page_to_pfn(page) + size);
+		VM_BUG_ON_PAGE(bad_range(zone, subpage), subpage);
 
 		/*
 		 * Mark as guard pages (or page), that will allow to
@@ -1748,11 +1763,11 @@ static inline unsigned int expand(struct zone *zone, struct page *page, int low,
 		 * Corresponding page table entries will not be touched,
 		 * pages will stay not present in virtual address space
 		 */
-		if (set_page_guard(zone, &page[size], high))
+		if (set_page_guard(zone, subpage, high))
 			continue;
 
-		__add_to_free_list(&page[size], zone, high, migratetype, false);
-		set_buddy_order(&page[size], high);
+		__add_to_free_list(subpage, zone, high, migratetype, false);
+		set_buddy_order(subpage, high);
 		nr_added += size;
 	}
 
@@ -6250,7 +6265,7 @@ void __init setup_per_cpu_pageset(void)
 	struct zone *zone;
 	int __maybe_unused cpu;
 
-#ifdef CONFIG_LINX
+#ifdef __LINX__
 	/*
 	 * Linx smoke bring-up currently wedges during the late transition from
 	 * the boot pagesets to dynamically allocated per-cpu pagesets. Keep the
@@ -7439,11 +7454,11 @@ static void break_down_buddy_pages(struct zone *zone, struct page *page,
 		high--;
 		size >>= 1;
 
-		if (target >= &page[size]) {
+		if (target >= linx_exact_pfn_to_page(page_to_pfn(page) + size)) {
 			current_buddy = page;
-			page = page + size;
+			page = linx_exact_pfn_to_page(page_to_pfn(page) + size);
 		} else {
-			current_buddy = page + size;
+			current_buddy = linx_exact_pfn_to_page(page_to_pfn(page) + size);
 		}
 
 		if (set_page_guard(zone, current_buddy, high))

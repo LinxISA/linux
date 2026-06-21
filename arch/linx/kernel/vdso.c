@@ -195,10 +195,13 @@ static int __setup_additional_pages(struct mm_struct *mm,
 				    struct linux_binprm *bprm,
 				    int uses_interp)
 {
-	unsigned long vdso_base, vdso_text_len, vdso_mapping_len;
+	unsigned long vdso_base, vvar_base, vdso_text_len, vdso_mapping_len;
 	void *ret;
 
 	BUILD_BUG_ON(VVAR_NR_PAGES != __VVAR_PAGES);
+
+	if (!vdso_info.dm || !vdso_info.cm || !vdso_info.cm->pages)
+		return 0;
 
 	vdso_text_len = vdso_info.vdso_pages << PAGE_SHIFT;
 	/* Be sure to map the data page */
@@ -210,7 +213,8 @@ static int __setup_additional_pages(struct mm_struct *mm,
 		goto up_fail;
 	}
 
-	ret = _install_special_mapping(mm, vdso_base, VVAR_SIZE,
+	vvar_base = vdso_base;
+	ret = _install_special_mapping(mm, vvar_base, VVAR_SIZE,
 		(VM_READ | VM_MAYREAD | VM_PFNMAP), vdso_info.dm);
 	if (IS_ERR(ret))
 		goto up_fail;
@@ -223,10 +227,12 @@ static int __setup_additional_pages(struct mm_struct *mm,
 		vdso_info.cm);
 
 	if (IS_ERR(ret))
-		goto up_fail;
+		goto up_fail_munmap_vvar;
 
 	return 0;
 
+up_fail_munmap_vvar:
+	do_munmap(mm, vvar_base, VVAR_SIZE, NULL);
 up_fail:
 	mm->context.vdso = NULL;
 	return PTR_ERR(ret);

@@ -10,12 +10,13 @@
  * Ruan Jinjie (ruanjinjie@huawei.com)
  */
 #define pr_fmt(fmt) "lxintc: " fmt
-#include <linux/dma-iommu.h>
+#include <linux/iommu.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/irqchip.h>
 #include <linux/irqdomain.h>
 #include <linux/irqchip/chained_irq.h>
+#include <linux/cpuhotplug.h>
 #include <linux/module.h>
 #include <linux/msi.h>
 #include <linux/of.h>
@@ -396,7 +397,8 @@ static int lxic_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 		if (ret)
 			return ret;
 
-		cpumask_copy(irq_get_affinity_mask(virq + i), &cpumask);
+		irq_data_update_effective_affinity(irq_get_irq_data(virq + i),
+						   &cpumask);
 
 		priv->wbi_msi_flag[cpu][vector + i] = true;
 		handler = per_cpu_ptr(&lxic_handlers, cpu);
@@ -462,9 +464,14 @@ void lxic_handle_irq(struct irq_desc *desc)
 			if(!virq)
 				pr_info("cannot find virq for vector 0x%lx on cpu 0x%x\n", vector, cpu);
 
+#ifdef CONFIG_PCI
 			err = generic_handle_domain_irq(handler->priv->base_domain, virq);
 			if (unlikely(err))
 				pr_warn_ratelimited("msi base_domain can't find mapping for vector %lu\n", vector);
+#else
+			pr_warn_ratelimited("msi vector %lu received with PCI disabled\n", vector);
+			break;
+#endif
 		}
 	}
 	chained_irq_exit(chip, desc);
@@ -512,6 +519,7 @@ static int lxic_get_msi_msg(unsigned int cpu, unsigned int vector, struct msi_ms
 	return 0;
 }
 
+#ifdef CONFIG_PCI
 static void lxic_irq_compose_msi_msg(struct irq_data *d,
 				      struct msi_msg *msg)
 {
@@ -528,7 +536,8 @@ static void lxic_irq_compose_msi_msg(struct irq_data *d,
 
 	pr_info("lxic_irq_compose_msi_msg, cpu: 0x%x, addr_hi: 0x%x, addr_lo: 0x%x, data: 0x%x\n", cpu, msg->address_hi, msg->address_lo, msg->data);
 
-	iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
+	msi_msg_set_addr(irq_data_get_msi_desc(d), msg,
+			 ((u64)msg->address_hi << 32) | msg->address_lo);
 }
 
 static struct irq_chip lxic_irq_base_chip = {
@@ -658,11 +667,20 @@ static int lxic_allocate_msi_domains(struct lxic_priv *priv, struct irq_domain *
 
 	return 0;
 }
+#else
+static int lxic_allocate_msi_domains(struct lxic_priv *priv, struct irq_domain *parent,
+				     struct fwnode_handle *fwnode)
+{
+	return 0;
+}
+#endif
 
 void irq_domain_cleanup(struct lxic_priv *priv)
 {
+#ifdef CONFIG_PCI
 	irq_domain_remove(priv->pci_domain);
 	irq_domain_remove(priv->base_domain);
+#endif
 	irq_domain_remove(priv->irqdomain);
 }
 

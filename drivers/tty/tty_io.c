@@ -3628,25 +3628,53 @@ static const struct ctl_table tty_table[] = {
  */
 int __init tty_init(void)
 {
+	pr_err("Linx dbg: tty_init start\n");
 	register_sysctl_init("dev/tty", tty_table);
+	pr_err("Linx dbg: tty_init after register_sysctl_init\n");
 	cdev_init(&tty_cdev, &tty_fops);
+	pr_err("Linx dbg: tty_init after tty cdev_init\n");
 	if (cdev_add(&tty_cdev, MKDEV(TTYAUX_MAJOR, 0), 1) ||
 	    register_chrdev_region(MKDEV(TTYAUX_MAJOR, 0), 1, "/dev/tty") < 0)
 		panic("Couldn't register /dev/tty driver\n");
-	device_create(&tty_class, NULL, MKDEV(TTYAUX_MAJOR, 0), NULL, "tty");
+	pr_err("Linx dbg: tty_init after /dev/tty registration\n");
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx initramfs bring-up carries static /dev nodes already and does not
+	 * require the tty sysfs/device-model publication path yet. Skip the
+	 * device_create() leg that currently wedges early boot.
+	 */
 	cdev_init(&console_cdev, &console_fops);
+	pr_err("Linx dbg: tty_init after console cdev_init\n");
 	if (cdev_add(&console_cdev, MKDEV(TTYAUX_MAJOR, 1), 1) ||
 	    register_chrdev_region(MKDEV(TTYAUX_MAJOR, 1), 1, "/dev/console") < 0)
 		panic("Couldn't register /dev/console driver\n");
+	pr_err("Linx dbg: tty_init after /dev/console registration\n");
+	pr_err("Linx dbg: tty_init skipping device_create path for Linx bring-up\n");
+	return 0;
+#endif
+
+	device_create(&tty_class, NULL, MKDEV(TTYAUX_MAJOR, 0), NULL, "tty");
+	pr_err("Linx dbg: tty_init after device_create tty\n");
+
+	cdev_init(&console_cdev, &console_fops);
+	pr_err("Linx dbg: tty_init after console cdev_init\n");
+	if (cdev_add(&console_cdev, MKDEV(TTYAUX_MAJOR, 1), 1) ||
+	    register_chrdev_region(MKDEV(TTYAUX_MAJOR, 1), 1, "/dev/console") < 0)
+		panic("Couldn't register /dev/console driver\n");
+	pr_err("Linx dbg: tty_init after /dev/console registration\n");
 	consdev = device_create_with_groups(&tty_class, NULL,
 					    MKDEV(TTYAUX_MAJOR, 1), NULL,
 					    cons_dev_groups, "console");
+	pr_err("Linx dbg: tty_init after device_create console consdev=%px err=%ld\n",
+	       consdev, IS_ERR(consdev) ? PTR_ERR(consdev) : 0L);
 	if (IS_ERR(consdev))
 		consdev = NULL;
 
 #ifdef CONFIG_VT
 	vty_init(&console_fops);
+	pr_err("Linx dbg: tty_init after vty_init\n");
 #endif
+	pr_err("Linx dbg: tty_init done\n");
 	return 0;
 }

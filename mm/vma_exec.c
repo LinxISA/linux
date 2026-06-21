@@ -41,6 +41,11 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
 	struct mmu_gather tlb;
 	PAGETABLE_MOVE(pmc, vma, vma, old_start, new_start, length);
 
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: relocate_vma_down enter old_start=%lx old_end=%lx new_start=%lx new_end=%lx shift=%lx\n",
+	       old_start, old_end, new_start, new_end, shift);
+#endif
+
 	BUG_ON(new_start > new_end);
 
 	/*
@@ -57,6 +62,10 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
 	vmg.target = vma;
 	if (vma_expand(&vmg))
 		return -ENOMEM;
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: relocate_vma_down after vma_expand vm_start=%lx vm_end=%lx\n",
+	       vma->vm_start, vma->vm_end);
+#endif
 
 	/*
 	 * move the page tables downwards, on failure we rely on
@@ -65,6 +74,9 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
 	pmc.for_stack = true;
 	if (length != move_page_tables(&pmc))
 		return -ENOMEM;
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: relocate_vma_down after move_page_tables length=%lx\n", length);
+#endif
 
 	tlb_gather_mmu(&tlb, mm);
 	next = vma_next(&vmi);
@@ -85,10 +97,20 @@ int relocate_vma_down(struct vm_area_struct *vma, unsigned long shift)
 			next ? next->vm_start : USER_PGTABLES_CEILING);
 	}
 	tlb_finish_mmu(&tlb);
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: relocate_vma_down after tlb_finish_mmu\n");
+#endif
 
 	vma_prev(&vmi);
 	/* Shrink the vma to just the new range */
-	return vma_shrink(&vmi, vma, new_start, new_end, vma->vm_pgoff);
+	{
+		int ret = vma_shrink(&vmi, vma, new_start, new_end, vma->vm_pgoff);
+#ifdef CONFIG_LINX_INTC
+		pr_err("Linx dbg: relocate_vma_down after vma_shrink ret=%d vm_start=%lx vm_end=%lx\n",
+		       ret, vma->vm_start, vma->vm_end);
+#endif
+		return ret;
+	}
 }
 
 /*
@@ -109,6 +131,11 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 {
 	int err;
 	struct vm_area_struct *vma = vm_area_alloc(mm);
+	unsigned long stack_top_max = STACK_TOP_MAX;
+
+#ifdef CONFIG_LINX_INTC
+	stack_top_max = TASK_SIZE_MIN;
+#endif
 
 	if (!vma)
 		return -ENOMEM;
@@ -135,8 +162,12 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 	 * configured yet.
 	 */
 	BUILD_BUG_ON(VM_STACK_FLAGS & VM_STACK_INCOMPLETE_SETUP);
-	vma->vm_end = STACK_TOP_MAX;
+	vma->vm_end = stack_top_max;
 	vma->vm_start = vma->vm_end - PAGE_SIZE;
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: create_init_stack_vma stack_top_max=%016lx vm_start=%016lx vm_end=%016lx\n",
+	       stack_top_max, vma->vm_start, vma->vm_end);
+#endif
 	vm_flags_init(vma, VM_SOFTDIRTY | VM_STACK_FLAGS | VM_STACK_INCOMPLETE_SETUP);
 	vma->vm_page_prot = vm_get_page_prot(vma->vm_flags);
 
@@ -148,6 +179,9 @@ int create_init_stack_vma(struct mm_struct *mm, struct vm_area_struct **vmap,
 	mmap_write_unlock(mm);
 	*vmap = vma;
 	*top_mem_p = vma->vm_end - sizeof(void *);
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: create_init_stack_vma top_mem_p=%016lx\n", *top_mem_p);
+#endif
 	return 0;
 
 err:

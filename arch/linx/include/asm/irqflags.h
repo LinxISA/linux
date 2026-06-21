@@ -49,7 +49,10 @@ static inline int arch_irqs_disabled(void)
 /* set interrupt enabled status */
 static inline void arch_local_irq_restore(unsigned long flags)
 {
-	ssr_set(SSR_CSTATE, flags & CSTATE_I);
+	if (flags & CSTATE_I)
+		ssr_set(SSR_CSTATE, CSTATE_I);
+	else
+		ssr_clear(SSR_CSTATE, CSTATE_I);
 }
 
 #endif /* _ASM_LINX_IRQFLAGS_H */

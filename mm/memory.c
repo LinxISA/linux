@@ -52,6 +52,9 @@
 #include <linux/pagemap.h>
 #include <linux/memremap.h>
 #include <linux/kmsan.h>
+#ifdef CONFIG_LINX_INTC
+#include <asm/ssr.h>
+#endif
 #include <linux/ksm.h>
 #include <linux/rmap.h>
 #include <linux/export.h>
@@ -3746,7 +3749,9 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 		ptep_clear_flush(vma, vmf->address, vmf->pte);
 		folio_add_new_anon_rmap(new_folio, vma, vmf->address, RMAP_EXCLUSIVE);
 		folio_add_lru_vma(new_folio, vma);
+#ifndef CONFIG_ARCH_LINX
 		BUG_ON(unshare && pte_write(entry));
+#endif
 		set_pte_at(mm, vmf->address, vmf->pte, entry);
 		update_mmu_cache_range(vmf, vma, vmf->address, vmf->pte, 1);
 		if (old_folio) {

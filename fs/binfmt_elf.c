@@ -163,6 +163,29 @@ static int padzero(unsigned long address)
 #define ELF_BASE_PLATFORM NULL
 #endif
 
+#ifdef CONFIG_ARCH_LINX
+static long linx_elf_strnlen_user(const char __user *str, long count)
+{
+	long len;
+
+	if (unlikely(count <= 0))
+		return 0;
+
+	for (len = 0; len < count; len++) {
+		char c;
+
+		if (get_user(c, str + len))
+			return 0;
+		if (!c)
+			return len + 1;
+	}
+
+	return count + 1;
+}
+#else
+#define linx_elf_strnlen_user(str, count) strnlen_user((str), (count))
+#endif
+
 static int
 create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 		unsigned long interp_load_addr,
@@ -344,11 +367,13 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	/* Populate list of argv pointers back to argv strings. */
 	p = mm->arg_end = mm->arg_start;
 	while (argc-- > 0) {
-		size_t len;
+		long len;
 		if (put_user((elf_addr_t)p, sp++))
 			return -EFAULT;
-		len = strnlen_user((void __user *)p, MAX_ARG_STRLEN);
-		if (!len || len > MAX_ARG_STRLEN)
+		len = linx_elf_strnlen_user((void __user *)p, MAX_ARG_STRLEN);
+		if (!len)
+			return -EINVAL;
+		if (len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -359,11 +384,13 @@ create_elf_tables(struct linux_binprm *bprm, const struct elfhdr *exec,
 	/* Populate list of envp pointers back to envp strings. */
 	mm->env_end = mm->env_start = p;
 	while (envc-- > 0) {
-		size_t len;
+		long len;
 		if (put_user((elf_addr_t)p, sp++))
 			return -EFAULT;
-		len = strnlen_user((void __user *)p, MAX_ARG_STRLEN);
-		if (!len || len > MAX_ARG_STRLEN)
+		len = linx_elf_strnlen_user((void __user *)p, MAX_ARG_STRLEN);
+		if (!len)
+			return -EINVAL;
+		if (len > MAX_ARG_STRLEN)
 			return -EINVAL;
 		p += len;
 	}
@@ -470,6 +497,16 @@ static unsigned long elf_load(struct file *filep, unsigned long addr,
 				     prot & PROT_EXEC ? VM_EXEC : 0);
 		if (error)
 			map_addr = error;
+#ifdef CONFIG_ARCH_LINX
+		else if ((prot & PROT_WRITE) && zero_end > zero_start)
+			/*
+			 * Linx user block replay is still sensitive to repeated
+			 * demand-zero faults inside one open block.  Populate ELF
+			 * BSS at exec time so large SPEC globals do not exercise
+			 * that fragile path before userspace begins running.
+			 */
+			mm_populate(zero_start, zero_end - zero_start);
+#endif
 	}
 	return map_addr;
 }
@@ -495,6 +532,31 @@ static unsigned long total_mapping_size(const struct elf_phdr *phdr, int nr)
 static int elf_read(struct file *file, void *buf, size_t len, loff_t pos)
 {
 	ssize_t rv;
+
+#ifdef CONFIG_LINX_INTC
+	if (file && file->f_mapping && file->f_mapping->a_ops &&
+	    file->f_mapping->a_ops->read_folio) {
+		size_t done = 0;
+
+		while (done < len) {
+			pgoff_t index = (pos + done) >> PAGE_SHIFT;
+			size_t off = (pos + done) & (PAGE_SIZE - 1);
+			size_t chunk = min_t(size_t, len - done, PAGE_SIZE - off);
+			struct folio *folio = read_mapping_folio(file->f_mapping, index, file);
+			void *kaddr;
+
+			if (IS_ERR(folio))
+				return PTR_ERR(folio);
+
+			kaddr = kmap_local_folio(folio, off);
+			memcpy((char *)buf + done, kaddr, chunk);
+			kunmap_local(kaddr);
+			folio_put(folio);
+			done += chunk;
+		}
+		return 0;
+	}
+#endif
 
 	rv = kernel_read(file, buf, len, &pos);
 	if (unlikely(rv != len)) {
@@ -866,27 +928,65 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	struct arch_elf_state arch_state = INIT_ARCH_ELF_STATE;
 	struct mm_struct *mm;
 	struct pt_regs *regs;
+	unsigned long stack_top = STACK_TOP;
+#ifdef CONFIG_LINX_INTC
+	int stage = 0;
+	stack_top = TASK_SIZE_MIN;
+#endif
+
+#define LINX_TOOLCHAIN_EMACHINE 233
 
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('L');
 #endif
 	retval = -ENOEXEC;
 	/* First of all, some simple consistency checks */
-	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
+	if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0) {
+#ifdef CONFIG_LINX_INTC
+		stage = 1;
+#endif
 		goto out;
+	}
 
-	if (elf_ex->e_type != ET_EXEC && elf_ex->e_type != ET_DYN)
+	if (elf_ex->e_type != ET_EXEC && elf_ex->e_type != ET_DYN) {
+#ifdef CONFIG_LINX_INTC
+		stage = 2;
+#endif
 		goto out;
-	if (!elf_check_arch(elf_ex))
+	}
+	if (!elf_check_arch(elf_ex)
+#ifdef CONFIG_LINX_INTC
+	    && elf_ex->e_machine != LINX_TOOLCHAIN_EMACHINE
+#endif
+	) {
+#ifdef CONFIG_LINX_INTC
+		stage = 3;
+#endif
 		goto out;
-	if (elf_check_fdpic(elf_ex))
+	}
+	if (elf_check_fdpic(elf_ex)) {
+#ifdef CONFIG_LINX_INTC
+		stage = 4;
+#endif
 		goto out;
-	if (!can_mmap_file(bprm->file))
+	}
+	if (!can_mmap_file(bprm->file)) {
+#ifdef CONFIG_LINX_INTC
+		stage = 5;
+#endif
 		goto out;
+	}
+
+#ifdef CONFIG_LINX_INTC
+	stage = 6;
+#endif
 
 	elf_phdata = load_elf_phdrs(elf_ex, bprm->file);
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('p');
+#endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after load_elf_phdrs ptr=%px\n", elf_phdata);
 #endif
 	if (!elf_phdata)
 		goto out;
@@ -1016,6 +1116,9 @@ out_free_interp:
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('o');
 #endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after parse_elf_properties retval=%d\n", retval);
+#endif
 	if (retval)
 		goto out_free_dentry;
 
@@ -1030,6 +1133,10 @@ out_free_interp:
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('c');
 #endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after arch_check_elf retval=%d interp=%d\n",
+	       retval, interpreter ? 1 : 0);
+#endif
 	if (retval)
 		goto out_free_dentry;
 
@@ -1037,6 +1144,9 @@ out_free_interp:
 	retval = begin_new_exec(bprm);
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('n');
+#endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after begin_new_exec retval=%d\n", retval);
 #endif
 	if (retval)
 		goto out_free_dentry;
@@ -1055,10 +1165,18 @@ out_free_interp:
 
 	/* Do this so that we can load the interpreter, if need be.  We will
 	   change some of these later */
-	retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
+#ifdef CONFIG_LINX_INTC
+	retval = setup_arg_pages(bprm, stack_top, executable_stack);
+#else
+	retval = setup_arg_pages(bprm, randomize_stack_top(stack_top),
 				 executable_stack);
+#endif
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('a');
+#endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after setup_arg_pages retval=%d stack_top=%lx p=%lx\n",
+	       retval, stack_top, bprm->p);
 #endif
 	if (retval < 0)
 		goto out_free_dentry;
@@ -1200,6 +1318,10 @@ out_free_interp:
 					if (BAD_ADDR(load_bias)) {
 						retval = IS_ERR_VALUE(load_bias) ?
 							 PTR_ERR((void*)load_bias) : -EINVAL;
+#ifdef CONFIG_ARCH_LINX
+						if (retval == -ENODEV && current->pid <= 64)
+							retval = -119;
+#endif
 						goto out_free_dentry;
 					}
 					vm_munmap(load_bias, total_size);
@@ -1229,6 +1351,10 @@ out_free_interp:
 			if (BAD_ADDR(error)) {
 				retval = IS_ERR_VALUE(error) ?
 					PTR_ERR((void*)error) : -EINVAL;
+#ifdef CONFIG_ARCH_LINX
+				if (retval == -ENODEV && current->pid <= 64)
+					retval = -120 - i;
+#endif
 				goto out_free_dentry;
 			}
 
@@ -1355,6 +1481,13 @@ out_free_interp:
 #ifdef CONFIG_LINX
 	linx_debug_uart_putc('T');
 #endif
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after create_elf_tables retval=%d elf_entry=%lx e_entry=%lx load_bias=%lx stack=%lx start_code=%lx end_code=%lx start_data=%lx end_data=%lx brk=%lx interp=%d\n",
+	       retval, elf_entry, e_entry, load_bias, bprm->p, start_code,
+	       end_code, start_data, end_data,
+	       current->mm ? current->mm->brk : 0UL,
+	       interpreter ? 1 : 0);
+#endif
 		if (retval < 0)
 			goto out;
 
@@ -1438,16 +1571,30 @@ out_free_interp:
 	ELF_PLAT_INIT(regs, reloc_func_desc);
 #endif
 
-		finalize_exec(bprm);
+	finalize_exec(bprm);
 #ifdef CONFIG_LINX
-		linx_debug_uart_putc('F');
+	linx_debug_uart_putc('F');
 #endif
-		START_THREAD(elf_ex, regs, elf_entry, bprm->p);
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary before START_THREAD elf_entry=%lx stack=%lx mm_start_stack=%lx\n",
+	       elf_entry, bprm->p, current->mm ? current->mm->start_stack : 0UL);
+#endif
+	START_THREAD(elf_ex, regs, elf_entry, bprm->p);
 #ifdef CONFIG_LINX
-		linx_debug_uart_putc('S');
+	linx_debug_uart_putc('S');
 #endif
-		retval = 0;
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: load_elf_binary after START_THREAD regs->cstate=%lx regs->tpc=%lx regs->bpc=%lx regs->sp=%lx\n",
+	       regs->cstate, regs->tpc, regs->bpc, regs->sp);
+#endif
+	retval = 0;
 out:
+#ifdef CONFIG_LINX_INTC
+	if (retval)
+		pr_err("Linx dbg: load_elf_binary exit stage=%d retval=%d type=%u machine=%u entry=%llx\n",
+		       stage, retval, elf_ex->e_type, elf_ex->e_machine,
+		       (unsigned long long)elf_ex->e_entry);
+#endif
 	return retval;
 
 	/* error cleanup */
@@ -2202,6 +2349,11 @@ static int __init init_elf_binfmt(void)
 {
 	register_binfmt(&elf_format);
 	return 0;
+}
+
+int __init linx_init_elf_binfmt(void)
+{
+	return init_elf_binfmt();
 }
 
 static void __exit exit_elf_binfmt(void)

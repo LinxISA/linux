@@ -12,6 +12,7 @@
 #include <linux/sched.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/task_stack.h>
+#include <linux/init.h>
 #include <linux/tick.h>
 #include <linux/ptrace.h>
 #include <linux/uaccess.h>
@@ -33,6 +34,16 @@ EXPORT_SYMBOL(__stack_chk_guard);
 
 extern asmlinkage void ret_from_fork(void);
 extern asmlinkage void ret_from_kernel_thread(void);
+
+static struct pt_regs *linx_child_pt_regs(struct task_struct *p)
+{
+	unsigned long regs = (unsigned long)task_pt_regs(p);
+
+	if (!IS_ENABLED(CONFIG_VMAP_STACK) && regs < PAGE_OFFSET)
+		regs = (unsigned long)__va(regs);
+
+	return (struct pt_regs *)regs;
+}
 
 void arch_cpu_idle(void)
 {
@@ -91,22 +102,58 @@ void show_regs(struct pt_regs *regs)
 
 void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long sp)
 {
+	unsigned long old_cstate = regs->cstate;
+	unsigned long old_tpc = regs->tpc;
+	unsigned long old_bpc = regs->bpc;
+
 	/* called by `load_elf_binary` */
+	pr_err("Linx dbg: start_thread enter pc=%lx sp=%lx old_cstate=%lx old_tpc=%lx old_bpc=%lx\n",
+	       pc, sp, old_cstate, old_tpc, old_bpc);
+
+	memset(regs, 0, sizeof(*regs));
+
 	regs->cstate = CSTATE_ACR2 | CSTATE_I;
 	/*
 	 * Since the epc have been changed, the bstate of the exception block
 	 * should be discarded also.
 	 */
-	WARN_ON_ONCE(regs->bpc == pc);
 	regs->bpc = pc;
 	regs->tpc = pc;
 	// regs->ebstate.rra = RRAT_DEFAULT;
 	regs->sp = sp;
+#ifdef CONFIG_LINX_INTC
+	current_thread_info()->flags &= ~_TIF_WORK_MASK;
+#endif
+	pr_err("Linx dbg: start_thread exit new_cstate=%lx new_tpc=%lx new_bpc=%lx new_sp=%lx\n",
+	       regs->cstate, regs->tpc, regs->bpc, regs->sp);
 }
 
 void flush_thread(void)
 {
 }
+
+#ifdef CONFIG_LINX_INTC
+static bool linx_trace_ret_from_exception_enabled;
+
+static int __init linx_trace_ret_from_exception_setup(char *str)
+{
+	linx_trace_ret_from_exception_enabled =
+		!str || !(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_trace_ret_from_exception",
+	    linx_trace_ret_from_exception_setup);
+
+asmlinkage void linx_trace_ret_from_exception(struct pt_regs *regs)
+{
+	if (linx_trace_ret_from_exception_enabled && current && current->pid == 1) {
+		pr_err("Linx dbg: ret_from_exception trace pid=1 flags=%lx pt_cstate=%lx pt_tpc=%lx pt_bpc=%lx pt_sp=%lx live_ssr_cstate=%lx user_mode=%d\n",
+		       current_thread_info()->flags,
+		       regs->cstate, regs->tpc, regs->bpc, regs->sp,
+		       ssr_read(SSR_CSTATE), user_mode(regs) ? 1 : 0);
+	}
+}
+#endif
 
 int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 {
@@ -119,7 +166,7 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	unsigned long clone_flags = args->flags;
 	unsigned long usp = args->stack;
 	unsigned long tls = args->tls;
-	struct pt_regs *childregs = task_pt_regs(p);
+	struct pt_regs *childregs = linx_child_pt_regs(p);
 
 	/* p->thread holds context to be restored by __switch_to() */
 	if (unlikely(args->fn)) {
@@ -139,8 +186,11 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 		if (clone_flags & CLONE_SETTLS)
 			childregs->tp = tls;
 		childregs->a0 = 0; /* Return value of fork() */
+		childregs->cstate &= ~ECAUSE_BI_MASK;
+		p->thread_info.user_sp = childregs->sp;
 		p->thread.ra = (unsigned long)ret_from_fork;
 	}
 	p->thread.sp = (unsigned long)childregs; /* kernel sp */
+	p->thread_info.kernel_sp = (unsigned long)childregs + sizeof(*childregs);
 	return 0;
 }

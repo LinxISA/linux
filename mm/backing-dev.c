@@ -489,6 +489,13 @@ static __init int bdi_class_init(void)
 }
 postcore_initcall(bdi_class_init);
 
+#ifdef CONFIG_LINX_INTC
+int __init linx_bdi_class_init(void)
+{
+	return bdi_class_init();
+}
+#endif
+
 static int __init default_bdi_init(void)
 {
 	bdi_wq = alloc_workqueue("writeback", WQ_MEM_RECLAIM | WQ_UNBOUND |
@@ -498,6 +505,13 @@ static int __init default_bdi_init(void)
 	return 0;
 }
 subsys_initcall(default_bdi_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_default_bdi_init(void)
+{
+	return default_bdi_init();
+}
+#endif
 
 static void wb_update_bandwidth_workfn(struct work_struct *work)
 {
@@ -982,6 +996,13 @@ static int __init cgwb_init(void)
 }
 subsys_initcall(cgwb_init);
 
+#ifdef CONFIG_LINX_INTC
+int __init linx_cgwb_init(void)
+{
+	return cgwb_init();
+}
+#endif
+
 #else	/* CONFIG_CGROUP_WRITEBACK */
 
 static int cgwb_bdi_init(struct backing_dev_info *bdi)
@@ -995,6 +1016,13 @@ static void cgwb_bdi_register(struct backing_dev_info *bdi)
 {
 	list_add_tail_rcu(&bdi->wb.bdi_node, &bdi->wb_list);
 }
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_cgwb_init(void)
+{
+	return 0;
+}
+#endif
 
 static void cgwb_remove_from_bdi_list(struct bdi_writeback *wb)
 {

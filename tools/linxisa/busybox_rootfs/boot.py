@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import json
 import os
 import pathlib
 import pty
@@ -8,7 +9,78 @@ import shlex
 import subprocess
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
+
+
+ROOTFS_CONFIG_REQUIREMENTS: tuple[str, ...] = (
+    "CONFIG_BLOCK",
+    "CONFIG_DEVTMPFS",
+    "CONFIG_DEVTMPFS_MOUNT",
+    "CONFIG_EXT2_FS",
+    "CONFIG_PROC_FS",
+    "CONFIG_SYSFS",
+    "CONFIG_VIRTIO",
+    "CONFIG_VIRTIO_MMIO",
+    "CONFIG_VIRTIO_BLK",
+)
+
+
+def _parse_kernel_config(path: pathlib.Path) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        disabled = re.match(r"# (CONFIG_[A-Za-z0-9_]+) is not set$", line)
+        if disabled:
+            options[disabled.group(1)] = "n"
+            continue
+        if line.startswith("CONFIG_") and "=" in line:
+            key, value = line.split("=", 1)
+            options[key] = value
+    return options
+
+
+def _kernel_config_path(kernel: pathlib.Path, o_dir: pathlib.Path) -> pathlib.Path:
+    explicit = os.environ.get("KERNEL_CONFIG", "")
+    if explicit:
+        return pathlib.Path(explicit)
+    kernel_parent = kernel.parent
+    if (kernel_parent / ".config").is_file():
+        return kernel_parent / ".config"
+    return o_dir / ".config"
+
+
+def _check_kernel_config(kernel: pathlib.Path, o_dir: pathlib.Path) -> bool:
+    flag = os.environ.get("LINX_BUSYBOX_ROOTFS_CONFIG_PREFLIGHT", "1").lower()
+    if flag in {"0", "false", "no"}:
+        return True
+
+    config_path = _kernel_config_path(kernel, o_dir)
+    if not config_path.is_file():
+        sys.stderr.write(
+            "error: kernel config preflight failed; .config not found for rootfs boot\n"
+        )
+        sys.stderr.write("kernel: %s\n" % kernel)
+        sys.stderr.write("expected config: %s\n" % config_path)
+        sys.stderr.write(
+            "set KERNEL_CONFIG=/path/to/.config or LINX_BUSYBOX_ROOTFS_CONFIG_PREFLIGHT=0 "
+            "for externally managed kernels\n"
+        )
+        return False
+
+    options = _parse_kernel_config(config_path)
+    missing = [key for key in ROOTFS_CONFIG_REQUIREMENTS if options.get(key) != "y"]
+    if not missing:
+        return True
+
+    sys.stderr.write(
+        "error: kernel config preflight failed; rootfs boot requires: %s\n"
+        % ", ".join(missing)
+    )
+    sys.stderr.write("kernel: %s\n" % kernel)
+    sys.stderr.write("config: %s\n" % config_path)
+    return False
 
 
 def _irq0_count(text: str) -> Optional[int]:
@@ -29,8 +101,8 @@ def _attempt_appends(base_append: str) -> list[tuple[str, Optional[str]]]:
     if retry_flag not in {"0", "false", "no"}:
         attempts.append((base_append, "same-config retry"))
 
-    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "1").lower()
-    if fallback_flag not in {"0", "false", "no"} and "virtio_mmio.device=" not in base_append:
+    fallback_flag = os.environ.get("LINX_VIRTIO_MMIO_FALLBACK", "0").lower()
+    if fallback_flag in {"1", "true", "yes"} and "virtio_mmio.device=" not in base_append:
         attempts.append((f"{base_append} virtio_mmio.device=0x200@0x30001000:1".strip(), "virtio-mmio cmdline fallback"))
 
     return attempts
@@ -140,6 +212,73 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     return b"".join(out_chunks).decode("utf-8", errors="replace"), timed_out
 
 
+def _artifact_path(env_name: str, fallback_env_name: str = "") -> Optional[pathlib.Path]:
+    value = os.environ.get(env_name, "")
+    if not value and fallback_env_name:
+        value = os.environ.get(fallback_env_name, "")
+    if not value:
+        return None
+    return pathlib.Path(value)
+
+
+def _rootfs_path(default: pathlib.Path) -> pathlib.Path:
+    rootfs_img = os.environ.get("ROOTFS_IMG", "")
+    legacy_rootfs = os.environ.get("ROOTFS", "")
+
+    if rootfs_img:
+        if legacy_rootfs and legacy_rootfs != rootfs_img:
+            sys.stderr.write(
+                "note: ROOTFS is ignored because ROOTFS_IMG is set; "
+                "ROOTFS_IMG is the canonical rootfs selector\n"
+            )
+        return pathlib.Path(rootfs_img)
+
+    if legacy_rootfs:
+        sys.stderr.write(
+            "note: ROOTFS is accepted as a compatibility alias; prefer ROOTFS_IMG\n"
+        )
+        return pathlib.Path(legacy_rootfs)
+
+    return default
+
+
+def _write_text(path: Optional[pathlib.Path], text: str) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8", errors="replace")
+
+
+def _write_json(path: Optional[pathlib.Path], payload: dict[str, Any]) -> None:
+    if path is None:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _default_transcript_path(report_path: Optional[pathlib.Path]) -> Optional[pathlib.Path]:
+    if report_path is None:
+        return None
+    return report_path.with_suffix(".transcript.txt")
+
+
+def _format_transcript(attempts: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for attempt in attempts:
+        note = attempt.get("recovery_note") or "primary"
+        parts.append(f"===== attempt {attempt['index']}: {note} =====")
+        parts.append("cmd: %s" % " ".join(attempt["command"]))
+        parts.append("append: %s" % attempt["append"])
+        parts.append("timed_out: %s" % attempt["timed_out"])
+        parts.append("missing: %s" % ", ".join(attempt["missing"]))
+        if attempt.get("irq_error"):
+            parts.append("irq_error: %s" % attempt["irq_error"])
+        parts.append("")
+        parts.append(attempt.get("output", ""))
+        parts.append("")
+    return "\n".join(parts)
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     super_root = linux_root.parents[1]
@@ -152,7 +291,7 @@ def main() -> int:
     qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
 
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
-    rootfs = pathlib.Path(os.environ.get("ROOTFS_IMG", str(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")))
+    rootfs = _rootfs_path(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
@@ -166,6 +305,7 @@ def main() -> int:
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
         qemu_extra_args.extend(["-bios", "none"])
+    virtio_device = os.environ.get("VIRTIO_BLK_DEVICE", "virtio-blk-device,drive=vd0")
 
     script = os.environ.get(
         "SCRIPT",
@@ -176,10 +316,19 @@ def main() -> int:
         "cat /proc/interrupts\n"
         "poweroff\n",
     )
+    report_path = _artifact_path("LINX_BUSYBOX_BOOT_REPORT", "LINX_FLOW_COMMAND_REPORT")
+    transcript_path = _artifact_path(
+        "LINX_BUSYBOX_BOOT_TRANSCRIPT", "LINX_FLOW_COMMAND_TRANSCRIPT"
+    )
+    if transcript_path is None:
+        transcript_path = _default_transcript_path(report_path)
 
     if os.environ.get("SKIP_BUILD", "") not in {"1", "true", "yes"}:
         build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
         subprocess.run([str(build_sh)], check=True)
+
+    if not _check_kernel_config(kernel, o_dir):
+        return 2
 
     want = [
         "cmds:",
@@ -193,8 +342,11 @@ def main() -> int:
     last_missing: list[str] = []
     last_timed_out = False
     last_irq_error: Optional[str] = None
+    attempts_report: list[dict[str, Any]] = []
 
-    for attempt_append, recovery_note in _attempt_appends(append):
+    for attempt_index, (attempt_append, recovery_note) in enumerate(
+        _attempt_appends(append), start=1
+    ):
         cmd = [
             str(qemu),
             "-nographic",
@@ -211,7 +363,7 @@ def main() -> int:
             "-drive",
             f"if=none,id=vd0,file={rootfs},format=raw",
             "-device",
-            "virtio-blk-device,drive=vd0",
+            virtio_device,
             "-append",
             attempt_append,
         ]
@@ -230,10 +382,44 @@ def main() -> int:
         last_missing = missing
         last_timed_out = timed_out
         last_irq_error = irq_error
+        attempts_report.append(
+            {
+                "index": attempt_index,
+                "recovery_note": recovery_note,
+                "append": attempt_append,
+                "command": cmd,
+                "timed_out": timed_out,
+                "missing": missing,
+                "irq_counts": irq_counts,
+                "irq_error": irq_error,
+                "output_lines": len(text.splitlines()),
+                "output_tail": text.splitlines()[-80:],
+                "output": text,
+            }
+        )
 
         if missing or irq_error:
             continue
 
+        _write_text(transcript_path, _format_transcript(attempts_report))
+        _write_json(
+            report_path,
+            {
+                "schema_version": 1,
+                "ok": True,
+                "status": "pass",
+                "kernel": str(kernel),
+                "rootfs": str(rootfs),
+                "qemu": str(qemu),
+                "timeout_seconds": timeout_s,
+                "disable_timer_irq": disable_timer_irq,
+                "attempts": [
+                    {k: v for k, v in attempt.items() if k != "output"}
+                    for attempt in attempts_report
+                ],
+                "transcript": str(transcript_path) if transcript_path is not None else None,
+            },
+        )
         if recovery_note:
             sys.stderr.write(f"note: boot.py used {recovery_note}\n")
         if timed_out:
@@ -265,6 +451,28 @@ def main() -> int:
     sys.stderr.write("cmd: %s\n" % " ".join(last_cmd))
     if last_timed_out:
         sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
+    _write_text(transcript_path, _format_transcript(attempts_report))
+    _write_json(
+        report_path,
+        {
+            "schema_version": 1,
+            "ok": False,
+            "status": "fail",
+            "kernel": str(kernel),
+            "rootfs": str(rootfs),
+            "qemu": str(qemu),
+            "timeout_seconds": timeout_s,
+            "disable_timer_irq": disable_timer_irq,
+            "missing": last_missing,
+            "timed_out": last_timed_out,
+            "irq_error": last_irq_error,
+            "attempts": [
+                {k: v for k, v in attempt.items() if k != "output"}
+                for attempt in attempts_report
+            ],
+            "transcript": str(transcript_path) if transcript_path is not None else None,
+        },
+    )
     sys.stderr.write("\n")
     sys.stderr.write("\n".join(last_text.splitlines()[-240:]))
     sys.stderr.write("\n")

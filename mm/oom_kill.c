@@ -649,20 +649,39 @@ done:
 static int oom_reaper(void *unused)
 {
 	set_freezable();
+	pr_err("Linx dbg: oom_reaper thread start pid=%d current=%px\n",
+	       current->pid, current);
 
 	while (true) {
 		struct task_struct *tsk = NULL;
 
+		pr_err("Linx dbg: oom_reaper before wait list=%px\n", oom_reaper_list);
 		wait_event_freezable(oom_reaper_wait, oom_reaper_list != NULL);
+		pr_err("Linx dbg: oom_reaper after wait list=%px\n", oom_reaper_list);
 		spin_lock_irq(&oom_reaper_lock);
 		if (oom_reaper_list != NULL) {
 			tsk = oom_reaper_list;
 			oom_reaper_list = tsk->oom_reaper_list;
 		}
 		spin_unlock_irq(&oom_reaper_lock);
+		pr_err("Linx dbg: oom_reaper popped tsk=%px next=%px\n",
+		       tsk, oom_reaper_list);
 
-		if (tsk)
+		if (tsk) {
 			oom_reap_task(tsk);
+			continue;
+		}
+
+#ifdef CONFIG_LINX_INTC
+		/*
+		 * Linx bring-up currently sees repeated empty wakeups here,
+		 * which can monopolize the only CPU and starve later init
+		 * worker creation. Back off briefly on spurious wakeups.
+		 */
+		set_current_state(TASK_INTERRUPTIBLE);
+		schedule_timeout(1);
+		__set_current_state(TASK_RUNNING);
+#endif
 	}
 
 	return 0;

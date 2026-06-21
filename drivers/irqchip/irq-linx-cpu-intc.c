@@ -17,16 +17,28 @@
 #include <linux/of.h>
 #include <linux/smp.h>
 
+#include <asm/ptrace.h>
+#include <asm/ssr.h>
+
+#define LINX_CPU_INTC_NR_IRQS BITS_PER_LONG
+
 static struct irq_domain *intc_domain;
+static int linx_dbg_irq_dispatch_count;
+static int linx_dbg_irq_eoi_count;
 
 static asmlinkage void linx_intc_irq(struct pt_regs *regs)
 {
-	unsigned long cause = regs->trapno & ECAUSE_TRAPNUM_MASK;
+	unsigned long hwirq = regs->traparg0 & (LINX_CPU_INTC_NR_IRQS - 1);
 
-	if (unlikely(cause >= ECAUSE_TRAPNUM_ACR1_SOFT_INT + 1))
-		panic("unexpected interrupt cause");
+	if (linx_dbg_irq_dispatch_count < 8) {
+		pr_err("Linx dbg: intc dispatch hwirq=%lu trapno=0x%lx traparg0=0x%lx ip=0x%lx ecfg=0x%lx count=%d\n",
+		       hwirq, regs->trapno, regs->traparg0,
+		       ssr_read(SSR_A1_IPENDING), ssr_read(SSR_A1_ECONFIG),
+		       linx_dbg_irq_dispatch_count);
+		linx_dbg_irq_dispatch_count++;
+	}
 
-	switch (cause) {
+	switch (hwirq) {
 #ifdef CONFIG_SMP
 	case ECAUSE_TRAPNUM_ACR1_SOFT_INT:
 		/*
@@ -37,7 +49,7 @@ static asmlinkage void linx_intc_irq(struct pt_regs *regs)
 		break;
 #endif
 	default:
-		generic_handle_domain_irq(intc_domain, cause);
+		generic_handle_domain_irq(intc_domain, hwirq);
 		break;
 	}
 }
@@ -59,6 +71,17 @@ static void linx_intc_irq_unmask(struct irq_data *d)
 	ssr_set(SSR_A1_ECONFIG, BIT(d->hwirq));
 }
 
+static void linx_intc_irq_eoi(struct irq_data *d)
+{
+	if (linx_dbg_irq_eoi_count < 8) {
+		pr_err("Linx dbg: intc eoi hwirq=%lu ip_before=0x%lx count=%d\n",
+		       d->hwirq, ssr_read(SSR_A1_IPENDING),
+		       linx_dbg_irq_eoi_count);
+		linx_dbg_irq_eoi_count++;
+	}
+	ssr_write(SSR_EOIEI, d->hwirq);
+}
+
 static int linx_intc_cpu_starting(unsigned int cpu)
 {
 	ssr_set(SSR_A1_ECONFIG, BIT(ECONFIG_EXTERNAL));
@@ -77,14 +100,21 @@ static struct irq_chip linx_intc_chip = {
 	.name = "Linx CPU INTC",
 	.irq_mask = linx_intc_irq_mask,
 	.irq_unmask = linx_intc_irq_unmask,
+	.irq_eoi = linx_intc_irq_eoi,
 };
 
 static int linx_intc_domain_map(struct irq_domain *d, unsigned int irq,
 				 irq_hw_number_t hwirq)
 {
-	irq_set_percpu_devid(irq);
-	irq_domain_set_info(d, irq, hwirq, &linx_intc_chip, d->host_data,
-			    handle_percpu_devid_irq, NULL, NULL);
+	if (hwirq == ECAUSE_TRAPNUM_ACR1_TIMER_INT ||
+	    hwirq == ECAUSE_TRAPNUM_ACR1_SOFT_INT) {
+		irq_set_percpu_devid(irq);
+		irq_domain_set_info(d, irq, hwirq, &linx_intc_chip, d->host_data,
+				    handle_percpu_devid_irq, NULL, NULL);
+	} else {
+		irq_domain_set_info(d, irq, hwirq, &linx_intc_chip, d->host_data,
+				    handle_fasteoi_irq, NULL, NULL);
+	}
 
 	return 0;
 }
@@ -114,7 +144,7 @@ static int __init linx_intc_init(struct device_node *node,
 	if (riscv_hartid_to_cpuid(hartid) != smp_processor_id())
 		return 0;
 
-	intc_domain = irq_domain_add_linear(node, ECAUSE_TRAPNUM_ACR1_SOFT_INT + 1,
+	intc_domain = irq_domain_add_linear(node, LINX_CPU_INTC_NR_IRQS,
 					    &linx_intc_domain_ops, NULL);
 	if (!intc_domain) {
 		pr_err("unable to add IRQ domain\n");
@@ -132,7 +162,7 @@ static int __init linx_intc_init(struct device_node *node,
 			  linx_intc_cpu_starting,
 			  linx_intc_cpu_dying);
 
-	pr_info("%d local interrupts mapped\n", ECAUSE_TRAPNUM_ACR1_SOFT_INT + 1);
+	pr_info("%d local interrupts mapped\n", LINX_CPU_INTC_NR_IRQS);
 
 	return 0;
 }

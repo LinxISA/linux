@@ -29,6 +29,7 @@
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/initrd.h>
+#include <linux/linx_bringup.h>
 #include <linux/memblock.h>
 #include <linux/acpi.h>
 #include <linux/bootconfig.h>
@@ -46,6 +47,7 @@
 #include <linux/profile.h>
 #include <linux/kfence.h>
 #include <linux/rcupdate.h>
+#include <linux/tty.h>
 #include <linux/srcu.h>
 #include <linux/moduleparam.h>
 #include <linux/kallsyms.h>
@@ -101,6 +103,7 @@
 #include <linux/jump_label.h>
 #include <linux/kcsan.h>
 #include <linux/init_syscalls.h>
+#include <linux/linx_vuart.h>
 #include <linux/stackdepot.h>
 #include <linux/randomize_kstack.h>
 #include <linux/pidfs.h>
@@ -124,12 +127,18 @@
 static int kernel_init(void *);
 static char *static_command_line;
 
-#ifdef CONFIG_LINX
+#if defined(CONFIG_LINX) || defined(__LINX__)
+#define LINX_INIT_CALL_SHIM 1
+#endif
+
+#ifdef LINX_INIT_CALL_SHIM
 static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
 						 unsigned long flags,
 						 const char *name, bool kthread);
-static noinline void linx_call_void_indirect(void (*fn)(void));
-static noinline void __noreturn linx_call_noreturn_indirect(void (*fn)(void));
+static noinline void linx_call_void_indirect(void);
+static void (*volatile linx_boot_void_call_target)(void);
+int __init linx_init_elf_binfmt(void);
+int __init linx_init_script_binfmt(void);
 #endif
 
 #ifdef CONFIG_LINX
@@ -761,8 +770,8 @@ static void __init setup_command_line(char *command_line)
 
 static __initdata DECLARE_COMPLETION(kthreadd_done);
 
-#if defined(CONFIG_LINX)
-static __always_inline void __ref __noreturn rest_init(void)
+#ifdef LINX_INIT_CALL_SHIM
+static noinline void __ref rest_init(void)
 #else
 static noinline void __ref __noreturn rest_init(void)
 #endif
@@ -770,6 +779,7 @@ static noinline void __ref __noreturn rest_init(void)
 	struct task_struct *tsk;
 	int pid;
 
+	pr_err("Linx dbg: rest_init start\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('0');
 #endif
@@ -782,7 +792,9 @@ static noinline void __ref __noreturn rest_init(void)
 	 */
 	WRITE_ONCE(rcu_scheduler_active, 2);
 #else
+	pr_err("Linx dbg: rest_init rcu_scheduler_starting\n");
 	rcu_scheduler_starting();
+	pr_err("Linx dbg: rest_init after rcu_scheduler_starting\n");
 #endif
 #ifdef CONFIG_LINX
 	linx_boot_mark('2');
@@ -793,10 +805,12 @@ static noinline void __ref __noreturn rest_init(void)
 	 * we schedule it before we create kthreadd, will OOPS.
 	 */
 #ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init clone kernel_init\n");
 	pid = linx_kernel_clone_indirect(kernel_init, CLONE_FS, NULL, false);
 #else
 	pid = user_mode_thread(kernel_init, NULL, CLONE_FS);
 #endif
+	pr_err("Linx dbg: rest_init kernel_init pid=%d\n", pid);
 #ifdef CONFIG_LINX
 	linx_boot_mark('3');
 #endif
@@ -810,9 +824,11 @@ static noinline void __ref __noreturn rest_init(void)
 	 */
 	rcu_read_lock();
 	tsk = find_task_by_pid_ns(pid, &init_pid_ns);
+	pr_err("Linx dbg: rest_init kernel_init task=%px\n", tsk);
 	tsk->flags |= PF_NO_SETAFFINITY;
 	set_cpus_allowed_ptr(tsk, cpumask_of(smp_processor_id()));
 	rcu_read_unlock();
+	pr_err("Linx dbg: rest_init after pin kernel_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('4');
 #endif
@@ -822,11 +838,13 @@ static noinline void __ref __noreturn rest_init(void)
 
 	numa_default_policy();
 #ifdef CONFIG_LINX
+	pr_err("Linx dbg: rest_init clone kthreadd\n");
 	pid = linx_kernel_clone_indirect(kthreadd, CLONE_FS | CLONE_FILES,
 					 NULL, true);
 #else
 	pid = kernel_thread(kthreadd, NULL, NULL, CLONE_FS | CLONE_FILES);
 #endif
+	pr_err("Linx dbg: rest_init kthreadd pid=%d\n", pid);
 #ifdef CONFIG_LINX
 	linx_boot_mark('5');
 #endif
@@ -836,6 +854,7 @@ static noinline void __ref __noreturn rest_init(void)
 	rcu_read_lock();
 	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
 	rcu_read_unlock();
+	pr_err("Linx dbg: rest_init kthreadd_task=%px\n", kthreadd_task);
 #ifdef CONFIG_LINX
 	linx_boot_mark('6');
 #endif
@@ -857,7 +876,9 @@ static noinline void __ref __noreturn rest_init(void)
 	 */
 	system_state = SYSTEM_SCHEDULING;
 
+	pr_err("Linx dbg: rest_init before complete kthreadd_done\n");
 	complete(&kthreadd_done);
+	pr_err("Linx dbg: rest_init after complete kthreadd_done\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('7');
 #endif
@@ -869,11 +890,14 @@ static noinline void __ref __noreturn rest_init(void)
 	 * The boot idle thread must execute schedule()
 	 * at least once to get things moving:
 	 */
+	pr_err("Linx dbg: rest_init before schedule_preempt_disabled\n");
 	schedule_preempt_disabled();
+	pr_err("Linx dbg: rest_init after schedule_preempt_disabled\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('8');
 #endif
 	/* Call into cpu_idle with preempt disabled */
+	pr_err("Linx dbg: rest_init cpu_startup_entry\n");
 	cpu_startup_entry(CPUHP_ONLINE);
 }
 
@@ -1526,8 +1550,9 @@ void start_kernel(void)
 #ifdef CONFIG_LINX
 	linx_boot_mark('R');
 #endif
-#ifdef CONFIG_LINX
-	linx_call_void_indirect(calibrate_delay);
+#ifdef LINX_INIT_CALL_SHIM
+	linx_boot_void_call_target = calibrate_delay;
+	linx_call_void_indirect();
 #else
 	calibrate_delay();
 #endif
@@ -1589,18 +1614,25 @@ void start_kernel(void)
 	linx_boot_mark('6');
 #endif
 	vfs_caches_init();
+	pr_err("Linx dbg: start_kernel after vfs_caches_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('7');
 #endif
+	pr_err("Linx dbg: start_kernel pagecache_init\n");
 	pagecache_init();
+	pr_err("Linx dbg: start_kernel after pagecache_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('8');
 #endif
+	pr_err("Linx dbg: start_kernel signals_init\n");
 	signals_init();
+	pr_err("Linx dbg: start_kernel after signals_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('9');
 #endif
+	pr_err("Linx dbg: start_kernel seq_file_init\n");
 	seq_file_init();
+	pr_err("Linx dbg: start_kernel after seq_file_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('a');
 #endif
@@ -1652,6 +1684,7 @@ void start_kernel(void)
 	pr_err("Linx dbg: pidfs_init done\n");
 #endif
 	cpuset_init();
+	pr_err("Linx dbg: start_kernel after cpuset_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('e');
 #endif
@@ -1659,6 +1692,7 @@ void start_kernel(void)
 	pr_err("Linx dbg: cpuset_init done\n");
 #endif
 	mem_cgroup_init();
+	pr_err("Linx dbg: start_kernel after mem_cgroup_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('f');
 #endif
@@ -1666,6 +1700,7 @@ void start_kernel(void)
 	pr_err("Linx dbg: mem_cgroup_init done\n");
 #endif
 	cgroup_init();
+	pr_err("Linx dbg: start_kernel after cgroup_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('g');
 #endif
@@ -1673,23 +1708,31 @@ void start_kernel(void)
 	pr_err("Linx dbg: cgroup_init done\n");
 #endif
 	taskstats_init_early();
+	pr_err("Linx dbg: start_kernel after taskstats_init_early\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('h');
 #endif
 	delayacct_init();
+	pr_err("Linx dbg: start_kernel after delayacct_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('i');
 #endif
 
+	pr_err("Linx dbg: start_kernel acpi_subsystem_init\n");
 	acpi_subsystem_init();
+	pr_err("Linx dbg: start_kernel after acpi_subsystem_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('j');
 #endif
+	pr_err("Linx dbg: start_kernel arch_post_acpi_subsys_init\n");
 	arch_post_acpi_subsys_init();
+	pr_err("Linx dbg: start_kernel after arch_post_acpi_subsys_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('k');
 #endif
+	pr_err("Linx dbg: start_kernel kcsan_init\n");
 	kcsan_init();
+	pr_err("Linx dbg: start_kernel after kcsan_init\n");
 #ifdef CONFIG_LINX
 	linx_boot_mark('l');
 #endif
@@ -1701,8 +1744,10 @@ void start_kernel(void)
 #if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
 	pr_err("Linx dbg: entering rest_init\n");
 #endif
-#ifdef CONFIG_LINX
-	linx_call_noreturn_indirect((void (*)(void))rest_init);
+	pr_err("Linx dbg: start_kernel entering rest_init\n");
+#ifdef LINX_INIT_CALL_SHIM
+	linx_boot_void_call_target = rest_init;
+	linx_call_void_indirect();
 #else
 	rest_init();
 #endif
@@ -1716,16 +1761,13 @@ void start_kernel(void)
 #endif
 }
 
-#ifdef CONFIG_LINX
-static noinline void linx_call_void_indirect(void (*fn)(void))
+#ifdef LINX_INIT_CALL_SHIM
+static noinline void linx_call_void_indirect(void)
 {
-	fn();
-}
+	void (*fn)(void) = linx_boot_void_call_target;
 
-static noinline void __noreturn linx_call_noreturn_indirect(void (*fn)(void))
-{
+	asm volatile("" : : : "memory");
 	fn();
-	unreachable();
 }
 
 static noinline pid_t linx_kernel_clone_indirect(int (*fn)(void *),
@@ -2001,9 +2043,13 @@ static void __init do_basic_setup(void)
 {
 	cpuset_init_smp();
 	driver_init();
+	pr_err("Linx dbg: do_basic_setup after driver_init\n");
 	init_irq_proc();
+	pr_err("Linx dbg: do_basic_setup after init_irq_proc\n");
 	do_ctors();
+	pr_err("Linx dbg: do_basic_setup after do_ctors\n");
 	do_initcalls();
+	pr_err("Linx dbg: do_basic_setup after do_initcalls\n");
 }
 
 static void __init do_pre_smp_initcalls(void)
@@ -2014,6 +2060,71 @@ static void __init do_pre_smp_initcalls(void)
 	for (fn = __initcall_start; fn < __initcall0_start; fn++)
 		do_one_initcall(initcall_from_entry(fn));
 }
+
+#ifdef CONFIG_LINX_INTC
+static void __init linx_bringup_log_init_result(const char *name, int rc)
+{
+	if (rc)
+		pr_err("Linx dbg: %s failed during bring-up rc=%d\n", name, rc);
+}
+
+static void __init linx_bringup_init_proc_sysfs(void)
+{
+	/*
+	 * The Linx interrupt-controller bring-up lane intentionally avoids the
+	 * broad initcall surface while scheduler, kthread, and driver probing are
+	 * still being stabilized. Register the host-observable proc/sysfs nodes
+	 * needed by the QEMU Linux benchmark gate explicitly instead.
+	 */
+	linx_bringup_log_init_result("ksysfs_init", linx_ksysfs_init());
+	linx_bringup_log_init_result("proc_cpuinfo_init", linx_proc_cpuinfo_init());
+	linx_bringup_log_init_result("proc_meminfo_init", linx_proc_meminfo_init());
+	linx_bringup_log_init_result("proc_interrupts_init", linx_proc_interrupts_init());
+}
+
+static void __init linx_bringup_init_storage(void)
+{
+	/*
+	 * Rootfs lane: register the block, ext2, virtio, and OF pieces needed
+	 * for root=/dev/vda without reopening the full initcall surface.
+	 */
+	if (!linx_storage_init_requested())
+		return;
+
+	linx_bringup_log_init_result("bdi_class_init", linx_bdi_class_init());
+	linx_bringup_log_init_result("default_bdi_init", linx_default_bdi_init());
+	linx_bringup_log_init_result("cgwb_init", linx_cgwb_init());
+	linx_bringup_log_init_result("bio_init", linx_bio_init());
+	linx_bringup_log_init_result("blk_ioc_init", linx_blk_ioc_init());
+	linx_bringup_log_init_result("blk_mq_init", linx_blk_mq_init());
+	linx_bringup_log_init_result("blkdev_init", linx_blkdev_init());
+	linx_bringup_log_init_result("genhd_device_init", linx_genhd_device_init());
+	linx_bringup_log_init_result("init_ext2_fs", linx_ext2_init_fs());
+	linx_bringup_log_init_result("virtio_init", linx_virtio_init());
+	linx_bringup_log_init_result("virtio_blk_init", linx_virtio_blk_init());
+	linx_bringup_log_init_result("virtio_mmio_init", linx_virtio_mmio_init());
+	linx_bringup_log_init_result("virtio_mmio_populate_of",
+				      linx_virtio_mmio_populate_of());
+}
+
+static void __init linx_bringup_init_userspace_io(void)
+{
+	int rc;
+
+	driver_init();
+	rc = tty_init();
+	if (rc)
+		pr_err("Linx dbg: tty_init failed during bring-up rc=%d\n", rc);
+
+#ifdef CONFIG_SERIAL_LINX_VIRT_UART
+	rc = linx_vuart_bringup_init();
+	if (rc)
+		pr_err("Linx dbg: linx_vuart_bringup_init failed rc=%d\n", rc);
+#else
+	pr_warn("Linx dbg: CONFIG_SERIAL_LINX_VIRT_UART is disabled\n");
+#endif
+}
+#endif
 
 static int run_init_process(const char *init_filename)
 {
@@ -2123,14 +2234,6 @@ static int __ref kernel_init(void *unused)
 	int ret;
 
 	linx_boot_mark('I');
-#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
-	{
-		unsigned long linx_stack_marker = 0;
-
-		pr_err("Linx dbg: kernel_init started current=%px stack=%px\n",
-		       current, &linx_stack_marker);
-	}
-#endif
 
 	/*
 	 * Wait until kthreadd is all set-up.
@@ -2242,9 +2345,6 @@ void __init console_on_rootfs(void)
 static noinline void __init kernel_init_freeable(void)
 {
 	linx_boot_mark('f');
-#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
-	pr_err("Linx dbg: kernel_init_freeable start\n");
-#endif
 	/* Now the scheduler is fully set up and can do blocking allocations */
 	gfp_allowed_mask = __GFP_BITS_MASK;
 
@@ -2269,9 +2369,6 @@ static noinline void __init kernel_init_freeable(void)
 #endif
 
 	workqueue_init();
-#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
-	pr_err("Linx dbg: workqueue_init done\n");
-#endif
 
 	init_mm_internals();
 
@@ -2286,13 +2383,25 @@ static noinline void __init kernel_init_freeable(void)
 	padata_init();
 	page_alloc_init_late();
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up: bootstrap only the minimum userspace prerequisites
+	 * here instead of waiting for the broad late initcall surface.
+	 */
+	linx_bringup_init_userspace_io();
+	linx_bringup_init_proc_sysfs();
+	linx_bringup_init_storage();
+	linx_populate_rootfs_now();
+	linx_init_elf_binfmt();
+	linx_init_script_binfmt();
+#else
 	do_basic_setup();
-	linx_boot_mark('B');
-#if defined(CONFIG_LINX_DEBUG) && !defined(CONFIG_LINX)
-	pr_err("Linx dbg: do_basic_setup done\n");
 #endif
+	linx_boot_mark('B');
 
+#ifndef CONFIG_LINX_INTC
 	kunit_run_all_tests();
+#endif
 
 	wait_for_initramfs();
 	linx_boot_mark('R');
@@ -2328,6 +2437,8 @@ static noinline void __init kernel_init_freeable(void)
 	 * and default modules
 	 */
 
+#ifndef CONFIG_LINX_INTC
 	integrity_load_keys();
+#endif
 	linx_boot_mark('K');
 }

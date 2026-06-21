@@ -9,7 +9,7 @@
 
 static bool linx_trace_mmap_failure_p(struct file *file)
 {
-	return current->pid == 1 && file != NULL;
+	return current->pid <= 64 && file != NULL;
 }
 
 struct mmap_state {
@@ -2709,12 +2709,14 @@ static unsigned long __mmap_region(struct file *file, unsigned long addr,
 	if (map.check_ksm_early)
 		update_ksm_flags(&map);
 
+#ifndef CONFIG_ARCH_LINX
 	/* Attempt to merge with adjacent VMAs... */
 	if (map.prev || map.next) {
 		VMG_MMAP_STATE(vmg, &map, /* vma = */ NULL);
 
 		vma = vma_merge_new_range(&vmg);
 	}
+#endif
 
 	/* ...but if we can't, allocate a new VMA. */
 	if (!vma) {
@@ -2852,6 +2854,16 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 	 * occur after forking, so the expand will only happen on new VMAs.
 	 */
 	if (vma && vma->vm_end == addr) {
+#ifdef CONFIG_ARCH_LINX
+		/*
+		 * Linx bring-up: expanding the first brk VMA through
+		 * vma_merge_new_range() can drop the VMA from the maple tree
+		 * on the current port, leaving mm->brk advanced but the heap
+		 * unmapped.  Keep adjacent brk growth as separate VMAs until
+		 * the architecture's maple-tree/atomic path is fully stable.
+		 */
+		goto create_new_vma;
+#else
 		VMG_STATE(vmg, mm, vmi, addr, addr + len, vm_flags, PHYS_PFN(addr));
 
 		vmg.prev = vma;
@@ -2862,8 +2874,12 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 			goto out;
 		else if (vmg_nomem(&vmg))
 			goto unacct_fail;
+#endif
 	}
 
+#ifdef CONFIG_ARCH_LINX
+create_new_vma:
+#endif
 	if (vma)
 		vma_iter_next_range(vmi);
 	/* create a vma struct for an anonymous mapping */
@@ -2881,7 +2897,9 @@ int do_brk_flags(struct vma_iterator *vmi, struct vm_area_struct *vma,
 
 	mm->map_count++;
 	validate_mm(mm);
+#ifndef CONFIG_ARCH_LINX
 out:
+#endif
 	perf_event_mmap(vma);
 	mm->total_vm += len >> PAGE_SHIFT;
 	mm->data_vm += len >> PAGE_SHIFT;

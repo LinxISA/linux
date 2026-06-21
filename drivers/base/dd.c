@@ -323,6 +323,15 @@ static DECLARE_DELAYED_WORK(deferred_probe_timeout_work, deferred_probe_timeout_
 
 void deferred_probe_extend_timeout(void)
 {
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up skips deferred probe replay entirely, so there is no
+	 * timeout work to extend. Avoid touching deferred_probe_timeout_work
+	 * in this mode; cancel_delayed_work() currently becomes an early-boot
+	 * sink on Linx before normal userspace bring-up.
+	 */
+	return;
+#endif
 	/*
 	 * If the work hasn't been queued yet or if the work expired, don't
 	 * start a new one.
@@ -344,6 +353,14 @@ void deferred_probe_extend_timeout(void)
  */
 static int deferred_probe_initcall(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn("deferred-probe: skipping deferred probe replay during Linx bring-up\n");
+	initcalls_done = true;
+	fw_devlink_drivers_done();
+	fw_devlink_probing_done();
+	return 0;
+#endif
+
 	debugfs_create_file("devices_deferred", 0444, NULL, NULL,
 			    &deferred_devs_fops);
 

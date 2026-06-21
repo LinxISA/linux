@@ -750,6 +750,15 @@ int tty_port_open(struct tty_port *port, struct tty_struct *tty,
 		}
 		tty_port_set_initialized(port, true);
 	}
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The reduced Linx initramfs lane has a fixed-carrier virtual UART and
+	 * a static ttyS0 node. Avoid the generic carrier/open-wait path until
+	 * those waitqueue transitions are stable under the first userspace open.
+	 */
+	tty_port_set_active(port, true);
+	return 0;
+#endif
 	return tty_port_block_til_ready(port, tty, filp);
 }
 EXPORT_SYMBOL(tty_port_open);

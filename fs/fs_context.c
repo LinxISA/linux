@@ -509,18 +509,37 @@ static void put_fc_log(struct fs_context *fc)
 void put_fs_context(struct fs_context *fc)
 {
 	struct super_block *sb;
+	bool tmpfs = fc->fs_type && !strcmp(fc->fs_type->name, "tmpfs");
 
+	if (tmpfs)
+		pr_err("Linx dbg: put_fs_context tmpfs start root=%px active=%d\n",
+		       fc->root, fc->root ? atomic_read(&fc->root->d_sb->s_active) : -1);
 	if (fc->root) {
 		sb = fc->root->d_sb;
+		if (tmpfs)
+			pr_err("Linx dbg: put_fs_context tmpfs before dput\n");
 		dput(fc->root);
+		if (tmpfs)
+			pr_err("Linx dbg: put_fs_context tmpfs after dput active=%d\n",
+			       atomic_read(&sb->s_active));
 		fc->root = NULL;
+		if (tmpfs)
+			pr_err("Linx dbg: put_fs_context tmpfs before deactivate_super\n");
 		deactivate_super(sb);
+		if (tmpfs)
+			pr_err("Linx dbg: put_fs_context tmpfs after deactivate_super\n");
 	}
 
+	if (tmpfs)
+		pr_err("Linx dbg: put_fs_context tmpfs before ops free need=%d\n", fc->need_free);
 	if (fc->need_free && fc->ops && fc->ops->free)
 		fc->ops->free(fc);
+	if (tmpfs)
+		pr_err("Linx dbg: put_fs_context tmpfs after ops free\n");
 
 	security_free_mnt_opts(&fc->security);
+	if (tmpfs)
+		pr_err("Linx dbg: put_fs_context tmpfs after security\n");
 	put_net(fc->net_ns);
 	put_user_ns(fc->user_ns);
 	put_cred(fc->cred);
@@ -528,6 +547,8 @@ void put_fs_context(struct fs_context *fc)
 	put_filesystem(fc->fs_type);
 	kfree(fc->source);
 	kfree(fc);
+	if (tmpfs)
+		pr_err("Linx dbg: put_fs_context tmpfs done\n");
 }
 EXPORT_SYMBOL(put_fs_context);
 

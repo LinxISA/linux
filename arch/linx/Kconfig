@@ -10,6 +10,9 @@ config 64BIT
 config 32BIT
 	bool
 
+config ARCH_LINX
+	def_bool y
+
 config RISCV
 	def_bool y
 	select ARCH_CLOCKSOURCE_INIT
@@ -43,7 +46,6 @@ config RISCV
 	select BINFMT_FLAT_NO_DATA_START_OFFSET if !MMU
 	select CLONE_BACKWARDS
 	select CLINT_TIMER if !MMU
-	select COMMON_CLK
 	select EDAC_SUPPORT
 	select GENERIC_ARCH_TOPOLOGY if SMP
 	select GENERIC_ATOMIC64 if !64BIT

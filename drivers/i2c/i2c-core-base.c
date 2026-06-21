@@ -2086,6 +2086,11 @@ static int __init i2c_init(void)
 {
 	int retval;
 
+#ifdef CONFIG_LINX_INTC
+	pr_warn("i2c: skipping i2c_init during Linx bring-up\n");
+	return 0;
+#endif
+
 	retval = of_alias_get_highest_id("i2c");
 
 	down_write(&__i2c_board_lock);

@@ -40,10 +40,23 @@ static struct rhashtable *mem_id_ht;
 static u32 xdp_mem_id_hashfn(const void *data, u32 len, u32 seed)
 {
 	const u32 *k = data;
-	const u32 key = *k;
+	u32 key;
 
 	BUILD_BUG_ON(sizeof_field(struct xdp_mem_allocator, mem.id)
 		     != sizeof(u32));
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up currently reaches this hash callback with the mem.id
+	 * scalar in the data register instead of a valid key pointer. Keep the
+	 * normal path for real pointers and accept the scalar form to continue
+	 * boot diagnostics through net_dev_init().
+	 */
+	if ((unsigned long)data <= MEM_ID_MAX)
+		key = (u32)(unsigned long)data;
+	else
+#endif
+		key = *k;
 
 	/* Use cyclic increasing ID as direct hash key */
 	return key;

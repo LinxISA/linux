@@ -16,9 +16,9 @@ endif
 
 #AFLAGS_head.o	+= -DHAVE_BLOCK_TEXT_BODY_SECTION=0
 
-extra-y += head.o
 extra-y += vmlinux.lds
 
+obj-y	+= head.o
 obj-y	+= cpu.o
 obj-y	+= cpufeature.o
 obj-y	+= entry.o

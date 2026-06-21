@@ -279,8 +279,8 @@ static void do_signal(struct pt_regs *regs)
 			set_restart_syscall(regs);
 			break;
 		case -ERESTART_RESTARTBLOCK:
-                        regs->a0 = regs->orig_a0;
-			regs->x1 = __NR_restart_syscall;
+			regs->a0 = regs->orig_a0;
+			regs->a7 = __NR_restart_syscall;
 			set_restart_syscall(regs);
 			break;
 		}
@@ -300,6 +300,11 @@ static void do_signal(struct pt_regs *regs)
 asmlinkage __visible void do_notify_resume(struct pt_regs *regs,
 					   unsigned long thread_info_flags)
 {
+#ifdef CONFIG_LINX_INTC
+	if (current && current->pid == 1)
+		pr_err("Linx dbg: do_notify_resume pid=1 flags=%lx cstate=%lx tpc=%lx bpc=%lx\n",
+		       thread_info_flags, regs->cstate, regs->tpc, regs->bpc);
+#endif
 	if (thread_info_flags & _TIF_UPROBE)
 		uprobe_notify_resume(regs);
 

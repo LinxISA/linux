@@ -147,6 +147,16 @@ static void __uart_start(struct uart_state *state)
 	if (!port || port->flags & UPF_DEAD || uart_tx_stopped(port))
 		return;
 
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The reduced built-in Linx UART path has no stable serial-base PM
+	 * device yet. Kick TX directly for the single fixed port.
+	 */
+	if (port->ops->start_tx)
+		port->ops->start_tx(port);
+	return;
+#endif
+
 	port_dev = port->port_dev;
 
 	/* Increment the runtime PM usage count for the active check below */
@@ -173,6 +183,10 @@ static void uart_start(struct tty_struct *tty)
 	struct uart_port *port;
 	unsigned long flags;
 
+#ifdef CONFIG_LINX_INTC
+	__uart_start(state);
+	return;
+#endif
 	port = uart_port_ref_lock(state, &flags);
 	__uart_start(state);
 	uart_port_unlock_deref(port, flags);
@@ -218,6 +232,14 @@ static void uart_change_line_settings(struct tty_struct *tty, struct uart_state 
 
 	termios = &tty->termios;
 	uport->ops->set_termios(uport, termios, old_termios);
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The Linx virt UART used by the reduced initramfs lane has fixed
+	 * carrier/CTS state. Avoid the generic post-termios port-lock path,
+	 * which is not yet stable under the current userspace-open boundary.
+	 */
+	return;
+#endif
 
 	/*
 	 * Set modem status enables based on termios cflag
@@ -259,6 +281,24 @@ static int uart_alloc_xmit_buf(struct tty_port *port)
 	page = get_zeroed_page(GFP_KERNEL);
 	if (!page)
 		return -ENOMEM;
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * During reduced Linx initramfs bring-up there is no concurrent UART
+	 * removal path. Avoid the refcount/port-lock sequence here because the
+	 * early single-port lane can otherwise stall before the low-level
+	 * driver startup callback is reached.
+	 */
+	if (!state->port.xmit_buf) {
+		state->port.xmit_buf = (unsigned char *)page;
+		kfifo_init(&state->port.xmit_fifo, state->port.xmit_buf,
+				PAGE_SIZE);
+	} else {
+		free_page(page);
+	}
+
+	return 0;
+#endif
 
 	uport = uart_port_ref_lock(state, &flags);
 	if (!state->port.xmit_buf) {
@@ -335,6 +375,13 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 
 	retval = uport->ops->startup(uport);
 	if (retval == 0) {
+#ifdef CONFIG_LINX_INTC
+		/*
+		 * The reduced Linx ttyS0 lane uses serial-core termios setup
+		 * directly below; avoid the console handoff until that path is
+		 * stable under userspace open.
+		 */
+#else
 		if (uart_console(uport) && uport->cons->cflag) {
 			tty->termios.c_cflag = uport->cons->cflag;
 			tty->termios.c_ispeed = uport->cons->ispeed;
@@ -343,6 +390,7 @@ static int uart_port_startup(struct tty_struct *tty, struct uart_state *state,
 			uport->cons->ispeed = 0;
 			uport->cons->ospeed = 0;
 		}
+#endif
 		/*
 		 * Initialise the hardware port settings.
 		 */
@@ -388,7 +436,14 @@ out_base_port_startup:
 	if (!uport)
 		return -EIO;
 
+#ifndef CONFIG_LINX_INTC
 	serial_base_port_startup(uport);
+#else
+	/*
+	 * The early built-in Linx ttyS0 port has no stable serial-base device
+	 * lane yet; opening the static initramfs node only needs the UART state.
+	 */
+#endif
 
 	return 0;
 }
@@ -605,6 +660,17 @@ static int uart_put_char(struct tty_struct *tty, u8 c)
 	unsigned long flags;
 	int ret = 0;
 
+#ifdef CONFIG_LINX_INTC
+	port = READ_ONCE(state->uart_port);
+	if (!port || !state->port.xmit_buf)
+		return 0;
+
+	ret = kfifo_put(&state->port.xmit_fifo, c);
+	if (ret)
+		__uart_start(state);
+	return ret;
+#endif
+
 	port = uart_port_ref_lock(state, &flags);
 	if (!state->port.xmit_buf) {
 		uart_port_unlock_deref(port, flags);
@@ -636,6 +702,17 @@ static ssize_t uart_write(struct tty_struct *tty, const u8 *buf, size_t count)
 	if (WARN_ON(!state))
 		return -EL3HLT;
 
+#ifdef CONFIG_LINX_INTC
+	port = READ_ONCE(state->uart_port);
+	if (!port || !state->port.xmit_buf)
+		return 0;
+
+	ret = kfifo_in(&state->port.xmit_fifo, buf, count);
+	if (ret)
+		__uart_start(state);
+	return ret;
+#endif
+
 	port = uart_port_ref_lock(state, &flags);
 	if (!state->port.xmit_buf) {
 		uart_port_unlock_deref(port, flags);
@@ -656,6 +733,14 @@ static unsigned int uart_write_room(struct tty_struct *tty)
 	struct uart_port *port;
 	unsigned long flags;
 	unsigned int ret;
+
+#ifdef CONFIG_LINX_INTC
+	port = READ_ONCE(state->uart_port);
+	if (!port || !state->port.xmit_buf)
+		return 0;
+
+	return kfifo_avail(&state->port.xmit_fifo);
+#endif
 
 	port = uart_port_ref_lock(state, &flags);
 	ret = kfifo_avail(&state->port.xmit_fifo);
@@ -3123,6 +3208,28 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	 * immediately after.
 	 */
 	tty_port_link_device(port, drv->tty_driver, uport->line);
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * The reduced Linx initramfs lane uses a static /dev/ttyS0 node and
+	 * does not yet run the serial console reconfiguration path. Keep the
+	 * tty driver state openable without entering uart_configure_port(),
+	 * which can re-enter console registration before the Linx driver-core
+	 * bring-up path is ready for it, but still publish the tty device so
+	 * the static initramfs node has a cdev behind major 4 minor 64.
+	 */
+	uport->type = PORT_16550;
+	uport->flags &= ~UPF_DEAD;
+	tty_dev = tty_port_register_device_attr_serdev(port, drv->tty_driver,
+			uport->line, NULL, NULL, port, NULL);
+	if (IS_ERR(tty_dev)) {
+		uport->flags |= UPF_DEAD;
+		return PTR_ERR(tty_dev);
+	}
+	device_set_wakeup_capable(tty_dev, 1);
+	return 0;
+#endif
+
 	uart_configure_port(drv, state, uport);
 
 	port->console = uart_console(uport);
@@ -3148,8 +3255,9 @@ static int serial_core_add_one_port(struct uart_driver *drv, struct uart_port *u
 	 * setserial to be used to alter this port's parameters.
 	 */
 	tty_dev = tty_port_register_device_attr_serdev(port, drv->tty_driver,
-			uport->line, uport->dev, &uport->port_dev->dev, port,
-			uport->tty_groups);
+			uport->line, uport->dev,
+			uport->port_dev ? &uport->port_dev->dev : NULL,
+			port, uport->tty_groups);
 	if (!IS_ERR(tty_dev)) {
 		device_set_wakeup_capable(tty_dev, 1);
 	} else {
@@ -3327,6 +3435,10 @@ int serial_core_register_port(struct uart_driver *drv, struct uart_port *port)
 	 */
 	port->flags |= UPF_DEAD;
 
+#ifdef CONFIG_LINX_INTC
+	return serial_core_add_one_port(drv, port);
+#endif
+
 	/* Inititalize a serial core controller device if needed */
 	ctrl_dev = serial_core_ctrl_find(drv, port->dev, port->ctrl_id);
 	if (!ctrl_dev) {
@@ -3370,6 +3482,14 @@ err_unregister_ctrl_dev:
  */
 void serial_core_unregister_port(struct uart_driver *drv, struct uart_port *port)
 {
+#ifdef CONFIG_LINX_INTC
+	mutex_lock(&port_mutex);
+	port->flags |= UPF_DEAD;
+	serial_core_remove_one_port(drv, port);
+	mutex_unlock(&port_mutex);
+	return;
+#endif
+
 	struct device *phys_dev = port->dev;
 	struct serial_port_device *port_dev = port->port_dev;
 	struct serial_ctrl_device *ctrl_dev = serial_core_get_ctrl_dev(port_dev);

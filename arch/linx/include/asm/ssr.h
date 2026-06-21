@@ -68,6 +68,7 @@
 #define ECAUSE_SYNDROME_MASK	_AC(0x0000FFFFFF000000, UL)
 #define ECAUSE_TRAPNUM_MASK	_AC(0x000000000000003F, UL)
 
+#define ECAUSE_BI_SHIFT		(62)
 #define ECAUSE_SYNDROME_SHIFT	(24)
 #define ECAUSE_TRAPNUM_SHIFT	(0)
 
@@ -202,7 +203,8 @@
 #define SSR_A1_TRAPARG0	0x1f03	/* acr1's exception agrument0 */
 
 #define SSR_A1_ETEMP	0x1f05	/* acr1's exception context saving temporary (tp)*/
-#define SSR_A1_FUTO		0x1f06	/* acr1's fixup takeover */
+#define SSR_A1_ETEMP0	0x1f06	/* acr1's secondary exception temporary */
+#define SSR_A1_FUTO		SSR_A1_ETEMP0	/* legacy name: acr1's fixup takeover */
 #define SSR_A1_ECONFIG	0x1f07	/* acr1's interrupt enable */
 #define SSR_A1_IPENDING	0x1f08	/* acr1's interrupt pending */
 #define SSR_A1_TOPEI    0x1f09	/* acr1's top interrupt id */

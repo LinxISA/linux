@@ -3,6 +3,7 @@
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/irqnr.h>
+#include <linux/linx_bringup.h>
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
@@ -40,3 +41,10 @@ static int __init proc_interrupts_init(void)
 	return 0;
 }
 fs_initcall(proc_interrupts_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_proc_interrupts_init(void)
+{
+	return proc_interrupts_init();
+}
+#endif

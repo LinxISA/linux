@@ -17,6 +17,10 @@ static struct nfs_subversion nfs_v2 = {
 
 static int __init init_nfs_v2(void)
 {
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("nfs: skipping init_nfs_v2 during Linx bring-up\n");
+	return 0;
+#endif
 	register_nfs_version(&nfs_v2);
 	return 0;
 }

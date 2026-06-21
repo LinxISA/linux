@@ -13,6 +13,7 @@
 #include <linux/export.h>
 #include <linux/init.h>
 #include <linux/kexec.h>
+#include <linux/linx_bringup.h>
 #include <linux/profile.h>
 #include <linux/stat.h>
 #include <linux/sched.h>
@@ -283,6 +284,11 @@ static int __init ksysfs_init(void)
 {
 	int error;
 
+#ifdef CONFIG_LINX_INTC
+	if (kernel_kobj)
+		return 0;
+#endif
+
 	kernel_kobj = kobject_create_and_add("kernel", NULL);
 	if (!kernel_kobj) {
 		error = -ENOMEM;
@@ -311,3 +317,10 @@ exit:
 }
 
 core_initcall(ksysfs_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_ksysfs_init(void)
+{
+	return ksysfs_init();
+}
+#endif

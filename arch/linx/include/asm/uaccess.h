@@ -22,20 +22,30 @@
 #include <asm/asm.h>
 #include <asm/block-def.h>
 
-#define __enable_user_access()					\
-	__asm__ __volatile__ (					\
-	"BSTART.std fall\n"					\
-		"ssrget %1, -> t\n"				\
-		"or t#1, %0, -> t\n"					\
-		"ssrset t#1, %1\n"				\
-	: : "r" (CSTATE_P), "i" (SSR_CSTATE) : "memory")
-#define __disable_user_access()					\
-	__asm__ __volatile__ (					\
+#define __enable_user_access()						\
+do {									\
+	unsigned long __tmp;						\
+	__asm__ __volatile__ (						\
 	"BSTART.std fall\n"						\
-		"ssrget %1, -> t\n"					\
-		"and t#1, %0.not, -> t\n"				\
-		"ssrset t#1, %1\n"				\
-	: : "r" (CSTATE_P), "i" (SSR_CSTATE) : "memory")
+		"ssrget %[cstate], -> %[tmp]\n"			\
+		"or %[tmp], %[permit], -> %[tmp]\n"		\
+		"ssrset %[tmp], %[cstate]\n"			\
+	: [tmp] "=&r" (__tmp)						\
+	: [permit] "r" (CSTATE_P), [cstate] "i" (SSR_CSTATE)	\
+	: "memory");							\
+} while (0)
+#define __disable_user_access()						\
+do {									\
+	unsigned long __tmp;						\
+	__asm__ __volatile__ (						\
+	"BSTART.std fall\n"						\
+		"ssrget %[cstate], -> %[tmp]\n"			\
+		"and %[tmp], %[permit].not, -> %[tmp]\n"		\
+		"ssrset %[tmp], %[cstate]\n"			\
+	: [tmp] "=&r" (__tmp)						\
+	: [permit] "r" (CSTATE_P), [cstate] "i" (SSR_CSTATE)	\
+	: "memory");							\
+} while (0)
 
 /**
  * access_ok: - Checks if a user space pointer is valid
@@ -96,8 +106,7 @@ do {								\
 	__asm__ __volatile__ (					\
 	"1:\n"							\
 	"BSTART.std fall, 3f\n"						\
-		insn " [%[src], 0], -> t\n"				\
-		"addi t#1, 0, -> %[dst]\n"				\
+		insn " [%[src], 0], -> %[dst]\n"			\
 	"2:\n"							\
 	".section .fixup,\"ax\"\n"				\
 	".balign 16\n"						\
@@ -107,7 +116,8 @@ do {								\
 		"addi zero, 0, -> %[dst]\n"				\
 	".previous\n"						\
 	: [ret] "+r" (err), [dst] "=&r" (__x)			\
-	: [src] "r" (ptr), [errno] "i" (EFAULT));		\
+	: [src] "r" (ptr), [errno] "i" (EFAULT)			\
+	: "memory");						\
 	(x) = __x;						\
 } while (0)
 
@@ -213,7 +223,8 @@ do {									\
 		"subi zero, %[errno], -> %[ret]\n"			\
 	".previous\n"							\
 	: [ret] "+r" (err)						\
-	: [dst] "r" (ptr), [src] "r" (__x), [errno] "i" (EFAULT));	\
+	: [dst] "r" (ptr), [src] "r" (__x), [errno] "i" (EFAULT)	\
+	: "memory");							\
 } while (0)
 
 #ifdef CONFIG_64BIT
@@ -313,13 +324,34 @@ unsigned long __must_check __asm_copy_from_user(void *to,
 static inline unsigned long
 raw_copy_from_user(void *to, const void __user *from, unsigned long n)
 {
-	return __asm_copy_from_user(to, from, n);
+	unsigned long i;
+	char *dst = to;
+	const char __user *src = from;
+
+	for (i = 0; i < n; i++) {
+		char c;
+
+		if (__get_user(c, src + i))
+			return n - i;
+		dst[i] = c;
+	}
+
+	return 0;
 }
 
 static inline unsigned long
 raw_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
-	return __asm_copy_to_user(to, from, n);
+	unsigned long i;
+	char __user *dst = to;
+	const char *src = from;
+
+	for (i = 0; i < n; i++) {
+		if (__put_user(src[i], dst + i))
+			return n - i;
+	}
+
+	return 0;
 }
 
 extern long strncpy_from_user(char *dest, const char __user *src, long count);
@@ -332,9 +364,25 @@ unsigned long __must_check __clear_user(void __user *addr, unsigned long n);
 static inline
 unsigned long __must_check clear_user(void __user *to, unsigned long n)
 {
+#ifdef CONFIG_ARCH_LINX
+	unsigned long i;
+	char __user *dst = to;
+
+	might_fault();
+	if (!access_ok(to, n))
+		return n;
+
+	for (i = 0; i < n; i++) {
+		if (__put_user(0, dst + i))
+			return n - i;
+	}
+
+	return 0;
+#else
 	might_fault();
 	return access_ok(to, n) ?
 		__clear_user(to, n) : n;
+#endif
 }
 
 #define HAVE_GET_KERNEL_NOFAULT

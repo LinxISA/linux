@@ -300,6 +300,11 @@ static int __init serial8250_init(void)
 {
 	int ret;
 
+#ifdef CONFIG_LINX_INTC
+	pr_info("serial8250: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+
 	if (nr_uarts == 0)
 		return -ENODEV;
 

@@ -8,6 +8,7 @@
 #include <linux/mm.h>
 #include <linux/blkdev.h>
 #include <linux/blk-integrity.h>
+#include <linux/linx_bringup.h>
 #include <linux/buffer_head.h>
 #include <linux/mpage.h>
 #include <linux/uio.h>
@@ -980,3 +981,10 @@ static __init int blkdev_init(void)
 				BIOSET_NEED_BVECS|BIOSET_PERCPU_CACHE);
 }
 module_init(blkdev_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_blkdev_init(void)
+{
+	return blkdev_init();
+}
+#endif

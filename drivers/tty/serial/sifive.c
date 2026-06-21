@@ -1120,6 +1120,11 @@ static int __init sifive_serial_init(void)
 {
 	int r;
 
+#ifdef CONFIG_LINX_INTC
+	pr_info("sifive-serial: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+
 	r = uart_register_driver(&sifive_serial_uart_driver);
 	if (r)
 		goto init_out1;

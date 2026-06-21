@@ -16,6 +16,7 @@ BUSYBOX_BIN="$OUT_DIR/busybox"
 CPIO_LIST="$OUT_DIR/initramfs.list"
 CPIO_OUT="$OUT_DIR/initramfs.cpio"
 LINX_PERF_BUILD="${LINX_PERF_BUILD:-0}"
+INIT_VARIANT="${INIT_VARIANT:-busybox}"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -37,6 +38,25 @@ else
   OPT_FLAGS=(-Oz)
 fi
 
+case "$INIT_VARIANT" in
+  busybox)
+    INIT_MAIN_SRC="$SCRIPT_DIR/busybox.c"
+    INIT_EXTRA_SRCS=("$SCRIPT_DIR/sig_tramp.c")
+    ;;
+  tiny)
+    INIT_MAIN_SRC="$SCRIPT_DIR/init.c"
+    INIT_EXTRA_SRCS=()
+    ;;
+  tinytrap)
+    INIT_MAIN_SRC="$SCRIPT_DIR/trap_init.c"
+    INIT_EXTRA_SRCS=()
+    ;;
+  *)
+    echo "error: unsupported INIT_VARIANT=$INIT_VARIANT (expected busybox, tiny, or tinytrap)" >&2
+    exit 2
+    ;;
+esac
+
 echo "[1/3] Ensuring usr/gen_init_cpio exists (O=$O) ..."
 if [[ ! -x "$GEN_INIT_CPIO" ]]; then
   mkdir -p "$(dirname "$GEN_INIT_CPIO")"
@@ -45,12 +65,21 @@ if [[ ! -x "$GEN_INIT_CPIO" ]]; then
 fi
 
 echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, static PIE ET_DYN) ..."
-"$CLANG" -target linx64-unknown-linux-gnu \
-  "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fpie -fpic \
-  -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
-  -nostdlib -static -fuse-ld=lld -Wl,-pie -Wl,-e,_start \
-  -Wl,--build-id=none \
-  -o "$BUSYBOX_BIN" "$SCRIPT_DIR/busybox.c" "$SCRIPT_DIR/sig_tramp.c"
+if [[ "$INIT_VARIANT" == "busybox" ]]; then
+  "$CLANG" -target linx64-unknown-linux-gnu \
+    "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fpie -fpic \
+    -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
+    -nostdlib -static -fuse-ld=lld -Wl,-pie -Wl,-e,_start \
+    -Wl,--build-id=none \
+    -o "$BUSYBOX_BIN" "$INIT_MAIN_SRC" "${INIT_EXTRA_SRCS[@]-}"
+else
+  "$CLANG" -target linx64-unknown-linux-gnu \
+    "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fno-pic -fno-pie \
+    -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
+    -nostdlib -static -fuse-ld=lld -Wl,-e,_start -Wl,-Ttext=0x10000 \
+    -Wl,--build-id=none \
+    -o "$BUSYBOX_BIN" "$INIT_MAIN_SRC" "${INIT_EXTRA_SRCS[@]-}"
+fi
 
 echo "[3/3] Generating initramfs (newc) ..."
 cat >"$CPIO_LIST" <<EOF

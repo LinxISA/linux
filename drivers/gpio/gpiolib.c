@@ -5204,6 +5204,11 @@ static int __init gpiolib_dev_init(void)
 {
 	int ret;
 
+#ifdef CONFIG_LINX_INTC
+	pr_warn("gpiolib: skipping gpiolib_dev_init during Linx bring-up\n");
+	return 0;
+#endif
+
 	/* Register GPIO sysfs bus */
 	ret = bus_register(&gpio_bus_type);
 	if (ret < 0) {

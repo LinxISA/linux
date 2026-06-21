@@ -268,7 +268,21 @@ static struct platform_driver sifive_gpio_driver = {
 		.of_match_table = sifive_gpio_match,
 	},
 };
-module_platform_driver(sifive_gpio_driver)
+static int __init sifive_gpio_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("sifive-gpio: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&sifive_gpio_driver);
+}
+module_init(sifive_gpio_driver_init);
+
+static void __exit sifive_gpio_driver_exit(void)
+{
+	platform_driver_unregister(&sifive_gpio_driver);
+}
+module_exit(sifive_gpio_driver_exit);
 
 MODULE_AUTHOR("Yash Shah <yash.shah@sifive.com>");
 MODULE_DESCRIPTION("SiFive GPIO driver");

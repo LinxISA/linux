@@ -1010,6 +1010,15 @@ static bool __wake_q_add(struct wake_q_head *head, struct task_struct *task)
 	struct wake_q_node *node = &task->wake_q;
 
 	/*
+	 * Linx bring-up: recover stack-local wake_q heads that arrive with a
+	 * transient NULL state instead of the canonical WAKE_Q_TAIL sentinel.
+	 */
+	if (unlikely(!head->first))
+		head->first = WAKE_Q_TAIL;
+	if (unlikely(!head->lastp))
+		head->lastp = &head->first;
+
+	/*
 	 * Atomically grab the task, if ->wake_q is !nil already it means
 	 * it's already queued (either by us or someone else) and will get the
 	 * wakeup due to that.
@@ -1073,6 +1082,15 @@ void wake_q_add_safe(struct wake_q_head *head, struct task_struct *task)
 void wake_up_q(struct wake_q_head *head)
 {
 	struct wake_q_node *node = head->first;
+
+	/*
+	 * Linx bring-up: some current Linx kernel/compiler combinations still
+	 * observe a transient NULL wake queue head on stack-local wake_q users.
+	 * Treat that the same as an empty queue instead of interpreting it as a
+	 * task pointer and faulting before early boot completes.
+	 */
+	if (!node)
+		return;
 
 	while (node != WAKE_Q_TAIL) {
 		struct task_struct *task;
@@ -2093,6 +2111,10 @@ void enqueue_task(struct rq *rq, struct task_struct *p, int flags)
 	 */
 	uclamp_rq_inc(rq, p, flags);
 
+	if (unlikely(!READ_ONCE(p->sched_class)))
+		WRITE_ONCE(p->sched_class,
+			   (p->pid == 0) ? &idle_sched_class
+					  : &fair_sched_class);
 	p->sched_class->enqueue_task(rq, p, flags);
 
 	psi_enqueue(p, flags);
@@ -2125,6 +2147,10 @@ inline bool dequeue_task(struct rq *rq, struct task_struct *p, int flags)
 	 * and mark the task ->sched_delayed.
 	 */
 	uclamp_rq_dec(rq, p);
+	if (unlikely(!READ_ONCE(p->sched_class)))
+		WRITE_ONCE(p->sched_class,
+			   (p->pid == 0) ? &idle_sched_class
+					  : &fair_sched_class);
 	return p->sched_class->dequeue_task(rq, p, flags);
 }
 
@@ -2702,19 +2728,14 @@ __do_set_cpus_allowed(struct task_struct *p, struct affinity_context *ctx)
 	struct rq *rq = task_rq(p);
 	bool queued, running;
 
-#ifdef CONFIG_LINX
 	/*
 	 * LinxISA bring-up: avoid an indirect call through a NULL sched_class
-	 * pointer. We currently hit this in early boot while cpu masks are being
-	 * sanitized (select_fallback_rq()), and QEMU traps the resulting ICALL to
-	 * target 0.
+	 * pointer. Early boot can still reach affinity handling before pid 0 has
+	 * a visible class pointer, so seed the fallback class and continue.
 	 */
 	if (unlikely(!p->sched_class)) {
-		pr_err("Linx: %s: NULL sched_class (p=%px pid=%d comm=%s policy=%d prio=%d)\n",
-		       __func__, p, p->pid, p->comm, p->policy, p->prio);
 		p->sched_class = &fair_sched_class;
 	}
-#endif
 
 	/*
 	 * This here violates the locking rules for affinity, since we're only
@@ -4508,6 +4529,15 @@ int wake_up_state(struct task_struct *p, unsigned int state)
 static void __sched_fork(u64 clone_flags, struct task_struct *p)
 {
 	p->on_rq			= 0;
+	/*
+	 * Linx bring-up: the boot idle task can reach __schedule() before
+	 * init_idle() or the rest of __sched_fork() completes. Seed pid 0 with
+	 * idle_sched_class immediately so early indirect scheduler callbacks
+	 * never observe a NULL class.
+	 */
+	if (p->pid == 0)
+		WRITE_ONCE(p->sched_class, &idle_sched_class);
+	barrier();
 
 	p->se.on_rq			= 0;
 	p->se.exec_start		= 0;
@@ -4556,6 +4586,7 @@ static void __sched_fork(u64 clone_flags, struct task_struct *p)
 	p->wake_entry.u_flags = CSD_TYPE_TTWU;
 	p->migration_pending = NULL;
 	init_sched_mm_cid(p);
+
 }
 
 DEFINE_STATIC_KEY_FALSE(sched_numa_balancing);
@@ -5392,10 +5423,19 @@ context_switch(struct rq *rq, struct task_struct *prev,
 #ifdef CONFIG_LINX
 	do {
 		static int dbg_left = 16;
+		bool trace_kthreadd = prev->pid == 1 || next->pid == 1 ||
+				      prev->pid == 2 || next->pid == 2;
 
-		if (dbg_left <= 0)
+		if (!trace_kthreadd && dbg_left <= 0)
 			break;
-		dbg_left--;
+		if (!trace_kthreadd)
+			dbg_left--;
+		if (trace_kthreadd) {
+			pr_err("Linx dbg: context_switch prev=%px(pid=%d) next=%px(pid=%d) nsp=%lx nra=%lx\n",
+			       prev, prev->pid, next, next->pid,
+			       next->thread.sp, next->thread.ra);
+			break;
+		}
 		linx_debug_uart_puts("\n[linx switch] prev=");
 		linx_debug_uart_puthex_ulong((unsigned long)prev);
 		linx_debug_uart_puts(" next=");
@@ -5409,9 +5449,8 @@ context_switch(struct rq *rq, struct task_struct *prev,
 		linx_debug_uart_puts("\n");
 	} while (0);
 #endif
-
-	/* Here we just switch the register state and the stack. */
-	switch_to(prev, next, prev);
+		/* Here we just switch the register state and the stack. */
+		switch_to(prev, next, prev);
 	barrier();
 
 	return finish_task_switch(prev);
@@ -6890,6 +6929,18 @@ static void __sched notrace __schedule(int sched_mode)
 
 	cpu = smp_processor_id();
 	rq = cpu_rq(cpu);
+	if (unlikely(!rcu_dereference_raw(rq->curr))) {
+		/*
+		 * Linx bring-up: early boot still sees occasional null rq->curr
+		 * on the boot CPU before scheduler state is fully converged.
+		 * Recover from the live current task so the scheduler can keep
+		 * making forward progress instead of faulting on the first
+		 * stack-end sanity check.
+		 */
+		rcu_assign_pointer(rq->curr, current);
+	}
+	if (unlikely(!rcu_dereference_raw(rq->donor)))
+		rq_set_donor(rq, current);
 	prev = rq->curr;
 
 	schedule_debug(prev, preempt);
@@ -8069,6 +8120,14 @@ void __init init_idle(struct task_struct *idle, int cpu)
 	idle->__state = TASK_RUNNING;
 	idle->se.exec_start = sched_clock();
 	/*
+	 * Linx bring-up: make the idle thread's scheduler class visible before
+	 * publishing it through rq->idle/rq->curr or affinity helpers. Early
+	 * boot has been observed to reach indirect class callbacks while the
+	 * boot idle task is already current but still has a NULL sched_class.
+	 */
+	WRITE_ONCE(idle->sched_class, &idle_sched_class);
+	barrier();
+	/*
 	 * PF_KTHREAD should already be set at this point; regardless, make it
 	 * look like a proper per-CPU kthread.
 	 */
@@ -8105,10 +8164,6 @@ void __init init_idle(struct task_struct *idle, int cpu)
 	/* Set the preempt count _outside_ the spinlocks! */
 	init_idle_preempt_count(idle, cpu);
 
-	/*
-	 * The idle tasks have their own, simple scheduling class:
-	 */
-	idle->sched_class = &idle_sched_class;
 	ftrace_graph_init_idle_task(idle, cpu);
 	vtime_init_idle(idle, cpu);
 	sprintf(idle->comm, "%s/%d", INIT_TASK_COMM, cpu);

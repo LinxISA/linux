@@ -6,6 +6,8 @@
 #ifndef __LINUX_OF_CLK_H
 #define __LINUX_OF_CLK_H
 
+#include <linux/stddef.h>
+
 struct device_node;
 struct of_device_id;
 

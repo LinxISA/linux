@@ -161,6 +161,21 @@
  * @ret, @new, @old, @ptr:
  *     ret = *ptr, if (old == ret) *ptr = new, return @ret
  */
+#ifdef __clang__
+/*
+ * Current Linx Clang rotates 3-input HL.CAS* inline-asm operands during
+ * final emission: source text "[p], o, n" becomes "[o], n, p". Feed the
+ * operands in the inverse order so the emitted instruction still uses the
+ * architectural "[ptr], old, new" contract required by the kernel atomics.
+ */
+#define ASM_CMPXCHG(type, order, ret, new, old, ptr)			\
+	__asm__ __volatile__ (					\
+		"BSTART.sys fall\n" \
+			"hl.cas" #type #order " [%[n]], %[p], %[o], -> %[r]\n" \
+		: [r] "=&r" (ret)				\
+		: [p] "r" (ptr), [o] "r" (old), [n] "r" (new)	\
+		: "memory")
+#else
 #define ASM_CMPXCHG(type, order, ret, new, old, ptr)			\
 	__asm__ __volatile__ (					\
 		"BSTART.sys fall\n" \
@@ -168,6 +183,7 @@
 		: [r] "=&r" (ret)				\
 		: [p] "r" (ptr), [o] "r" (old), [n] "r" (new)	\
 		: "memory")
+#endif
 
 #define ASM_CMPXCHG_MASKED(ret, ptr, old, new)				\
 ({									\

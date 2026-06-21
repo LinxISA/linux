@@ -15,6 +15,7 @@
 #include <linux/initrd.h>
 #include <linux/async.h>
 #include <linux/fs_struct.h>
+#include <linux/linx_bringup.h>
 #include <linux/slab.h>
 #include <linux/ramfs.h>
 #include <linux/shmem_fs.h>
@@ -67,6 +68,28 @@ static int __init root_dev_setup(char *line)
 }
 
 __setup("root=", root_dev_setup);
+
+#ifdef CONFIG_LINX_INTC
+static bool __initdata linx_force_storage_init;
+
+static int __init linx_storage_init_setup(char *str)
+{
+	linx_force_storage_init = !(str && str[0] == '0' && str[1] == '\0');
+	return 1;
+}
+
+__setup("linx_storage_init=", linx_storage_init_setup);
+
+bool __init linx_root_device_requested(void)
+{
+	return saved_root_name[0] != '\0';
+}
+
+bool __init linx_storage_init_requested(void)
+{
+	return linx_root_device_requested() || linx_force_storage_init;
+}
+#endif
 
 static int __init rootwait_setup(char *str)
 {
@@ -496,7 +519,7 @@ out:
 }
 
 static bool is_tmpfs;
-#ifndef CONFIG_LINX
+#ifndef CONFIG_LINX_INTC
 static int rootfs_init_fs_context(struct fs_context *fc)
 {
 	if (IS_ENABLED(CONFIG_TMPFS) && is_tmpfs)
@@ -508,7 +531,7 @@ static int rootfs_init_fs_context(struct fs_context *fc)
 
 struct file_system_type rootfs_fs_type = {
 	.name		= "rootfs",
-#ifdef CONFIG_LINX
+#ifdef CONFIG_LINX_INTC
 	.init_fs_context = ramfs_init_fs_context,
 #else
 	.init_fs_context = rootfs_init_fs_context,

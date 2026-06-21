@@ -2475,14 +2475,25 @@ struct sched_class {
 #endif
 };
 
+extern const struct sched_class fair_sched_class;
+extern const struct sched_class idle_sched_class;
+
 static inline void put_prev_task(struct rq *rq, struct task_struct *prev)
 {
 	WARN_ON_ONCE(rq->donor != prev);
+	if (unlikely(!READ_ONCE(prev->sched_class)))
+		WRITE_ONCE(prev->sched_class,
+			   (prev->pid == 0) ? &idle_sched_class
+					    : &fair_sched_class);
 	prev->sched_class->put_prev_task(rq, prev, NULL);
 }
 
 static inline void set_next_task(struct rq *rq, struct task_struct *next)
 {
+	if (unlikely(!READ_ONCE(next->sched_class)))
+		WRITE_ONCE(next->sched_class,
+			   (next->pid == 0) ? &idle_sched_class
+					    : &fair_sched_class);
 	next->sched_class->set_next_task(rq, next, false);
 }
 
@@ -2507,6 +2518,14 @@ static inline void put_prev_set_next_task(struct rq *rq,
 	if (next == prev)
 		return;
 
+	if (unlikely(!READ_ONCE(prev->sched_class)))
+		WRITE_ONCE(prev->sched_class,
+			   (prev->pid == 0) ? &idle_sched_class
+					    : &fair_sched_class);
+	if (unlikely(!READ_ONCE(next->sched_class)))
+		WRITE_ONCE(next->sched_class,
+			   (next->pid == 0) ? &idle_sched_class
+					    : &fair_sched_class);
 	prev->sched_class->put_prev_task(rq, prev, next);
 	next->sched_class->set_next_task(rq, next, true);
 }

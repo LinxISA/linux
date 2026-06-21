@@ -1,98 +1,47 @@
-/* Minimal PID1 for LinxISA NOMMU Linux bring-up (no libc).
+/*
+ * Minimal poweroff PID1 for LinxISA Linux bring-up.
  *
- * - Exercises syscall trap routing via `acrc 1` (SCT_SYS -> ACR1/kernel).
- * - Keeps PID 1 alive (avoid "Attempted to kill init").
- *
- * Syscall ABI (current kernel bring-up):
- * - a7: syscall number
- * - a0..a5: args
- * - a0: return value
+ * Keep the startup sequence fully assembler-authored so the compiler does not
+ * synthesize an FENTRY prologue before the first user instruction. The emitted
+ * bytes are the known-good syscall sequence previously produced by the tiny
+ * C variant, minus the unstable prologue.
  */
-
-typedef unsigned long ulong;
-typedef long slong;
-
-enum {
-	__NR_write = 64,
-};
-
-#define LINX_VIRT_UART_BASE 0x10000000UL
-
-static inline void uart_putc(char c)
-{
-	*(volatile unsigned char *)(LINX_VIRT_UART_BASE + 0x0) =
-		(unsigned char)c;
-}
-
-static inline void uart_puthex_nibble(unsigned int nibble)
-{
-	char c = (nibble < 10) ? ('0' + (char)nibble)
-			       : ('a' + (char)(nibble - 10));
-
-	uart_putc(c);
-}
-
-static inline void uart_puthex_ulong(ulong v)
-{
-	int i;
-
-	uart_putc('0');
-	uart_putc('x');
-	for (i = (int)(sizeof(v) * 2) - 1; i >= 0; i--) {
-		unsigned int nibble = (v >> (i * 4)) & 0xf;
-
-		uart_puthex_nibble(nibble);
-	}
-}
-
-static inline slong sys_write(slong fd, const void *buf, ulong count)
-{
-	slong ret;
-
-	/*
-	 * Clang's fixed-register variables for Linx are not reliable yet during
-	 * bring-up. Move args into the Linux syscall ABI registers explicitly.
-	 */
-	__asm__ volatile(
-		"c.movr %1, ->a0\n"
-		"c.movr %2, ->a1\n"
-		"c.movr %3, ->a2\n"
-		"addi zero, 64, ->a7\n"
-		"acrc 1\n"
-		"c.bstop\n"
-		"C.BSTART\n"
-		"c.movr a0, ->%0\n"
-		: "=r"(ret)
-		: "r"(fd), "r"(buf), "r"(count)
-		: "a0", "a1", "a2", "a7", "memory");
-	return ret;
-}
-
-__attribute__((noreturn)) void _start(void)
-{
-	union {
-		ulong w;
-		char c[sizeof(ulong)];
-	} msg;
-	slong ret;
-	slong fd;
-
-	/* Prove we've reached userspace even if syscalls are broken. */
-	uart_putc('U');
-	uart_putc('\n');
-
-	/* Keep the user buffer naturally aligned (memcpy may use word ops). */
-	msg.c[0] = '!';
-	msg.c[1] = '\n';
-
-	for (fd = 0; fd < 6; fd++) {
-		ret = sys_write(fd, (const void *)msg.c, 2);
-		uart_putc('f');
-		uart_putc('0' + (char)fd);
-		uart_putc('=');
-		uart_puthex_ulong((ulong)ret);
-		uart_putc('\n');
-	}
-	for (;;)
-		__asm__ volatile("" : : : "memory");
-}
+__asm__(
+	".globl _start\n"
+	"_start:\n"
+	"  .byte 0x00, 0x08\n"                         /* C.BSTART.STD */ "\n"
+	"  .byte 0x15, 0x0f, 0x00, 0x02\n"            /* addi zero, 32, ->u */ "\n"
+	"  .byte 0xee, 0xfe, 0x97, 0xdf, 0xea, 0x1d\n"/* hl.lui 4276215469, ->t */ "\n"
+	"  .byte 0x85, 0x7f, 0xcc, 0x01\n"            /* sll t#1, u#1, ->t */ "\n"
+	"  .byte 0x05, 0x53, 0xcc, 0x01\n"            /* srl t#1, u#1, ->a4 */ "\n"
+	"  .byte 0x1e, 0x28, 0x97, 0x93, 0x96, 0x21\n"/* hl.lui 672274793, ->a5 */ "\n"
+	"  .byte 0x2e, 0x43, 0x17, 0xc4, 0xed, 0x1f\n"/* hl.lui 1126301404, ->a6 */ "\n"
+	"  .byte 0x06, 0xa0\n"                        /* c.movr zero, ->x0 */ "\n"
+	"  .byte 0x95, 0x0a, 0xe0, 0x08\n"            /* addi zero, 142, ->x1 */ "\n"
+	"  .byte 0x86, 0x11\n"                        /* c.movr a4, ->a0 */ "\n"
+	"  .byte 0xc6, 0x19\n"                        /* c.movr a5, ->a1 */ "\n"
+	"  .byte 0x06, 0x22\n"                        /* c.movr a6, ->a2 */ "\n"
+	"  .byte 0x06, 0x2d\n"                        /* c.movr x0, ->a3 */ "\n"
+	"  .byte 0x46, 0x4d\n"                        /* c.movr x1, ->a7 */ "\n"
+	"  .byte 0x2b, 0x30, 0x10, 0x00\n"            /* acrc */ "\n"
+	"  .byte 0x00, 0x00\n"                        /* C.BSTOP */ "\n"
+	"  .byte 0x00, 0x08\n"                        /* C.BSTART.STD */ "\n"
+	"  .byte 0x86, 0x30\n"                        /* c.movr a0, ->a4 */ "\n"
+	"  .byte 0x95, 0x0f, 0xf0, 0x03\n"            /* addi zero, 63, ->t */ "\n"
+	"  .byte 0x05, 0x6f, 0x83, 0x01\n"            /* sra a4, t#1, ->u */ "\n"
+	"  .byte 0x18, 0x35\n"                        /* c.sub x0, a4, ->t */ "\n"
+	"  .byte 0x05, 0x23, 0x8e, 0x07\n"            /* and u#1, t#1, ->a4 */ "\n"
+	"  .byte 0x95, 0x03, 0xe0, 0x05\n"            /* addi zero, 94, ->a5 */ "\n"
+	"  .byte 0x86, 0x11\n"                        /* c.movr a4, ->a0 */ "\n"
+	"  .byte 0x06, 0x1d\n"                        /* c.movr x0, ->a1 */ "\n"
+	"  .byte 0x06, 0x25\n"                        /* c.movr x0, ->a2 */ "\n"
+	"  .byte 0x06, 0x2d\n"                        /* c.movr x0, ->a3 */ "\n"
+	"  .byte 0xc6, 0x49\n"                        /* c.movr a5, ->a7 */ "\n"
+	"  .byte 0x2b, 0x30, 0x10, 0x00\n"            /* acrc */ "\n"
+	"  .byte 0x00, 0x00\n"                        /* C.BSTOP */ "\n"
+	"  .byte 0x00, 0x08\n"                        /* C.BSTART.STD */ "\n"
+	"  .byte 0x86, 0x30\n"                        /* c.movr a0, ->a4 */ "\n"
+	"1:\n"
+	"  .byte 0x02, 0x00\n"                        /* C.BSTART DIRECT, self */ "\n"
+	"  .byte 0x00, 0x00\n"                        /* C.BSTOP */ "\n"
+);

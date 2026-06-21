@@ -807,6 +807,7 @@ config LINX_INTC
 	bool "Huawei LinxISA Interrupt Controller"
 	depends on RISCV
 	select IRQ_DOMAIN_HIERARCHY
+	select IRQ_MSI_IOMMU
 	help
 	   This enables support for the LINX-INTC chip found in Huawei
 	   LinxISA systems. The LINX-INTC consists of three major units:

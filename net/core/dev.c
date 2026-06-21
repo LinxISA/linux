@@ -12949,11 +12949,15 @@ static int net_page_pool_create(int cpuid)
 	if (IS_ERR(pp_ptr))
 		return -ENOMEM;
 
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("net: skipping xdp_reg_page_pool during Linx bring-up\n");
+#else
 	err = xdp_reg_page_pool(pp_ptr);
 	if (err) {
 		page_pool_destroy(pp_ptr);
 		return err;
 	}
+#endif
 
 	per_cpu(system_page_pool.pool, cpuid) = pp_ptr;
 #endif

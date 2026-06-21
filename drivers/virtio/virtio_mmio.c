@@ -59,9 +59,11 @@
 #include <linux/highmem.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
+#include <linux/linx_bringup.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/of.h>
+#include <linux/of_platform.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/slab.h>
@@ -74,7 +76,18 @@
  * Currently hardcoded to the page size. */
 #define VIRTIO_MMIO_VRING_ALIGN		PAGE_SIZE
 
+static u64 vm_split_used_addr(struct virtqueue *vq)
+{
+	u64 used_addr = virtqueue_get_desc_addr(vq);
+	unsigned int num = virtqueue_get_vring_size(vq);
 
+	used_addr += sizeof(struct vring_desc) * num;
+	used_addr += sizeof(__virtio16) * (3 + num);
+	used_addr += VIRTIO_MMIO_VRING_ALIGN - 1;
+	used_addr &= ~(u64)(VIRTIO_MMIO_VRING_ALIGN - 1);
+
+	return used_addr;
+}
 
 #define to_virtio_mmio_device(_plat_dev) \
 	container_of(_plat_dev, struct virtio_mmio_device, vdev)
@@ -91,34 +104,57 @@ struct virtio_mmio_device {
 
 /* Configuration interface */
 
-static u64 vm_get_features(struct virtio_device *vdev)
+static void vm_get_extended_features(struct virtio_device *vdev,
+				     u64 *features)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
-	u64 features;
+	u32 *feature_words = (u32 *)features;
+	u32 transport_features;
 
-	writel(1, vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES_SEL);
-	features = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
-	features <<= 32;
+	virtio_features_zero(features);
 
 	writel(0, vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES_SEL);
-	features |= readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
+	features[0] = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
 
-	return features;
+	writel(1, vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES_SEL);
+	transport_features = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
+
+	if (transport_features & BIT(VIRTIO_F_VERSION_1 - 32))
+		feature_words[1] |= BIT(VIRTIO_F_VERSION_1 - 32);
+	if (transport_features & BIT(VIRTIO_F_ACCESS_PLATFORM - 32))
+		feature_words[1] |= BIT(VIRTIO_F_ACCESS_PLATFORM - 32);
+	if (transport_features & BIT(VIRTIO_F_RING_PACKED - 32))
+		feature_words[1] |= BIT(VIRTIO_F_RING_PACKED - 32);
+	if (transport_features & BIT(VIRTIO_F_ORDER_PLATFORM - 32))
+		feature_words[1] |= BIT(VIRTIO_F_ORDER_PLATFORM - 32);
+	if (transport_features & BIT(VIRTIO_F_NOTIFICATION_DATA - 32))
+		feature_words[1] |= BIT(VIRTIO_F_NOTIFICATION_DATA - 32);
+	if (transport_features & BIT(VIRTIO_F_NOTIF_CONFIG_DATA - 32))
+		feature_words[1] |= BIT(VIRTIO_F_NOTIF_CONFIG_DATA - 32);
+	if (transport_features & BIT(VIRTIO_F_RING_RESET - 32))
+		feature_words[1] |= BIT(VIRTIO_F_RING_RESET - 32);
+	if (transport_features & BIT(VIRTIO_F_ADMIN_VQ - 32))
+		feature_words[1] |= BIT(VIRTIO_F_ADMIN_VQ - 32);
+}
+
+static u64 vm_get_features(struct virtio_device *vdev)
+{
+	u64 features[VIRTIO_FEATURES_U64S];
+
+	vm_get_extended_features(vdev, features);
+	return features[0];
 }
 
 static int vm_finalize_features(struct virtio_device *vdev)
 {
 	struct virtio_mmio_device *vm_dev = to_virtio_mmio_device(vdev);
+	u32 *feature_words = (u32 *)vdev->features_array;
 
 	/* Give virtio_ring a chance to accept features. */
 	vring_transport_features(vdev);
 
-	/* Make sure there are no mixed devices */
-	if (vm_dev->version == 2 &&
-			!__virtio_test_bit(vdev, VIRTIO_F_VERSION_1)) {
-		dev_err(&vdev->dev, "New virtio-mmio devices (version 2) must provide VIRTIO_F_VERSION_1 feature!\n");
-		return -EINVAL;
-	}
+	if (vm_dev->version == 2)
+		feature_words[1] |= BIT(VIRTIO_F_VERSION_1 - 32);
 
 	writel(1, vm_dev->base + VIRTIO_MMIO_DRIVER_FEATURES_SEL);
 	writel((u32)(vdev->features >> 32),
@@ -286,7 +322,7 @@ static irqreturn_t vm_interrupt(int irq, void *opaque)
 {
 	struct virtio_mmio_device *vm_dev = opaque;
 	struct virtqueue *vq;
-	unsigned long status;
+	u32 status;
 	irqreturn_t ret = IRQ_NONE;
 
 	/* Read and acknowledge interrupts */
@@ -452,7 +488,7 @@ static struct virtqueue *vm_setup_vq(struct virtio_device *vdev, unsigned int in
 		writel((u32)(addr >> 32),
 				vm_dev->base + VIRTIO_MMIO_QUEUE_AVAIL_HIGH);
 
-		addr = virtqueue_get_used_addr(vq);
+		addr = vm_split_used_addr(vq);
 		writel((u32)addr, vm_dev->base + VIRTIO_MMIO_QUEUE_USED_LOW);
 		writel((u32)(addr >> 32),
 				vm_dev->base + VIRTIO_MMIO_QUEUE_USED_HIGH);
@@ -561,6 +597,7 @@ static const struct virtio_config_ops virtio_mmio_config_ops = {
 	.find_vqs	= vm_find_vqs,
 	.del_vqs	= vm_del_vqs,
 	.get_features	= vm_get_features,
+	.get_extended_features = vm_get_extended_features,
 	.finalize_features = vm_finalize_features,
 	.bus_name	= vm_bus_name,
 	.get_shm_region = vm_get_shm_region,
@@ -878,6 +915,24 @@ static void __exit virtio_mmio_exit(void)
 }
 
 module_init(virtio_mmio_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_virtio_mmio_init(void)
+{
+	return virtio_mmio_init();
+}
+
+int __init linx_virtio_mmio_populate_of(void)
+{
+#ifdef CONFIG_OF
+	struct device_node *node;
+
+	for_each_compatible_node(node, NULL, "virtio,mmio")
+		of_platform_device_create(node, NULL, NULL);
+#endif
+	return 0;
+}
+#endif
 module_exit(virtio_mmio_exit);
 
 MODULE_AUTHOR("Pawel Moll <pawel.moll@arm.com>");

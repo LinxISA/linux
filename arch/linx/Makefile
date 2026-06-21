@@ -19,11 +19,11 @@ ifeq ($(CONFIG_ARCH_RV64I),y)
 	BITS := 64
 	UTS_MACHINE := linx64
 
-	KBUILD_LDFLAGS += -melf64llinxv5
+	KBUILD_LDFLAGS += -melf64linx
 else
 	BITS := 32
 	UTS_MACHINE := linx32
-	KBUILD_LDFLAGS += -melf32llinxv5
+	KBUILD_LDFLAGS += -melf32linx
 endif
 
 ifeq ($(CONFIG_LD_IS_LLD),y)

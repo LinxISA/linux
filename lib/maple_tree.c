@@ -5168,12 +5168,30 @@ void mas_store_prealloc(struct ma_state *mas, void *entry)
 {
 	MA_WR_STATE(wr_mas, mas, entry);
 
+#ifdef CONFIG_LINX_INTC
+	if (unlikely(!mas_is_active(mas))) {
+		mas_wr_prealloc_setup(&wr_mas);
+		mas->store_type = mas_wr_store_type(&wr_mas);
+	}
+#endif
+
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: mas_store_prealloc enter mas=%px entry=%px store_type=%u node=%px status=%u depth=%u offset=%u end=%u index=%lx last=%lx\n",
+	       mas, entry, mas->store_type, mas->node, mas->status, mas->depth,
+	       mas->offset, mas->end, mas->index, mas->last);
+#endif
+
 	if (mas->store_type == wr_store_root) {
 		mas_wr_prealloc_setup(&wr_mas);
 		goto store;
 	}
 
 	mas_wr_walk_descend(&wr_mas);
+#ifdef CONFIG_LINX_INTC
+	pr_err("Linx dbg: mas_store_prealloc after descend node=%px type=%u slots=%px content=%px offset=%u end=%u r_min=%lx r_max=%lx\n",
+	       wr_mas.node, wr_mas.type, wr_mas.slots, wr_mas.content, mas->offset,
+	       mas->end, wr_mas.r_min, wr_mas.r_max);
+#endif
 	if (mas->store_type != wr_spanning_store) {
 		/* set wr_mas->content to current slot */
 		wr_mas.content = mas_slot_locked(mas, wr_mas.slots, mas->offset);

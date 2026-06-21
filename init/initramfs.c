@@ -20,7 +20,6 @@
 #include <linux/umh.h>
 #include <linux/security.h>
 #include <linux/overflow.h>
-
 #include "do_mounts.h"
 #include "initramfs_internal.h"
 
@@ -35,7 +34,26 @@ static ssize_t __init xwrite(struct file *file, const unsigned char *p,
 	/* sys_write only can write MAX_RW_COUNT aka 2G-4K bytes at most */
 	while (count) {
 		loff_t before_pos = pos ? *pos : 0;
-		ssize_t rv = kernel_write(file, p, count, pos);
+		size_t chunk = count;
+		ssize_t rv;
+#ifdef CONFIG_LINX_INTC
+		/*
+		 * The direct write_begin/write_end path can leave extracted
+		 * initramfs files with executable mappings that later fault as
+		 * SIGBUS|NOPAGE during the first userspace instruction fetch on
+		 * Linx. Fall back to the generic kernel_write() path for now.
+		 */
+#endif
+#ifdef CONFIG_LINX
+		/*
+		 * Linx bring-up: large kernel_write() requests on initramfs file
+		 * extraction have been observed to wedge. Keep writes small until
+		 * the underlying VFS/writeback issue is resolved.
+		 */
+		if (chunk > 4096)
+			chunk = 4096;
+#endif
+		rv = kernel_write(file, p, chunk, pos);
 #ifdef CONFIG_LINX
 		/*
 		 * Linx bring-up: kernel_write() has been observed to advance *pos
@@ -405,6 +423,7 @@ static int __init do_name(void)
 		free_hash();
 		return 0;
 	}
+
 	clean_path(collected, mode);
 	if (S_ISREG(mode)) {
 		int ml = maybe_link();
@@ -477,7 +496,11 @@ static int __init do_copy(void)
 			error("write error");
 
 		do_utime_path(&wfile->f_path, mtime);
+#ifdef CONFIG_LINX_INTC
+		__fput_sync(wfile);
+#else
 		fput(wfile);
+#endif
 #ifdef CONFIG_LINX_DEBUG
 		if (wfile_is_init) {
 			init_flush_fput();
@@ -840,10 +863,23 @@ done:
 
 static ASYNC_DOMAIN_EXCLUSIVE(initramfs_domain);
 static async_cookie_t initramfs_cookie;
+static bool initramfs_sync_done;
 
-#ifndef CONFIG_LINX
+void __init linx_populate_rootfs_now(void)
+{
+	if (initramfs_sync_done)
+		return;
+
+	do_populate_rootfs(NULL, 0);
+	initramfs_sync_done = true;
+	usermodehelper_enable();
+}
+
 void wait_for_initramfs(void)
 {
+	if (initramfs_sync_done)
+		return;
+
 	if (!initramfs_cookie) {
 		/*
 		 * Something before rootfs_initcall wants to access
@@ -857,10 +893,14 @@ void wait_for_initramfs(void)
 	async_synchronize_cookie_domain(initramfs_cookie + 1, &initramfs_domain);
 }
 EXPORT_SYMBOL_GPL(wait_for_initramfs);
-#endif
 
 static int __init populate_rootfs(void)
 {
+#ifdef CONFIG_LINX_INTC
+	linx_populate_rootfs_now();
+	return 0;
+#endif
+
 	initramfs_cookie = async_schedule_domain(do_populate_rootfs, NULL,
 						 &initramfs_domain);
 	usermodehelper_enable();

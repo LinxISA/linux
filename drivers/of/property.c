@@ -1095,6 +1095,18 @@ static struct fwnode_handle *
 of_fwnode_get_next_child_node(const struct fwnode_handle *fwnode,
 			      struct fwnode_handle *child)
 {
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up does not currently require generic fwnode child walking
+	 * and the current lane can reach this helper with corrupted child
+	 * handles. Keep the iterator disabled until the underlying lowering/OF
+	 * path is stable.
+	 */
+	(void)fwnode;
+	(void)child;
+	return NULL;
+#endif
+
 	return of_fwnode_handle(of_get_next_available_child(to_of_node(fwnode),
 							    to_of_node(child)));
 }
@@ -1604,6 +1616,15 @@ static int of_fwnode_add_links(struct fwnode_handle *fwnode)
 {
 	const struct property *p;
 	struct device_node *con_np = to_of_node(fwnode);
+
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up currently boots with a minimal virt DT and does not rely
+	 * on inferred fw_devlink supplier links. Skip the generic OF link walk
+	 * until child-node iteration is stable in this lane.
+	 */
+	return 0;
+#endif
 
 	if (IS_ENABLED(CONFIG_X86))
 		return 0;

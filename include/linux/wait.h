@@ -61,11 +61,28 @@ struct task_struct;
 
 extern void __init_waitqueue_head(struct wait_queue_head *wq_head, const char *name, struct lock_class_key *);
 
+static inline void init_waitqueue_head_inline(struct wait_queue_head *wq_head,
+					      const char *name,
+					      struct lock_class_key *key)
+{
+	/*
+	 * Some Linx kernel builds fold spinlock_t to a zero-sized field. Keep
+	 * the wait-list initialization inline in that case so the compiler does
+	 * not need to route a tiny helper call through the block-call path.
+	 */
+	if (sizeof(wq_head->lock) == 0) {
+		INIT_LIST_HEAD(&wq_head->head);
+		return;
+	}
+
+	__init_waitqueue_head(wq_head, name, key);
+}
+
 #define init_waitqueue_head(wq_head)						\
 	do {									\
 		static struct lock_class_key __key;				\
 										\
-		__init_waitqueue_head((wq_head), #wq_head, &__key);		\
+		init_waitqueue_head_inline((wq_head), #wq_head, &__key);	\
 	} while (0)
 
 #ifdef CONFIG_LOCKDEP

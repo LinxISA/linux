@@ -32,6 +32,7 @@
 
 #include "of_private.h"
 
+#ifdef CONFIG_LINX_VIRT_UART_MARKERS
 #define LINX_VIRT_UART_BASE 0x10000000UL
 static inline void linx_virt_uart_putc(char c)
 {
@@ -50,6 +51,11 @@ static inline void linx_virt_uart_puthex_u64(u64 v)
 	}
 }
 #define LINX_EARLY_MARK(c) linx_virt_uart_putc(c)
+#else
+static inline void linx_virt_uart_putc(char c) { }
+static inline void linx_virt_uart_puthex_u64(u64 v) { }
+#define LINX_EARLY_MARK(c) do { } while (0)
+#endif
 
 /*
  * __dtb_empty_root_begin[] and __dtb_empty_root_end[] magically created by
@@ -416,7 +422,8 @@ void *__unflatten_device_tree(const void *blob,
 
 	/* Allocate memory for the expanded device tree */
 	LINX_EARLY_MARK('3');
-	mem = dt_alloc(size + 4, __alignof__(struct device_node));
+	mem = of_call_dt_alloc(dt_alloc, size + 4,
+				 __alignof__(struct device_node));
 	LINX_EARLY_MARK('4');
 	if (!mem)
 		return NULL;
@@ -1519,6 +1526,21 @@ static void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
 	mem = memblock_alloc_or_panic(size, align);
 	LINX_EARLY_MARK('I');
 	return mem;
+}
+
+void *of_call_dt_alloc(void *(*dt_alloc)(u64 size, u64 align),
+		       u64 size, u64 align)
+{
+	/*
+	 * Linx bring-up: preserve the callback contract, but bypass the
+	 * indirect call when it targets the known early memblock allocator.
+	 * This avoids the current QEMU divergence on some early callback
+	 * call sequences without changing allocator behavior.
+	 */
+	if (dt_alloc == early_init_dt_alloc_memory_arch)
+		return early_init_dt_alloc_memory_arch(size, align);
+
+	return dt_alloc(size, align);
 }
 
 bool __init early_init_dt_verify(void *dt_virt, phys_addr_t dt_phys)

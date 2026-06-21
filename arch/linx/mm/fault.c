@@ -182,8 +182,7 @@ static inline void vmalloc_fault(struct pt_regs *regs, int code, unsigned long a
 
 static inline bool access_error(unsigned long cause, struct vm_area_struct *vma)
 {
-	if (is_insn_abort(cause) &&
-	    ECAUSE_SYNDROME(cause) == ECAUSE_INSN_SYD_PAGE_FAULT){
+	if (is_insn_abort(cause)) {
 		if (!(vma->vm_flags & VM_EXEC))
 			return true;
 	}
@@ -326,8 +325,9 @@ good_area:
 	 * signal first. We do not need to release the mmap_lock because it
 	 * would already be released in __lock_page_or_retry in mm/filemap.c.
 	 */
-	if (fault_signal_pending(fault, regs))
+	if (fault_signal_pending(fault, regs)) {
 		return;
+	}
 
 	if (unlikely((fault & VM_FAULT_RETRY) && (flags & FAULT_FLAG_ALLOW_RETRY))) {
 		flags |= FAULT_FLAG_TRIED;

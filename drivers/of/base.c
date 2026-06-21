@@ -855,15 +855,22 @@ struct device_node *__of_find_node_by_path(const struct device_node *parent,
 						const char *path)
 {
 	struct device_node *child;
-	int len;
+	const char *end = path;
+	size_t len;
 
-	len = strcspn(path, "/:");
+	while (*end && *end != '/' && *end != ':')
+		end++;
+	len = end - path;
 	if (!len)
 		return NULL;
 
 	__for_each_child_of_node(parent, child) {
 		const char *name = kbasename(child->full_name);
-		if (strncmp(path, name, len) == 0 && (strlen(name) == len))
+		size_t i = 0;
+
+		while (i < len && name[i] && name[i] != '@' && path[i] == name[i])
+			i++;
+		if (i == len && (name[i] == '\0' || name[i] == '@'))
 			return child;
 	}
 	return NULL;
@@ -872,16 +879,15 @@ struct device_node *__of_find_node_by_path(const struct device_node *parent,
 struct device_node *__of_find_node_by_full_path(struct device_node *node,
 						const char *path)
 {
-	const char *separator = strchr(path, ':');
-
 	while (node && *path == '/') {
 		struct device_node *tmp = node;
+		const char *component = ++path;
 
-		path++; /* Increment past '/' delimiter */
-		node = __of_find_node_by_path(node, path);
+		while (*path && *path != '/' && *path != ':')
+			path++;
+		node = __of_find_node_by_path(node, component);
 		of_node_put(tmp);
-		path = strchrnul(path, '/');
-		if (separator && separator < path)
+		if (*path == ':')
 			break;
 	}
 	return node;
@@ -910,7 +916,15 @@ struct device_node *of_find_node_opts_by_path(const char *path, const char **opt
 	struct device_node *np = NULL;
 	const struct property *pp;
 	unsigned long flags;
-	const char *separator = strchr(path, ':');
+	const char *separator = NULL;
+	const char *p;
+
+	for (p = path; *p; p++) {
+		if (*p == ':') {
+			separator = p;
+			break;
+		}
+	}
 
 	if (opts)
 		*opts = separator ? separator + 1 : NULL;
@@ -921,25 +935,29 @@ struct device_node *of_find_node_opts_by_path(const char *path, const char **opt
 	/* The path could begin with an alias */
 	if (*path != '/') {
 		int len;
-		const char *p = strchrnul(path, '/');
+		const char *alias_end = path;
 
-		if (separator && separator < p)
-			p = separator;
-		len = p - path;
+		while (*alias_end && *alias_end != '/' && *alias_end != ':')
+			alias_end++;
+		len = alias_end - path;
 
 		/* of_aliases must not be NULL */
 		if (!of_aliases)
 			return NULL;
 
 		for_each_property_of_node(of_aliases, pp) {
-			if (strlen(pp->name) == len && !strncmp(pp->name, path, len)) {
+			int i = 0;
+
+			while (i < len && pp->name[i] && pp->name[i] == path[i])
+				i++;
+			if (i == len && pp->name[i] == '\0') {
 				np = of_find_node_by_path(pp->value);
 				break;
 			}
 		}
 		if (!np)
 			return NULL;
-		path = p;
+		path = alias_end;
 	}
 
 	/* Step down the tree matching path components */
@@ -1851,10 +1869,14 @@ void of_alias_scan(void * (*dt_alloc)(u64 size, u64 align))
 {
 	const struct property *pp;
 
-	of_aliases = of_find_node_by_path("/aliases");
-	of_chosen = of_find_node_by_path("/chosen");
+	/*
+	 * Root-child lookup is sufficient here and avoids depending on the full
+	 * path walker during the earliest post-unflatten alias/chosen bring-up.
+	 */
+	of_aliases = of_get_child_by_name(of_root, "aliases");
+	of_chosen = of_get_child_by_name(of_root, "chosen");
 	if (of_chosen == NULL)
-		of_chosen = of_find_node_by_path("/chosen@0");
+		of_chosen = of_get_child_by_name(of_root, "chosen@0");
 
 	if (of_chosen) {
 		/* linux,stdout-path and /aliases/stdout are for legacy compatibility */
@@ -1901,7 +1923,8 @@ void of_alias_scan(void * (*dt_alloc)(u64 size, u64 align))
 		}
 
 		/* Allocate an alias_prop with enough space for the stem */
-		ap = dt_alloc(sizeof(*ap) + len + 1, __alignof__(*ap));
+		ap = of_call_dt_alloc(dt_alloc, sizeof(*ap) + len + 1,
+				       __alignof__(*ap));
 		if (!ap) {
 			of_node_put(np);
 			continue;

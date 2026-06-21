@@ -25,6 +25,7 @@
 #include <linux/blkdev.h>
 #include <linux/fs_context.h>
 #include <linux/fs_parser.h>
+#include <linux/linx_bringup.h>
 #include <linux/random.h>
 #include <linux/buffer_head.h>
 #include <linux/exportfs.h>
@@ -1731,4 +1732,11 @@ MODULE_AUTHOR("Remy Card and others");
 MODULE_DESCRIPTION("Second Extended Filesystem");
 MODULE_LICENSE("GPL");
 module_init(init_ext2_fs)
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_ext2_init_fs(void)
+{
+	return init_ext2_fs();
+}
+#endif
 module_exit(exit_ext2_fs)

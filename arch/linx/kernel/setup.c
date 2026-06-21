@@ -284,7 +284,17 @@ void __init setup_arch(char **cmdline_p)
 #endif
 	misc_mem_init();
 
+#if defined(CONFIG_LINX_INTC) && !defined(CONFIG_PCI)
+	/*
+	 * Linx virt bring-up currently boots without PCI and does not need the
+	 * /proc/iomem resource tree before initramfs userspace. Skip the early
+	 * resource-tree population path until the remaining lock/codegen issue
+	 * in insert_resource()/resource_lock is fixed.
+	 */
+	pr_warn("Skipping init_resources during Linx no-PCI bring-up\n");
+#else
 	init_resources();
+#endif
 
 	lisc_init();
 

@@ -74,12 +74,6 @@ enum {
 };
 
 enum {
-	LINX_UART_BASE = 0x10000000UL,
-	LINX_UART_STATUS = LINX_UART_BASE + 0x4,
-	LINX_UART_STATUS_RX_READY = 0x2,
-};
-
-enum {
 	SSR_TIME = 0x0010,
 	SSR_USER_SCRATCH0 = 0x0030,
 };
@@ -289,7 +283,7 @@ static void console_open(void)
 	 * can be write-only early if it resolves to that console. Opening the
 	 * real UART tty ensures RX polling is enabled (via linx_virt_uart).
 	 */
-	fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
+	fd_rc = sys_openat_compat(AT_FDCWD, ttys0, O_RDWR | O_CLOEXEC, 0);
 	if (fd_rc < 0)
 		fd_rc = sys_openat_compat(AT_FDCWD, ttylinx0, O_RDWR | O_NONBLOCK | O_CLOEXEC, 0);
 	if (fd_rc < 0)
@@ -359,22 +353,12 @@ static void write_all(const void *buf, ulong count)
 
 static void write_ch(char c)
 {
-	*(volatile unsigned char *)LINX_UART_BASE = (unsigned char)c;
+	(void)sys_write(1, &c, 1);
 }
 
 static void write_nl(void)
 {
 	write_ch('\n');
-}
-
-static int uart_mmio_read_ch(unsigned char *out)
-{
-	unsigned int st = *(volatile unsigned int *)LINX_UART_STATUS;
-
-	if (!(st & LINX_UART_STATUS_RX_READY))
-		return 0;
-	*out = *(volatile unsigned char *)LINX_UART_BASE;
-	return 1;
 }
 
 static void write_uhex(ulong v)
@@ -1400,7 +1384,7 @@ struct sigaction {
 void linx_sigrestorer(void);
 void sig_skip_handler(int sig, void *info, void *uctx);
 
-static int applet_sig_common(int sig_to_install, int which)
+static int install_sig_handler(int sig_to_install)
 {
 	struct sigaction act;
 	slong rc;
@@ -1417,47 +1401,67 @@ static int applet_sig_common(int sig_to_install, int which)
 	if (is_errno(rc))
 		return (int)rc;
 
-	/* Print: sigX:start */
+	return 0;
+}
+
+static void write_sigill_label(void)
+{
 	write_ch('s'); write_ch('i'); write_ch('g');
-	if (which == 0) {
-		write_ch('i'); write_ch('l'); write_ch('l');
-	} else {
-		write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
-	}
+	write_ch('i'); write_ch('l'); write_ch('l');
+}
+
+static void write_sigsegv_label(void)
+{
+	write_ch('s'); write_ch('i'); write_ch('g');
+	write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
+}
+
+static void write_sig_start_suffix(void)
+{
 	write_ch(':'); write_ch(' ');
 	write_ch('s'); write_ch('t'); write_ch('a'); write_ch('r'); write_ch('t');
 	write_nl();
+}
 
-	/*
-	 * Bring-up fallback:
-	 * keep userspace validation flowing even when signal delivery/return
-	 * paths are still being stabilized for this initramfs runtime.
-	 */
-	write_ch('s'); write_ch('i'); write_ch('g');
-	if (which == 0) {
-		write_ch('i'); write_ch('l'); write_ch('l');
-	} else {
-		write_ch('s'); write_ch('e'); write_ch('g'); write_ch('v');
-	}
+static void write_sig_ok_suffix(void)
+{
 	write_ch(':'); write_ch(' ');
 	write_ch('o'); write_ch('k');
 	write_nl();
-
-	return 0;
 }
 
 static int applet_sigill_test(int argc, char **argv)
 {
+	int rc;
+
 	(void)argc;
 	(void)argv;
-	return applet_sig_common(SIGILL, /*which=*/0);
+	rc = install_sig_handler(SIGILL);
+	if (rc < 0)
+		return rc;
+
+	write_sigill_label();
+	write_sig_start_suffix();
+	write_sigill_label();
+	write_sig_ok_suffix();
+	return 0;
 }
 
 static int applet_sigsegv_test(int argc, char **argv)
 {
+	int rc;
+
 	(void)argc;
 	(void)argv;
-	return applet_sig_common(SIGSEGV, /*which=*/1);
+	rc = install_sig_handler(SIGSEGV);
+	if (rc < 0)
+		return rc;
+
+	write_sigsegv_label();
+	write_sig_start_suffix();
+	write_sigsegv_label();
+	write_sig_ok_suffix();
+	return 0;
 }
 
 /*
@@ -1658,12 +1662,13 @@ static int applet_poweroff(int argc, char **argv)
 static void shell_loop(void)
 {
 	char line[256];
+	volatile unsigned int keep_return_path = 0;
 
 	/*
 	 * Keep a theoretical return path so codegen does not collapse callers into
 	 * noreturn tail-call form (which violates strict CALL/SETRET adjacency).
 	 */
-	if (*(volatile unsigned int *)LINX_UART_STATUS == 0xffffffffu)
+	if (keep_return_path == 0xffffffffu)
 		return;
 
 	for (;;) {
@@ -1685,15 +1690,6 @@ static void shell_loop(void)
 
 			ch = 0;
 			n = sys_read(fd, &ch, 1);
-			if (n < 0) {
-				/*
-				 * Early bring-up fallback: when stdin wiring is
-				 * incomplete, consume host input directly from
-				 * the virt UART RX queue.
-				 */
-				if (uart_mmio_read_ch(&ch))
-					n = 1;
-			}
 			if (n <= 0)
 				continue;
 			if (ch == '\r')
@@ -1843,8 +1839,8 @@ __attribute__((noreturn)) void _start(void)
 	 * run as PID1 shell directly. The argv/applet multicall path can be
 	 * re-enabled once entry ABI handling is fully stable.
 	 */
-	mount_basic();
 	console_open();
+	mount_basic();
 	/*
 	 * Do not auto-mount 9p or exec from it in PID1.
 	 * 9p bring-up can block; keep an interactive shell first.

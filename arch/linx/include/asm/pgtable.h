@@ -482,6 +482,7 @@ static inline void ptep_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pte_t *ptep)
 {
 	atomic_long_and(~(unsigned long)_PAGE_WRITE, (atomic_long_t *)ptep);
+	local_flush_tlb_page(address);
 }
 
 #define __HAVE_ARCH_PTEP_CLEAR_YOUNG_FLUSH

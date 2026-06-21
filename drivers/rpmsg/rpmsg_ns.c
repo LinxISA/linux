@@ -104,6 +104,11 @@ static int rpmsg_ns_init(void)
 {
 	int ret;
 
+#ifdef CONFIG_LINX_INTC
+	pr_info("rpmsg-ns: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+
 	ret = register_rpmsg_driver(&rpmsg_ns_driver);
 	if (ret < 0)
 		pr_err("%s: Failed to register rpmsg driver\n", __func__);

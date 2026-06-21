@@ -86,7 +86,21 @@ static struct platform_driver gen_pci_driver = {
 	.probe = pci_host_common_probe,
 	.remove = pci_host_common_remove,
 };
-module_platform_driver(gen_pci_driver);
+static int __init gen_pci_driver_init(void)
+{
+#ifdef CONFIG_LINX_INTC
+	pr_warn_once("pci-host-generic: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+	return platform_driver_register(&gen_pci_driver);
+}
+module_init(gen_pci_driver_init);
+
+static void __exit gen_pci_driver_exit(void)
+{
+	platform_driver_unregister(&gen_pci_driver);
+}
+module_exit(gen_pci_driver_exit);
 
 MODULE_DESCRIPTION("Generic PCI host controller driver");
 MODULE_LICENSE("GPL v2");

@@ -390,6 +390,14 @@ static void put_queue_utf8(struct vc_data *vc, u32 value)
 /* FIXME: review locking for vt.c callers */
 static void set_leds(void)
 {
+#ifdef CONFIG_LINX_INTC
+	/*
+	 * Linx bring-up uses the serial console only. Avoid scheduling the VT
+	 * LED tasklet before the keyboard handler enables it, which currently
+	 * trips the tasklet debug warning path and then crashes in printk.
+	 */
+	return;
+#endif
 	tasklet_schedule(&keyboard_tasklet);
 }
 
@@ -1535,6 +1543,12 @@ static void kbd_event(struct input_handle *handle, unsigned int event_type,
 
 	spin_unlock(&kbd_event_lock);
 
+#ifdef CONFIG_LINX_INTC
+	do_poke_blanked_console = 1;
+	schedule_console_callback();
+	return;
+#endif
+
 	tasklet_schedule(&keyboard_tasklet);
 	do_poke_blanked_console = 1;
 	schedule_console_callback();
@@ -1661,6 +1675,10 @@ int __init kbd_init(void)
 	error = input_register_handler(&kbd_handler);
 	if (error)
 		return error;
+
+#ifdef CONFIG_LINX_INTC
+	return 0;
+#endif
 
 	tasklet_enable(&keyboard_tasklet);
 	tasklet_schedule(&keyboard_tasklet);

@@ -539,6 +539,11 @@ static int rpmsg_chrdev_init(void)
 {
 	int ret;
 
+#ifdef CONFIG_LINX_INTC
+	pr_info("rpmsg-char: skipping registration during Linx bring-up\n");
+	return 0;
+#endif
+
 	ret = alloc_chrdev_region(&rpmsg_major, 0, RPMSG_DEV_MAX, "rpmsg_char");
 	if (ret < 0) {
 		pr_err("failed to allocate char dev region\n");

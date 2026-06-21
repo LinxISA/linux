@@ -46,27 +46,65 @@
 	sdi t#1, [\rd, \offset2]
 .endm
 
+.macro restore_user_gprs
+	ldi [sp, PT_A0], -> a0
+	ldi [sp, PT_A1], -> a1
+	ldi [sp, PT_A2], -> a2
+	ldi [sp, PT_A3], -> a3
+	ldi [sp, PT_A4], -> a4
+	ldi [sp, PT_A5], -> a5
+	ldi [sp, PT_A6], -> a6
+	ldi [sp, PT_A7], -> a7
+	ldi [sp, PT_RA], -> ra
+	ldi [sp, PT_S0], -> s0
+	ldi [sp, PT_S1], -> s1
+	ldi [sp, PT_S2], -> s2
+	ldi [sp, PT_S3], -> s3
+	ldi [sp, PT_S4], -> s4
+	ldi [sp, PT_S5], -> s5
+	ldi [sp, PT_S6], -> s6
+	ldi [sp, PT_S7], -> s7
+	ldi [sp, PT_S8], -> s8
+	ldi [sp, PT_X0], -> x0
+	ldi [sp, PT_X1], -> x1
+	ldi [sp, PT_X2], -> x2
+	ldi [sp, PT_X3], -> x3
+.endm
+
 ENTRY(handle_exception)
     /*
-	 * If coming from userspace, preserve the user thread pointer and load
-	 * the kernel thread pointer. If we came from the kernel, the SSR_ETEMP
-	 * register will contain 0, and we should continue on the current SSR_TP.
+	 * Distinguish user-origin vs kernel-origin traps from the saved source
+	 * ACR in SSR_ECSTATE. QEMU currently commits the conditional BSTART at
+	 * the next block header, so the fallthrough path must be the user-origin
+	 * case and the branch target must skip over it to the kernel-origin
+	 * prologue.
 	 */
     BSTART.std cond, from_kernel
-	ssrswap x1, SSR_A0_ETEMP, -> x1
-	setc.eqi x1, 0
+	hl.ssrget SSR_ECSTATE, -> t
+	andi t#1, CSTATE_ACR_MASK, -> t
+	ssrget SSR_CSTATE, -> u
+	andi u#1, CSTATE_ACR_MASK, -> u
+	setc.eq t#1, u#1
 
 from_user:
 /*
  * current state:
- *	x1 hold (thread info)
- *	tp hold (tls)
- *	etemp hold (old x1)
+ *	SSR_TP holds thread_info
+ *	ETEMP holds the manager thread_info snapshot for user return
+ *	x1 holds the interrupted user x1
  *	sp hold (user sp)
  */
-    BSTART.std direct, _save_context
-    sdi sp, [x1, TASK_TI_USER_SP]
-	ldi [x1, TASK_TI_KERNEL_SP], -> sp
+	BSTART.std fall
+		ssrget SSR_TP, -> t
+		sdi sp, [t#1, TASK_TI_USER_SP]
+
+	block_next_direct from_user_switch_stack
+from_user_switch_stack:
+	BSTART.std direct, _save_context
+		ssrget SSR_TP, -> t
+		ldi [t#1, TASK_TI_KERNEL_SP], -> sp
+		ssrswap x1, SSR_A0_ETEMP, -> x1
+		BSTOP
 
 from_kernel:
 /*
@@ -80,6 +118,7 @@ from_kernel:
 	ssrswap x1, SSR_TP, -> x1
 	sdi sp, [x1, TASK_TI_KERNEL_SP]
 	sdi sp, [x1, TASK_TI_USER_SP]
+	block_next_direct _save_context
 
 _save_context:
 /*
@@ -185,21 +224,29 @@ after_save_bstate:
 /* construct PT_TP(sp) */
  /*
   * current state:
-  * tp hold(thread info)
-  *	etemp hold(0/tls)
+  *	tp holds thread_info
+  *	etemp holds user tls for user-origin traps, but interrupted x1 for
+  *	kernel-origin traps.  Use the saved source ACR to decide which value
+  *	must be restored into SSR_TP.
   */
-	BSTART.std cond, ETEMP_IS_TLS
-	hl.ssrget SSR_ETEMP, -> s5
-	setc.nei s5, 0
+	BSTART.std cond, PT_TP_FROM_KERNEL
+	andi s1, CSTATE_ACR_MASK, -> t
+	addi zero, CSTATE_ACR2, -> u
+	setc.ne t#1, u#1
 
-ETEMP_IS_ZERO:
+PT_TP_FROM_USER:
+	BSTART.sys fall
+	hl.ssrget SSR_A1_ETEMP0, -> s5
+	block_next_direct PT_TP_READY
+
+PT_TP_FROM_KERNEL:
 	BSTART.std fall
 	ssrget SSR_TP, -> s5
-ETEMP_IS_TLS:
+
+PT_TP_READY:
  /*
-  * current state:
-  * etemp hold(0/tls)
-  *	s5 hold(thread info/tls), same as the old tp, so we put it in PT_TP(sp)
+  * s5 holds thread_info for kernel-origin traps or user tls for user-origin
+  * traps, matching the value that restore_all must put back into SSR_TP.
   */
 	BSTART.sys fall
 	sdi s5, [sp, PT_TP] /* pt_regs(tp) keeps the old tp, which can be restored directly */
@@ -208,10 +255,11 @@ ETEMP_IS_TLS:
 	 * occurs, the exception vector knows it came from the kernel
 	 */
 	hl.ssrset zero, SSR_ETEMP // it's already zero
+	hl.ssrset zero, SSR_A1_ETEMP0
 
 	/* Load the global pointer */
-	1: addtpc %tpcrel_hi(__global_pointer$), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(__global_pointer$), -> t
+	addi t#1, %tpcrel_lo(__global_pointer$), -> t
 	ssrset t#1, SSR_GP
 
 	/*
@@ -224,14 +272,14 @@ ETEMP_IS_TLS:
 
 handle_interrupt:
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 
 	/* Handle interrupts, return to ret_from_exception */
 	BSTART.std ind
 	addi sp, 0 -> a0	/* pt_regs as the 1th argument */
-	1: addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(generic_handle_arch_irq), -> t
+	addi t#1, %tpcrel_lo(generic_handle_arch_irq), -> t
 	setc.tgt t#1
 
 handle_exceptions:
@@ -255,8 +303,8 @@ handle_exceptions:
 handle_syscalls:
 	/* set return address for both branches */
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 
 	/* Handle syscalls, return to ret_from_exception */
 	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_SCALL_EXP, handle_syscall
@@ -272,11 +320,11 @@ handle_syscalls:
 	addi sp, 0, -> a0
 	andi s4, ECAUSE_TRAPNUM_MASK, -> t	/* SSR_TRAPNO.trapnum */
 	slli t#1, RISCV_LGPTR, -> t
-	1: addtpc %tpcrel_hi(excp_vect_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(excp_vect_table), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table), -> t
 	add t#3, t#1, -> x0	/* &excp_vect_table[SSR_TRAPNO.trapnum] */
-	1: addtpc %tpcrel_hi(excp_vect_table_end), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(excp_vect_table_end), -> t
+	addi t#1, %tpcrel_lo(excp_vect_table_end), -> t
 	/* Check if exception code lies within bounds */
 	setc.geu x0, t#1
 
@@ -303,8 +351,8 @@ handle_syscall:
 	sdi t#1, [sp, PT_ORIG_TPC]
 	ldi [sp, PT_BPC], -> t
 	sdi t#1, [sp, PT_ORIG_BPC]
-	/* advance bpc and tpc with length of `acrc`, because it always ends a block */
-	addi t#2, 4, -> t
+	/* PT_TPC points at the enforced 16-bit C.BSTOP after acrc; resume at the next block header. */
+	addi t#2, 2, -> t
 	sdi t#1, [sp, PT_TPC]
 	sdi t#1, [sp, PT_BPC]
 
@@ -318,26 +366,26 @@ handle_syscall:
 check_syscall_nr:
 	/*
 	 * Check to make sure we don't jump to a bogus syscall number.
-	 * Syscall number held in x1.
+	 * Syscall number held in a7.
 	 * If syscall number is above allowed value, redirect to ni_syscall.
 	 */
 	/*
-	 * if (x1 >= __NR_syscalls) {
+	 * if (a7 >= __NR_syscalls) {
 	 * 	s0 = sys_ni_syscall;
 	 * } else {
-	 * 	s0 = sys_call_table[x1];
+	 * 	s0 = sys_call_table[a7];
 	 * }
 	 */
 	BSTART.std cond, call_syscall
-	1: addtpc %tpcrel_hi(sys_ni_syscall), -> t
-	addi t#1, %tpcrel_lo(1b), -> s0
+	addtpc %tpcrel_hi(sys_ni_syscall), -> t
+	addi t#1, %tpcrel_lo(sys_ni_syscall), -> s0
 	addi zero, __NR_syscalls, -> t
-	setc.geu, x1, t#1
+	setc.geu, a7, t#1
 
 	BSTART.std fall
-	1: addtpc %tpcrel_hi(sys_call_table), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
-	ld [t#1, x1<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[x1] */
+	addtpc %tpcrel_hi(sys_call_table), -> t
+	addi t#1, %tpcrel_lo(sys_call_table), -> t
+	ld [t#1, a7<<RISCV_LGPTR], -> s0	/* s0 = sys_call_table[a7] */
 
 call_syscall:
 	/* Call syscall */
@@ -361,6 +409,11 @@ ret_from_syscall_rejected:
 	block_next_bnez_tif _TIF_SYSCALL_WORK, handle_syscall_trace_exit
 
 ret_from_exception:
+#ifdef CONFIG_LINX_INTC
+	BSTART.std fall
+	addi sp, 0, -> a0
+	block_next_indcall linx_trace_ret_from_exception
+#endif
 	/* clear SSR_CSTATE.I */
 	/* disable interrupt */
 	BSTART.sys fall
@@ -385,6 +438,7 @@ resume_userspace:
 	andi s0, _TIF_WORK_MASK, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_WORK_MASK */
 	setc.nei s1, 0
 
+	BSTART.std fall
 	/*
 	 * Save unwound kernel stack pointer in thread_info.
 	 * Save SSR_TP into the SSR_ETEMP register, so we can find the kernel data
@@ -436,29 +490,7 @@ restore_all:
 restore_level1_state:
 	BSTART.sys fall
 
-	/* restore necessary UL_GPRs */
-	ldi [sp, PT_A0], -> a0
-	ldi [sp, PT_A1], -> a1
-	ldi [sp, PT_A2], -> a2
-	ldi [sp, PT_A3], -> a3
-	ldi [sp, PT_A4], -> a4
-	ldi [sp, PT_A5], -> a5
-	ldi [sp, PT_A6], -> a6
-	ldi [sp, PT_A7], -> a7
-	ldi [sp, PT_RA], -> ra
-	ldi [sp, PT_S0], -> s0
-	ldi [sp, PT_S1], -> s1
-	ldi [sp, PT_S2], -> s2
-	ldi [sp, PT_S3], -> s3
-	ldi [sp, PT_S4], -> s4
-	ldi [sp, PT_S5], -> s5
-	ldi [sp, PT_S6], -> s6
-	ldi [sp, PT_S7], -> s7
-	ldi [sp, PT_S8], -> s8
-	ldi [sp, PT_X0], -> x0
-	ldi [sp, PT_X1], -> x1
-	ldi [sp, PT_X2], -> x2
-	ldi [sp, PT_X3], -> x3
+	/* User GPRs are restored in the final ACRE block. */
 
 	/* restore BARGs */
 	ldi [sp, PT_TPC], -> t
@@ -467,34 +499,36 @@ restore_level1_state:
 	hl.ssrset t#1, SSR_EBPC
 	ldi [sp, PT_BPCN], -> t
 	hl.ssrset t#1, SSR_EBPCN
-	ldi [sp, PT_EBARG], -> t
-	hl.ssrset t#1, SSR_EBARG
+	/*
+	 * Do not preload user EBARG before the kernel's own return blocks.
+	 * RRAT_RESTORE restores the saved target block state in QEMU; pushing
+	 * user EBARG/ELPR through kernel BSTART boundaries corrupts live sp.
+	 */
 
 	/* check ebstate status */
-	/* if cstate.bi == 0, don't need restore level2 */
+	/* if ecstate.bi == 0, don't need restore level2 */
 	BSTART.std cond, restore_level2_state
 	hl.ssrget SSR_ECSTATE, -> t
-	andi t#1, CSTATE_BI, -> t
+	srli t#1, ECAUSE_BI_SHIFT, -> t
+	andi t#1, 1, -> t
 	setc.nei t#1, 0
 
 /* restored block-head exception */
 	BSTART.sys, fall
+	block_next_direct restore_default_acre_enter
+restore_default_acre_enter:
+	BSTART.sys fall
+	restore_user_gprs
 	ldi [sp, PT_SP], -> sp
 	acre RRAT_DEFAULT
 
 
 restore_level2_state:
 	BSTART.sys fall
-	ldi [sp, PT_ELPR3], -> t
-	ldi [sp, PT_ELPR2], -> t
-	ldi [sp, PT_ELPR1], -> t
-	ldi [sp, PT_ELPR0], -> t
-	ldi [sp, PT_ELPR7], -> u
-	ldi [sp, PT_ELPR6], -> u
-	ldi [sp, PT_ELPR5], -> u
-	ldi [sp, PT_ELPR4], -> u
-
-	/* restore sp */
+	block_next_direct restore_level2_acre_enter
+restore_level2_acre_enter:
+	BSTART.sys fall
+	restore_user_gprs
 	ldi [sp, PT_SP], -> sp
 	acre RRAT_RESTORE
 
@@ -504,8 +538,8 @@ work_pending:
 	 * 	goto work_resched;
 	 */
 	BSTART.std cond, work_resched
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	andi s0, _TIF_NEED_RESCHED, -> s1	/* s1 = TASK_TI_FLAGS(SSR_TP) & _TIF_NEED_RESCHED */
 	setc.nei s1, 0
 
@@ -526,8 +560,8 @@ work_notifysig:
 	 */
 	addi sp, 0, -> a0
 	addi s0, 0, -> a1
-	1: addtpc %tpcrel_hi(do_notify_resume), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(do_notify_resume), -> t
+	addi t#1, %tpcrel_lo(do_notify_resume), -> t
 	setc.tgt t#1
 
 work_resched:
@@ -567,18 +601,18 @@ END(handle_exception)
 /* used in copy_thread */
 ENTRY(ret_from_fork)
 	BSTART.std ind
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
-	1: addtpc %tpcrel_hi(schedule_tail), -> t
-	addi t#1, %tpcrel_lo(1b), -> t
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
+	addtpc %tpcrel_hi(schedule_tail), -> t
+	addi t#1, %tpcrel_lo(schedule_tail), -> t
 	setc.tgt t#1
 ENDPROC(ret_from_fork)
 
 ENTRY(ret_from_kernel_thread)
 	block_next_indcall schedule_tail
 	BSTART.std ind
-	1: addtpc %tpcrel_hi(ret_from_exception), -> t
-	addi t#1, %tpcrel_lo(1b), -> ra
+	addtpc %tpcrel_hi(ret_from_exception), -> t
+	addi t#1, %tpcrel_lo(ret_from_exception), -> ra
 	/* Call s0(s1) */
 	addi s1, 0, -> a0
 	setc.tgt s0
