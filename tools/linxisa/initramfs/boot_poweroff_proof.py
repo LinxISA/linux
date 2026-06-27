@@ -39,6 +39,7 @@ def main() -> int:
     qemu_candidates = [
         pathlib.Path(os.environ.get("QEMU", "")) if os.environ.get("QEMU") else None,
         pathlib.Path("/tmp/linx-qemu-direct-build/qemu-system-linx64"),
+        super_root / "emulator" / "qemu" / "build-linx" / "qemu-system-linx64",
         super_root / "emulator" / "qemu" / "build" / "qemu-system-linx64",
     ]
     qemu = next((p for p in qemu_candidates if p and p.exists()), None)

@@ -18,7 +18,7 @@ Current stage:
 cd /Users/zhoubot/linx-isa/kernel/linux/tools/linxisa/initramfs
 ./build.sh
 
-/Users/zhoubot/qemu/build/qemu-system-linx64 \
+/Users/zhoubot/linx-isa/emulator/qemu/build-linx/qemu-system-linx64 \
   -nographic -monitor none -machine virt -m 512M -smp 1 \
   -kernel /Users/zhoubot/linx-isa/kernel/linux/build-linx-fixed/vmlinux \
   -initrd /Users/zhoubot/linx-isa/kernel/linux/build-linx-fixed/linx-initramfs/initramfs.cpio \
@@ -51,7 +51,7 @@ Dedicated `BI=1 + context switch + t#1 restore` smoke:
 ```bash
 cd /Users/zhoubot/linx-isa
 LINX_DISABLE_TIMER_IRQ=0 \
-QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+QEMU=/Users/zhoubot/linx-isa/emulator/qemu/build-linx/qemu-system-linx64 \
 python3 kernel/linux/tools/linxisa/initramfs/ctx_tq_irq_smoke.py
 ```
 
@@ -60,7 +60,7 @@ Dedicated `ri + step-trap + kernel pollution + resume` smoke:
 ```bash
 cd /Users/zhoubot/linx-isa
 LINX_DISABLE_TIMER_IRQ=1 \
-QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+QEMU=/Users/zhoubot/linx-isa/emulator/qemu/build-linx/qemu-system-linx64 \
 python3 kernel/linux/tools/linxisa/initramfs/ctx_ri_step_trap_smoke.py
 ```
 
@@ -69,7 +69,7 @@ Negative guard (must fail fast):
 ```bash
 cd /Users/zhoubot/linx-isa
 LINX_DISABLE_TIMER_IRQ=1 \
-QEMU=/Users/zhoubot/qemu/build/qemu-system-linx64 \
+QEMU=/Users/zhoubot/linx-isa/emulator/qemu/build-linx/qemu-system-linx64 \
 python3 kernel/linux/tools/linxisa/initramfs/ctx_tq_irq_smoke.py
 ```
 
