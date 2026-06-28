@@ -17,7 +17,7 @@ int gettimeofday_fallback(struct __kernel_old_timeval *_tv,
 {
 	register struct __kernel_old_timeval *tv asm("a0") = _tv;
 	register struct timezone *tz asm("a1") = _tz;
-	register long nr asm("x1") = __NR_gettimeofday;
+	register long nr asm("a7") = __NR_gettimeofday;
 
 	asm volatile ("BSTART.sys fall\n"
 		      "acrc 1\n"
@@ -33,7 +33,7 @@ long clock_gettime_fallback(clockid_t _clkid, struct __kernel_timespec *_ts)
 {
 	register clockid_t clkid asm("a0") = _clkid;
 	register struct __kernel_timespec *ts asm("a1") = _ts;
-	register long nr asm("x1") = __NR_clock_gettime;
+	register long nr asm("a7") = __NR_clock_gettime;
 
 	asm volatile ("BSTART.sys fall\n"
 		      "acrc 1\n"
@@ -49,7 +49,7 @@ int clock_getres_fallback(clockid_t _clkid, struct __kernel_timespec *_ts)
 {
 	register clockid_t clkid asm("a0") = _clkid;
 	register struct __kernel_timespec *ts asm("a1") = _ts;
-	register long nr asm("x1") = __NR_clock_getres;
+	register long nr asm("a7") = __NR_clock_getres;
 
 	asm volatile ("BSTART.sys fall\n"
 		      "acrc 1\n"

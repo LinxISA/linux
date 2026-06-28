@@ -144,9 +144,26 @@ SYSCALL_DEFINE2(gettimeofday, struct __kernel_old_timeval __user *, tv,
 		struct timespec64 ts;
 
 		ktime_get_real_ts64(&ts);
+#ifdef CONFIG_ARCH_LINX
+		/*
+		 * Linx bring-up currently faults on 64-bit put_user() stores.
+		 * Use the copy_to_user() path already used by the timespec
+		 * helpers so legacy gettimeofday remains usable.
+		 */
+		{
+			struct __kernel_old_timeval ktv = {
+				.tv_sec = ts.tv_sec,
+				.tv_usec = ts.tv_nsec / 1000,
+			};
+
+			if (copy_to_user(tv, &ktv, sizeof(ktv)))
+				return -EFAULT;
+		}
+#else
 		if (put_user(ts.tv_sec, &tv->tv_sec) ||
 		    put_user(ts.tv_nsec / 1000, &tv->tv_usec))
 			return -EFAULT;
+#endif
 	}
 	if (unlikely(tz != NULL)) {
 		if (copy_to_user(tz, &sys_tz, sizeof(sys_tz)))
