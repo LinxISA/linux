@@ -13,6 +13,7 @@ int __init linx_blkdev_init(void);
 int __init linx_cgwb_init(void);
 int __init linx_default_bdi_init(void);
 int __init linx_ext2_init_fs(void);
+int __init linx_filelock_init(void);
 int __init linx_genhd_device_init(void);
 int __init linx_ksysfs_init(void);
 int __init linx_proc_cpuinfo_init(void);

@@ -54,6 +54,7 @@
 #include <linux/filelock.h>
 #include <linux/fs.h>
 #include <linux/init.h>
+#include <linux/linx_bringup.h>
 #include <linux/security.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
@@ -3004,4 +3005,11 @@ static int __init filelock_init(void)
 	lease_notifier_chain_init();
 	return 0;
 }
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_filelock_init(void)
+{
+	return filelock_init();
+}
+#endif
 core_initcall(filelock_init);
