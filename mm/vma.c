@@ -1883,7 +1883,17 @@ struct vm_area_struct *copy_vma(struct vm_area_struct **vmap,
 
 	vmg.pgoff = pgoff;
 	vmg.next = vma_iter_next_rewind(&vmi, NULL);
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up: avoid the VMA merge path during mremap copies.  The
+	 * same maple-tree expansion instability that affects brk/mremap can
+	 * leave a successful remap with an unfaultable tail.  Falling through to
+	 * vm_area_dup()+vma_link() keeps the destination as one explicit VMA.
+	 */
+	new_vma = NULL;
+#else
 	new_vma = vma_merge_copied_range(&vmg);
+#endif
 
 	if (new_vma) {
 		/*

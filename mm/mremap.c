@@ -1518,12 +1518,22 @@ static unsigned long expand_vma(struct vma_remap_struct *vrm)
 	 * expand it in-place.
 	 */
 	if (vrm_can_expand_in_place(vrm)) {
+#ifndef CONFIG_ARCH_LINX
 		err = expand_vma_in_place(vrm);
 		if (err)
 			return err;
 
 		/* OK we're done! */
 		return vrm->addr;
+#else
+		/*
+		 * Linx bring-up: the current maple-tree merge/extend path can
+		 * return success while the expanded tail is not faultable.  When
+		 * MREMAP_MAYMOVE is set, force the move path below so the
+		 * destination is linked as one complete VMA.  Without MAYMOVE we
+		 * prefer -ENOMEM over exposing a partially mapped expansion.
+		 */
+#endif
 	}
 
 	/*
