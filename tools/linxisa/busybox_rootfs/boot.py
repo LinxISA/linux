@@ -83,9 +83,12 @@ def _check_kernel_config(kernel: pathlib.Path, o_dir: pathlib.Path) -> bool:
     return False
 
 
-def _irq0_count(text: str) -> Optional[int]:
-    # Typical /proc/interrupts row: "  0:       123   ...".
-    m = re.search(r"(?m)^\s*0:\s+(\d+)\b", text)
+def _timer_irq_count(text: str) -> Optional[int]:
+    # Linx virt exposes the timer on a platform IRQ row, not necessarily IRQ 0.
+    m = re.search(r"(?m)^\s*\d+:\s+(\d+)\b.*\blinx-timer\b", text)
+    if m is None:
+        # Historical logs used IRQ 0 for timer smoke; keep it as a fallback.
+        m = re.search(r"(?m)^\s*0:\s+(\d+)\b", text)
     if not m:
         return None
     try:
@@ -372,7 +375,7 @@ def main() -> int:
 
         text, timed_out = _run_once(cmd, script, timeout_s)
         missing = [w for w in want if w not in text]
-        irq_counts = [_irq0_count(block) for block in text.split("# cat /proc/interrupts")]
+        irq_counts = [_timer_irq_count(block) for block in text.split("# cat /proc/interrupts")]
         irq_counts = [v for v in irq_counts if v is not None]
         irq_error = None
         if not disable_timer_irq and len(irq_counts) >= 2 and irq_counts[-1] < irq_counts[-2]:
