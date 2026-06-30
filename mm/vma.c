@@ -812,8 +812,8 @@ static bool can_merge_remove_vma(struct vm_area_struct *vma)
  * - The caller must hold a WRITE lock on the mm_struct->mmap_lock.
  * - vmi must be positioned within [@vmg->middle->vm_start, @vmg->middle->vm_end).
  */
-static __must_check struct vm_area_struct *vma_merge_existing_range(
-		struct vma_merge_struct *vmg)
+static __maybe_unused __must_check struct vm_area_struct *
+vma_merge_existing_range(struct vma_merge_struct *vmg)
 {
 	struct vm_area_struct *middle = vmg->middle;
 	struct vm_area_struct *prev = vmg->prev;
@@ -1128,7 +1128,8 @@ struct vm_area_struct *vma_merge_new_range(struct vma_merge_struct *vmg)
  * ASSUMPTIONS: Same as vma_merge_new_range(), except vmg->middle must contain
  *              the copied-from VMA.
  */
-static struct vm_area_struct *vma_merge_copied_range(struct vma_merge_struct *vmg)
+static __maybe_unused struct vm_area_struct *
+vma_merge_copied_range(struct vma_merge_struct *vmg)
 {
 	/* We must have a copied-from VMA. */
 	VM_WARN_ON_VMG(!vmg->middle, vmg);
@@ -1646,14 +1647,25 @@ static struct vm_area_struct *vma_modify(struct vma_merge_struct *vmg)
 	struct vm_area_struct *vma = vmg->middle;
 	unsigned long start = vmg->start;
 	unsigned long end = vmg->end;
+#ifndef CONFIG_ARCH_LINX
 	struct vm_area_struct *merged;
+#endif
 
+#ifdef CONFIG_ARCH_LINX
+	/*
+	 * Linx bring-up: mprotect-triggered vma_merge_existing_range() can
+	 * corrupt the maple tree after splitting file-backed runtime mappings.
+	 * Keep modified ranges as explicit VMAs, matching the existing Linx
+	 * no-merge policy for mmap/brk/mremap, until the merge path is fixed.
+	 */
+#else
 	/* First, try to merge. */
 	merged = vma_merge_existing_range(vmg);
 	if (merged)
 		return merged;
 	if (vmg_nomem(vmg))
 		return ERR_PTR(-ENOMEM);
+#endif
 
 	/*
 	 * Split can fail for reasons other than OOM, so if the user requests

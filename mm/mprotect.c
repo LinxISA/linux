@@ -32,13 +32,181 @@
 #include <linux/sched/sysctl.h>
 #include <linux/userfaultfd_k.h>
 #include <linux/memory-tiers.h>
+#include <linux/init.h>
 #include <uapi/linux/mman.h>
 #include <asm/cacheflush.h>
 #include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
 #include <asm/tlb.h>
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
 
 #include "internal.h"
+
+#ifdef CONFIG_ARCH_LINX
+static bool linx_mprotect_trace;
+static unsigned long linx_mprotect_trace_addr;
+static bool linx_mprotect_trace_addr_set;
+static unsigned int linx_mprotect_trace_limit = 64;
+static unsigned int linx_mprotect_trace_count;
+
+static int __init linx_mprotect_trace_setup(char *str)
+{
+	if (!str || !*str)
+		linx_mprotect_trace = true;
+	else if (kstrtobool(str, &linx_mprotect_trace))
+		linx_mprotect_trace = true;
+
+	return 1;
+}
+__setup("linx_mprotect_trace=", linx_mprotect_trace_setup);
+
+static int __init linx_mprotect_trace_addr_setup(char *str)
+{
+	if (!str || kstrtoul(str, 0, &linx_mprotect_trace_addr))
+		return 1;
+
+	linx_mprotect_trace_addr_set = true;
+	return 1;
+}
+__setup("linx_mprotect_trace_addr=", linx_mprotect_trace_addr_setup);
+
+static int __init linx_mprotect_trace_limit_setup(char *str)
+{
+	unsigned long value;
+
+	if (!str || kstrtoul(str, 0, &value))
+		return 1;
+
+	linx_mprotect_trace_limit = value;
+	return 1;
+}
+__setup("linx_mprotect_trace_limit=", linx_mprotect_trace_limit_setup);
+
+static bool linx_mprotect_trace_match(unsigned long start, unsigned long end)
+{
+	unsigned long lo;
+	unsigned long hi;
+
+	if (!linx_mprotect_trace)
+		return false;
+
+	if (linx_mprotect_trace_limit &&
+	    linx_mprotect_trace_count >= linx_mprotect_trace_limit)
+		return false;
+
+	if (!linx_mprotect_trace_addr_set)
+		return true;
+
+	lo = start > PAGE_SIZE ? start - PAGE_SIZE : 0;
+	hi = end + PAGE_SIZE;
+	if (hi < end)
+		hi = ~0UL;
+
+	return linx_mprotect_trace_addr >= lo &&
+	       linx_mprotect_trace_addr < hi;
+}
+
+static void linx_mprotect_puthex(const char *name, unsigned long value)
+{
+	linx_debug_uart_puts(name);
+	linx_debug_uart_puts("=0x");
+	linx_debug_uart_puthex_ulong(value);
+}
+
+static void linx_mprotect_trace_vma(const char *name,
+				    struct vm_area_struct *vma)
+{
+	linx_debug_uart_puts(" ");
+	linx_debug_uart_puts(name);
+	if (!vma) {
+		linx_debug_uart_puts("=none");
+		return;
+	}
+
+	linx_debug_uart_puts("_start=0x");
+	linx_debug_uart_puthex_ulong(vma->vm_start);
+	linx_debug_uart_puts(" ");
+	linx_debug_uart_puts(name);
+	linx_debug_uart_puts("_end=0x");
+	linx_debug_uart_puthex_ulong(vma->vm_end);
+	linx_debug_uart_puts(" ");
+	linx_debug_uart_puts(name);
+	linx_debug_uart_puts("_flags=0x");
+	linx_debug_uart_puthex_ulong(vma->vm_flags);
+	linx_debug_uart_puts(" ");
+	linx_debug_uart_puts(name);
+	linx_debug_uart_puts("_prot=0x");
+	linx_debug_uart_puthex_ulong(pgprot_val(vma->vm_page_prot));
+}
+
+static void linx_mprotect_trace_state(const char *stage,
+				      unsigned long start,
+				      unsigned long end,
+				      unsigned long prot,
+				      vm_flags_t newflags,
+				      int error)
+{
+	struct vm_area_struct *prev = NULL;
+	struct vm_area_struct *cur;
+	struct vm_area_struct *next = NULL;
+	struct vm_area_struct *target = NULL;
+
+	if (!linx_mprotect_trace_match(start, end))
+		return;
+
+	linx_mprotect_trace_count++;
+
+	cur = find_vma_prev(current->mm, start, &prev);
+	if (cur)
+		next = find_vma(current->mm, cur->vm_end);
+	if (linx_mprotect_trace_addr_set) {
+		target = find_vma(current->mm, linx_mprotect_trace_addr);
+		if (target &&
+		    (linx_mprotect_trace_addr < target->vm_start ||
+		     linx_mprotect_trace_addr >= target->vm_end))
+			target = NULL;
+	}
+
+	linx_debug_uart_puts("LINX_MPROTECT stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("count", linx_mprotect_trace_count);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("pid", current->pid);
+	linx_debug_uart_puts(" comm=");
+	linx_debug_uart_puts(current->comm);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("start", start);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("end", end);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("prot", prot);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("newflags", newflags);
+	linx_debug_uart_puts(" ");
+	linx_mprotect_puthex("error", error);
+	if (linx_mprotect_trace_addr_set) {
+		linx_debug_uart_puts(" ");
+		linx_mprotect_puthex("trace_addr", linx_mprotect_trace_addr);
+	}
+	linx_mprotect_trace_vma("prev", prev);
+	linx_mprotect_trace_vma("cur", cur);
+	linx_mprotect_trace_vma("next", next);
+	linx_mprotect_trace_vma("target", target);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_mprotect_trace_state(const char *stage,
+					     unsigned long start,
+					     unsigned long end,
+					     unsigned long prot,
+					     vm_flags_t newflags,
+					     int error)
+{
+}
+#endif
 
 static bool maybe_change_pte_writable(struct vm_area_struct *vma, pte_t pte)
 {
@@ -987,7 +1155,11 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 				break;
 		}
 
+		linx_mprotect_trace_state("before", nstart, tmp, prot,
+					  newflags, 0);
 		error = mprotect_fixup(&vmi, &tlb, vma, &prev, nstart, tmp, newflags);
+		linx_mprotect_trace_state("after", nstart, tmp, prot,
+					  newflags, error);
 		if (error)
 			break;
 
