@@ -8,6 +8,7 @@
 
 
 #include <linux/mm.h>
+#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/perf_event.h>
@@ -19,8 +20,137 @@
 #include <asm/trap.h>
 #include <asm/ptrace.h>
 #include <asm/tlbflush.h>
+#include <asm/debug_uart.h>
 
 #include "../kernel/head.h"
+
+static bool linx_vm_trace;
+static unsigned long linx_vm_trace_addr;
+static bool linx_vm_trace_addr_set;
+
+static int __init linx_vm_trace_setup(char *str)
+{
+	if (!str || !*str)
+		linx_vm_trace = true;
+	else if (kstrtobool(str, &linx_vm_trace))
+		linx_vm_trace = true;
+
+	return 1;
+}
+__setup("linx_vm_trace=", linx_vm_trace_setup);
+
+static int __init linx_vm_trace_addr_setup(char *str)
+{
+	if (!str || kstrtoul(str, 0, &linx_vm_trace_addr))
+		return 1;
+
+	linx_vm_trace_addr_set = true;
+	return 1;
+}
+__setup("linx_vm_trace_addr=", linx_vm_trace_addr_setup);
+
+static bool linx_vm_trace_match(unsigned long addr)
+{
+	if (!linx_vm_trace)
+		return false;
+
+	if (linx_vm_trace_addr_set &&
+	    ((addr ^ linx_vm_trace_addr) & PAGE_MASK))
+		return false;
+
+	return true;
+}
+
+static void linx_vm_trace_puthex(const char *name, unsigned long value)
+{
+	linx_debug_uart_puts(name);
+	linx_debug_uart_puts("=0x");
+	linx_debug_uart_puthex_ulong(value);
+}
+
+static void linx_vm_trace_uart(const char *stage, struct pt_regs *regs,
+			       unsigned long addr, unsigned long cause,
+			       unsigned int flags, struct vm_area_struct *vma,
+			       vm_fault_t fault, bool have_fault)
+{
+	linx_debug_uart_puts("LINX_VM_FAULT stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("pid", current->pid);
+	linx_debug_uart_puts(" comm=");
+	linx_debug_uart_puts(current->comm);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("addr", addr);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("cause", cause);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("flags", flags);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("tpc", regs->tpc);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("bpc", regs->bpc);
+	linx_debug_uart_puts(" ");
+	linx_vm_trace_puthex("sp", regs->sp);
+	if (vma) {
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("vma_start", vma->vm_start);
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("vma_end", vma->vm_end);
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("vm_flags", vma->vm_flags);
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("page_prot", pgprot_val(vma->vm_page_prot));
+	} else {
+		linx_debug_uart_puts(" vma=none");
+	}
+	if (have_fault) {
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("fault", fault);
+	}
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_vm_trace_vma(const char *stage, struct pt_regs *regs,
+			      unsigned long addr, unsigned long cause,
+			      unsigned int flags, struct vm_area_struct *vma)
+{
+	if (!linx_vm_trace_match(addr))
+		return;
+
+	linx_vm_trace_uart(stage, regs, addr, cause, flags, vma, 0, false);
+
+	if (vma) {
+		pr_info("linx: vm-fault stage=%s pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx\n",
+			stage, current->pid, current->comm, addr, cause, flags,
+			regs->tpc, regs->bpc, regs->sp, vma->vm_start,
+			vma->vm_end, (unsigned long)vma->vm_flags,
+			pgprot_val(vma->vm_page_prot));
+	} else {
+		pr_info("linx: vm-fault stage=%s pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=none\n",
+			stage, current->pid, current->comm, addr, cause, flags,
+			regs->tpc, regs->bpc, regs->sp);
+	}
+}
+
+static void linx_vm_trace_fault_result(struct pt_regs *regs,
+				       unsigned long addr,
+				       unsigned long cause,
+				       unsigned int flags,
+				       struct vm_area_struct *vma,
+				       vm_fault_t fault)
+{
+	if (!linx_vm_trace_match(addr))
+		return;
+
+	linx_vm_trace_uart("handled", regs, addr, cause, flags, vma, fault,
+			   true);
+
+	pr_info("linx: vm-fault stage=handled pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x fault=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx\n",
+		current->pid, current->comm, addr, cause, flags,
+		(unsigned int)fault, regs->tpc, regs->bpc, regs->sp,
+		vma->vm_start, vma->vm_end, (unsigned long)vma->vm_flags,
+		pgprot_val(vma->vm_page_prot));
+}
 
 static void die_kernel_fault(const char *msg, unsigned long addr,
 		struct pt_regs *regs)
@@ -282,23 +412,29 @@ retry:
 	mmap_read_lock(mm);
 	vma = find_vma(mm, addr);
 	if (unlikely(!vma)) {
+		linx_vm_trace_vma("no-vma", regs, addr, cause, flags, NULL);
 		tsk->thread.bad_cause = cause;
 		bad_area(regs, mm, code, addr);
 		return;
 	}
-	if (likely(vma->vm_start <= addr))
+	if (likely(vma->vm_start <= addr)) {
+		linx_vm_trace_vma("good-vma", regs, addr, cause, flags, vma);
 		goto good_area;
+	}
 	if (unlikely(!(vma->vm_flags & VM_GROWSDOWN))) {
+		linx_vm_trace_vma("vma-gap", regs, addr, cause, flags, vma);
 		tsk->thread.bad_cause = cause;
 		bad_area(regs, mm, code, addr);
 		return;
 	}
 	vma = expand_stack(mm, addr);
 	if (unlikely(!vma)) {
+		linx_vm_trace_vma("grow-fail", regs, addr, cause, flags, NULL);
 		tsk->thread.bad_cause = cause;
 		bad_area(regs, mm, code, addr);
 		return;
 	}
+	linx_vm_trace_vma("grow-ok", regs, addr, cause, flags, vma);
 
 	/*
 	 * Ok, we have a good vm_area for this memory access, so
@@ -308,6 +444,7 @@ good_area:
 	code = SEGV_ACCERR;
 
 	if (unlikely(access_error(cause, vma))) {
+		linx_vm_trace_vma("access-error", regs, addr, cause, flags, vma);
 		tsk->thread.bad_cause = cause;
 		bad_area(regs, mm, code, addr);
 		return;
@@ -319,6 +456,7 @@ good_area:
 	 * the fault.
 	 */
 	fault = handle_mm_fault(vma, addr, flags, regs);
+	linx_vm_trace_fault_result(regs, addr, cause, flags, vma, fault);
 
 	/*
 	 * If we need to retry but a fatal signal is pending, handle the
