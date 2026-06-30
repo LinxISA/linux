@@ -91,6 +91,23 @@ efault:
  */
 long strnlen_user(const char __user *str, long count)
 {
+#ifdef CONFIG_ARCH_LINX
+	long i;
+
+	if (unlikely(count <= 0))
+		return 0;
+
+	for (i = 0; i < count; i++) {
+		char c;
+
+		if (get_user(c, str + i))
+			return 0;
+		if (!c)
+			return i + 1;
+	}
+
+	return count + 1;
+#else
 	unsigned long max_addr, src_addr;
 
 	if (unlikely(count <= 0))
@@ -125,5 +142,6 @@ long strnlen_user(const char __user *str, long count)
 		}
 	}
 	return 0;
+#endif
 }
 EXPORT_SYMBOL(strnlen_user);

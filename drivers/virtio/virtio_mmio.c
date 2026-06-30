@@ -72,6 +72,10 @@
 #include <uapi/linux/virtio_mmio.h>
 #include <linux/virtio_ring.h>
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
+
 /* The alignment to use between consumer and producer parts of vring.
  * Currently hardcoded to the page size. */
 #define VIRTIO_MMIO_VRING_ALIGN		PAGE_SIZE
@@ -102,6 +106,50 @@ struct virtio_mmio_device {
 	unsigned long version;
 };
 
+#ifdef CONFIG_ARCH_LINX
+static bool linx_virtio_mmio_debug_enabled;
+
+static int __init linx_virtio_mmio_debug_setup(char *str)
+{
+	linx_virtio_mmio_debug_enabled = !str ||
+					 !(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_virtio_debug", linx_virtio_mmio_debug_setup);
+
+static void linx_virtio_mmio_debug_hex(unsigned long v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong(v);
+}
+
+static void linx_virtio_mmio_debug_features(struct virtio_mmio_device *vm_dev,
+					    u32 device, u32 transport,
+					    u64 *features)
+{
+	if (!linx_virtio_mmio_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTIO_MMIO_FEATURES base=");
+	linx_virtio_mmio_debug_hex((unsigned long)vm_dev->base);
+	linx_debug_uart_puts(" device=");
+	linx_virtio_mmio_debug_hex(device);
+	linx_debug_uart_puts(" transport=");
+	linx_virtio_mmio_debug_hex(transport);
+	linx_debug_uart_puts(" feature0=");
+	linx_virtio_mmio_debug_hex((unsigned long)features[0]);
+	linx_debug_uart_puts(" feature1=");
+	linx_virtio_mmio_debug_hex((unsigned long)features[1]);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_virtio_mmio_debug_features(struct virtio_mmio_device *vm_dev,
+						   u32 device, u32 transport,
+						   u64 *features)
+{
+}
+#endif
+
 /* Configuration interface */
 
 static void vm_get_extended_features(struct virtio_device *vdev,
@@ -114,7 +162,7 @@ static void vm_get_extended_features(struct virtio_device *vdev,
 	virtio_features_zero(features);
 
 	writel(0, vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES_SEL);
-	features[0] = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
+	feature_words[0] = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
 
 	writel(1, vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES_SEL);
 	transport_features = readl(vm_dev->base + VIRTIO_MMIO_DEVICE_FEATURES);
@@ -135,6 +183,9 @@ static void vm_get_extended_features(struct virtio_device *vdev,
 		feature_words[1] |= BIT(VIRTIO_F_RING_RESET - 32);
 	if (transport_features & BIT(VIRTIO_F_ADMIN_VQ - 32))
 		feature_words[1] |= BIT(VIRTIO_F_ADMIN_VQ - 32);
+
+	linx_virtio_mmio_debug_features(vm_dev, feature_words[0],
+					transport_features, features);
 }
 
 static u64 vm_get_features(struct virtio_device *vdev)

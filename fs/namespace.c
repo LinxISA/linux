@@ -36,6 +36,10 @@
 #include <linux/pidfs.h>
 #include <linux/nstree.h>
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
+
 #include "pnode.h"
 #include "internal.h"
 
@@ -75,6 +79,137 @@ static int __init initramfs_options_setup(char *str)
 }
 
 __setup("initramfs_options=", initramfs_options_setup);
+
+#ifdef CONFIG_ARCH_LINX
+static bool linx_mount_debug_enabled;
+
+static int __init linx_mount_debug_setup(char *str)
+{
+	linx_mount_debug_enabled = !str || !(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_mount_debug", linx_mount_debug_setup);
+
+static void linx_mount_debug_puthex(unsigned long v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong(v);
+}
+
+static void linx_mount_debug_putstr_limited(const char *s, unsigned long max)
+{
+	unsigned long i;
+
+	if (!s) {
+		linx_debug_uart_puts("<null>");
+		return;
+	}
+
+	linx_debug_uart_putc('"');
+	for (i = 0; i < max && s[i]; i++)
+		linx_debug_uart_putc(s[i]);
+	if (i == max)
+		linx_debug_uart_puts("...");
+	linx_debug_uart_putc('"');
+}
+
+static void linx_mount_debug_enter(const char __user *dev_name,
+				   const char __user *dir_name,
+				   const char __user *type,
+				   unsigned long flags,
+				   const void __user *data)
+{
+	if (!linx_mount_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_MOUNT_DEBUG enter dev=");
+	linx_mount_debug_puthex((unsigned long)dev_name);
+	linx_debug_uart_puts(" dir=");
+	linx_mount_debug_puthex((unsigned long)dir_name);
+	linx_debug_uart_puts(" type=");
+	linx_mount_debug_puthex((unsigned long)type);
+	linx_debug_uart_puts(" flags=");
+	linx_mount_debug_puthex(flags);
+	linx_debug_uart_puts(" data=");
+	linx_mount_debug_puthex((unsigned long)data);
+	linx_debug_uart_puts(" ok_dev=");
+	linx_mount_debug_puthex(dev_name ? access_ok(dev_name, 1) : 1);
+	linx_debug_uart_puts(" ok_dir=");
+	linx_mount_debug_puthex(dir_name ? access_ok(dir_name, 1) : 1);
+	linx_debug_uart_puts(" ok_type=");
+	linx_mount_debug_puthex(type ? access_ok(type, 1) : 1);
+	linx_debug_uart_puts(" ok_data=");
+	linx_mount_debug_puthex(data ? access_ok(data, 1) : 1);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_mount_debug_copy_result(const char *stage, const char *value,
+					 long ret)
+{
+	if (!linx_mount_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_MOUNT_DEBUG ");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" ret=");
+	linx_mount_debug_puthex(ret);
+	linx_debug_uart_puts(" value=");
+	linx_mount_debug_putstr_limited(value, 96);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_mount_debug_options(const void __user *data, unsigned left,
+				     unsigned offset, const char *copy)
+{
+	if (!linx_mount_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_MOUNT_DEBUG copy_options data=");
+	linx_mount_debug_puthex((unsigned long)data);
+	linx_debug_uart_puts(" left=");
+	linx_mount_debug_puthex(left);
+	linx_debug_uart_puts(" offset=");
+	linx_mount_debug_puthex(offset);
+	linx_debug_uart_puts(" value=");
+	linx_mount_debug_putstr_limited(left == PAGE_SIZE ? NULL : copy, 128);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_mount_debug_ret(const char *stage, long ret)
+{
+	if (!linx_mount_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_MOUNT_DEBUG ");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" ret=");
+	linx_mount_debug_puthex(ret);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_mount_debug_enter(const char __user *dev_name,
+					  const char __user *dir_name,
+					  const char __user *type,
+					  unsigned long flags,
+					  const void __user *data)
+{
+}
+
+static inline void linx_mount_debug_copy_result(const char *stage,
+						const char *value, long ret)
+{
+}
+
+static inline void linx_mount_debug_options(const void __user *data,
+					    unsigned left, unsigned offset,
+					    const char *copy)
+{
+}
+
+static inline void linx_mount_debug_ret(const char *stage, long ret)
+{
+}
+#endif
 
 static u64 event;
 static DEFINE_XARRAY_FLAGS(mnt_id_xa, XA_FLAGS_ALLOC);
@@ -3949,6 +4084,7 @@ static void *copy_mount_options(const void __user * data)
 		left--;
 		offset++;
 	}
+	linx_mount_debug_options(data, left, offset, copy);
 
 	if (left == PAGE_SIZE) {
 		kfree(copy);
@@ -4063,9 +4199,12 @@ int do_mount(const char *dev_name, const char __user *dir_name,
 	int ret;
 
 	ret = user_path_at(AT_FDCWD, dir_name, LOOKUP_FOLLOW, &path);
+	linx_mount_debug_ret("user_path_at", ret);
 	if (ret)
 		return ret;
-	return path_mount(dev_name, &path, type_page, flags, data_page);
+	ret = path_mount(dev_name, &path, type_page, flags, data_page);
+	linx_mount_debug_ret("path_mount", ret);
+	return ret;
 }
 
 static struct ucounts *inc_mnt_namespaces(struct user_namespace *ns)
@@ -4238,22 +4377,34 @@ SYSCALL_DEFINE5(mount, char __user *, dev_name, char __user *, dir_name,
 	char *kernel_dev;
 	void *options;
 
+	linx_mount_debug_enter(dev_name, dir_name, type, flags, data);
+
 	kernel_type = copy_mount_string(type);
 	ret = PTR_ERR(kernel_type);
-	if (IS_ERR(kernel_type))
+	if (IS_ERR(kernel_type)) {
+		linx_mount_debug_copy_result("copy_type", NULL, ret);
 		goto out_type;
+	}
+	linx_mount_debug_copy_result("copy_type", kernel_type, 0);
 
 	kernel_dev = copy_mount_string(dev_name);
 	ret = PTR_ERR(kernel_dev);
-	if (IS_ERR(kernel_dev))
+	if (IS_ERR(kernel_dev)) {
+		linx_mount_debug_copy_result("copy_dev", NULL, ret);
 		goto out_dev;
+	}
+	linx_mount_debug_copy_result("copy_dev", kernel_dev, 0);
 
 	options = copy_mount_options(data);
 	ret = PTR_ERR(options);
-	if (IS_ERR(options))
+	if (IS_ERR(options)) {
+		linx_mount_debug_copy_result("copy_data", NULL, ret);
 		goto out_data;
+	}
+	linx_mount_debug_copy_result("copy_data", options, 0);
 
 	ret = do_mount(kernel_dev, dir_name, kernel_type, flags, options);
+	linx_mount_debug_ret("do_mount", ret);
 
 	kfree(options);
 out_data:

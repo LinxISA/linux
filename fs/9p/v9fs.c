@@ -11,6 +11,7 @@
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/linx_bringup.h>
 #include <linux/sched.h>
 #include <linux/cred.h>
 #include <linux/parser.h>
@@ -700,6 +701,13 @@ out_cache:
 
 	return err;
 }
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_v9fs_init(void)
+{
+	return init_v9fs();
+}
+#endif
 
 /**
  * exit_v9fs - shutdown module

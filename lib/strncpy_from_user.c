@@ -112,6 +112,30 @@ efault:
  */
 long strncpy_from_user(char *dst, const char __user *src, long count)
 {
+#ifdef CONFIG_ARCH_LINX
+	long i;
+
+	might_fault();
+	if (should_fail_usercopy())
+		return -EFAULT;
+	if (unlikely(count <= 0))
+		return 0;
+
+	kasan_check_write(dst, count);
+	check_object_size(dst, count, false);
+
+	for (i = 0; i < count; i++) {
+		char c;
+
+		if (get_user(c, src + i))
+			return -EFAULT;
+		dst[i] = c;
+		if (!c)
+			return i;
+	}
+
+	return count;
+#else
 	unsigned long max_addr, src_addr;
 
 	might_fault();
@@ -152,5 +176,6 @@ long strncpy_from_user(char *dst, const char __user *src, long count)
 		}
 	}
 	return -EFAULT;
+#endif
 }
 EXPORT_SYMBOL(strncpy_from_user);

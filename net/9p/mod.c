@@ -20,6 +20,7 @@
 #include <net/9p/client.h>
 #include <net/9p/transport.h>
 #include <linux/list.h>
+#include <linux/linx_bringup.h>
 #include <linux/spinlock.h>
 
 #ifdef CONFIG_NET_9P_DEBUG
@@ -189,6 +190,13 @@ static int __init init_p9(void)
 
 	return ret;
 }
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_p9_init(void)
+{
+	return init_p9();
+}
+#endif
 
 /**
  * exit_p9 - shutdown module

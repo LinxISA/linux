@@ -2105,6 +2105,9 @@ static void __init linx_bringup_init_storage(void)
 	linx_bringup_log_init_result("virtio_mmio_init", linx_virtio_mmio_init());
 	linx_bringup_log_init_result("virtio_mmio_populate_of",
 				      linx_virtio_mmio_populate_of());
+	linx_bringup_log_init_result("p9_init", linx_p9_init());
+	linx_bringup_log_init_result("v9fs_init", linx_v9fs_init());
+	linx_bringup_log_init_result("p9_virtio_init", linx_p9_virtio_init());
 }
 
 static void __init linx_bringup_init_userspace_io(void)

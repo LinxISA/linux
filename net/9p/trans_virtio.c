@@ -19,6 +19,7 @@
 #include <linux/ipv6.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
+#include <linux/linx_bringup.h>
 #include <linux/un.h>
 #include <linux/uaccess.h>
 #include <linux/inet.h>
@@ -820,6 +821,13 @@ static int __init p9_virtio_init(void)
 
 	return rc;
 }
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_p9_virtio_init(void)
+{
+	return p9_virtio_init();
+}
+#endif
 
 static void __exit p9_virtio_cleanup(void)
 {

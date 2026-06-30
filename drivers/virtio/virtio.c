@@ -9,8 +9,101 @@
 #include <linux/of.h>
 #include <uapi/linux/virtio_ids.h>
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
+
 /* Unique numbering for virtio devices. */
 static DEFINE_IDA(virtio_index_ida);
+
+#ifdef CONFIG_ARCH_LINX
+static bool linx_virtio_debug_enabled;
+
+static int __init linx_virtio_debug_setup(char *str)
+{
+	linx_virtio_debug_enabled = !str || !(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_virtio_debug", linx_virtio_debug_setup);
+
+static void linx_virtio_debug_hex(unsigned long v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong(v);
+}
+
+static void linx_virtio_debug_u64(u64 v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong((unsigned long)(v >> 32));
+	linx_debug_uart_puthex_ulong((unsigned long)(v & 0xffffffff));
+}
+
+static void linx_virtio_debug_features(struct virtio_device *dev,
+				       struct virtio_driver *drv,
+				       const u64 *device_features,
+				       const u64 *driver_features)
+{
+	if (!linx_virtio_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTIO_DEBUG probe driver=");
+	linx_debug_uart_puts(drv->driver.name ? drv->driver.name : "<anon>");
+	linx_debug_uart_puts(" device=");
+	linx_virtio_debug_hex(dev->id.device);
+	linx_debug_uart_puts(" vendor=");
+	linx_virtio_debug_hex(dev->id.vendor);
+	linx_debug_uart_puts(" feature_table_size=");
+	linx_virtio_debug_hex(drv->feature_table_size);
+	linx_debug_uart_puts(" first_feature=");
+	linx_virtio_debug_hex(drv->feature_table_size ? drv->feature_table[0] :
+			       0xffffffff);
+	linx_debug_uart_puts(" device_features=");
+	linx_virtio_debug_u64(device_features[1]);
+	linx_debug_uart_puts(":");
+	linx_virtio_debug_u64(device_features[0]);
+	linx_debug_uart_puts(" driver_features=");
+	linx_virtio_debug_u64(driver_features[1]);
+	linx_debug_uart_puts(":");
+	linx_virtio_debug_u64(driver_features[0]);
+	linx_debug_uart_puts(" selected=");
+	linx_virtio_debug_u64(dev->features_array[1]);
+	linx_debug_uart_puts(":");
+	linx_virtio_debug_u64(dev->features_array[0]);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_virtio_debug_fail(struct virtio_device *dev,
+				   struct virtio_driver *drv, int err)
+{
+	if (!linx_virtio_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTIO_DEBUG fail driver=");
+	linx_debug_uart_puts(drv->driver.name ? drv->driver.name : "<anon>");
+	linx_debug_uart_puts(" err=");
+	linx_virtio_debug_hex((unsigned long)err);
+	linx_debug_uart_puts(" status=");
+	linx_virtio_debug_hex(dev->config->get_status(dev));
+	linx_debug_uart_puts(" selected=");
+	linx_virtio_debug_u64(dev->features_array[1]);
+	linx_debug_uart_puts(":");
+	linx_virtio_debug_u64(dev->features_array[0]);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_virtio_debug_features(struct virtio_device *dev,
+					      struct virtio_driver *drv,
+					      const u64 *device_features,
+					      const u64 *driver_features)
+{
+}
+
+static inline void linx_virtio_debug_fail(struct virtio_device *dev,
+					  struct virtio_driver *drv, int err)
+{
+}
+#endif
 
 static ssize_t device_show(struct device *_d,
 			   struct device_attribute *attr, char *buf)
@@ -321,6 +414,8 @@ static int virtio_dev_probe(struct device *_d)
 		if (virtio_features_test_bit(device_features, i))
 			__virtio_set_bit(dev, i);
 
+	linx_virtio_debug_features(dev, drv, device_features, driver_features);
+
 	err = dev->config->finalize_features(dev);
 	if (err)
 		goto err;
@@ -361,6 +456,7 @@ static int virtio_dev_probe(struct device *_d)
 	return 0;
 
 err:
+	linx_virtio_debug_fail(dev, drv, err);
 	virtio_add_status(dev, VIRTIO_CONFIG_S_FAILED);
 	return err;
 
