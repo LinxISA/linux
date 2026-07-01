@@ -1299,6 +1299,24 @@ out_free_interp:
 					load_bias &= ~(alignment - 1);
 				elf_flags |= MAP_FIXED_NOREPLACE;
 			} else {
+#ifdef CONFIG_ARCH_LINX
+				/*
+				 * Linx SPEC and initramfs workloads use static PIE
+				 * ET_DYN images as normal programs, not as dynamic
+				 * loaders.  Loading them from the top-down mmap
+				 * area puts executable text close to stack/mmap
+				 * pressure in the reduced Linx map window.  Keep
+				 * the image below the static-PIE brk reservation
+				 * at ELF_ET_DYN_BASE while avoiding mmap-region
+				 * collisions.
+				 */
+				load_bias = ELF_ET_DYN_BASE / 2;
+				if (current->flags & PF_RANDOMIZE)
+					load_bias += arch_mmap_rnd();
+				if (alignment)
+					load_bias &= ~(alignment - 1);
+				elf_flags |= MAP_FIXED_NOREPLACE;
+#else
 				/*
 				 * For ET_DYN without PT_INTERP, we rely on
 				 * the architectures's (potentially ASLR) mmap
@@ -1331,6 +1349,7 @@ out_free_interp:
 					elf_flags |= MAP_FIXED_NOREPLACE;
 				} else
 					load_bias = 0;
+#endif
 			}
 
 			/*

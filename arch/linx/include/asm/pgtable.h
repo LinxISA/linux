@@ -423,6 +423,8 @@ static inline void set_pte(pte_t *ptep, pte_t pteval)
 
 void flush_icache_pte(struct mm_struct *mm, pte_t pte);
 
+#define PFN_PTE_SHIFT		_PAGE_PFN_SHIFT
+
 static inline void __set_pte_at(struct mm_struct *mm,
 	unsigned long addr, pte_t *ptep, pte_t pteval)
 {
@@ -432,12 +434,26 @@ static inline void __set_pte_at(struct mm_struct *mm,
 	set_pte(ptep, pteval);
 }
 
-#define PFN_PTE_SHIFT		_PAGE_PFN_SHIFT
-
 static inline void set_pte_at(struct mm_struct *mm,
 	unsigned long addr, pte_t *ptep, pte_t pteval)
 {
 	__set_pte_at(mm, addr, ptep, pteval);
+}
+
+#define set_ptes set_ptes
+static inline void set_ptes(struct mm_struct *mm, unsigned long addr,
+			    pte_t *ptep, pte_t pteval, unsigned int nr)
+{
+	page_table_check_ptes_set(mm, ptep, pteval, nr);
+
+	for (;;) {
+		__set_pte_at(mm, addr, ptep, pteval);
+		if (--nr == 0)
+			break;
+		addr += PAGE_SIZE;
+		ptep++;
+		pteval = __pte(pte_val(pteval) + (1UL << PFN_PTE_SHIFT));
+	}
 }
 
 static inline void pte_clear(struct mm_struct *mm,

@@ -16,10 +16,26 @@
  * This decides where the kernel will search for a free chunk of vm
  * space during mmap's.
  */
-#define TASK_UNMAPPED_BASE	PAGE_ALIGN(TASK_SIZE / 3)
+#ifdef CONFIG_LINX_INTC
+#define DEFAULT_MAP_WINDOW	TASK_SIZE_MIN
+#else
+#define DEFAULT_MAP_WINDOW	TASK_SIZE
+#endif
 
-#define STACK_TOP		TASK_SIZE
-#define STACK_TOP_MAX		STACK_TOP
+#define arch_get_mmap_end(addr, len, flags)			\
+({								\
+	STACK_TOP_MAX;						\
+})
+
+#define arch_get_mmap_base(addr, base)				\
+({								\
+	base;							\
+})
+
+#define TASK_UNMAPPED_BASE	PAGE_ALIGN(DEFAULT_MAP_WINDOW / 3)
+
+#define STACK_TOP		DEFAULT_MAP_WINDOW
+#define STACK_TOP_MAX		TASK_SIZE
 #define STACK_ALIGN		16
 
 #ifndef __ASSEMBLY__
