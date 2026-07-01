@@ -27,6 +27,10 @@
 #include <linux/raid/detect.h>
 #include <uapi/linux/mount.h>
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
+
 #include "do_mounts.h"
 
 int root_mountflags = MS_RDONLY | MS_SILENT;
@@ -34,6 +38,62 @@ static char __initdata saved_root_name[64];
 static int root_wait;
 
 dev_t ROOT_DEV;
+
+#ifdef CONFIG_ARCH_LINX
+static bool __initdata linx_mount_debug_enabled;
+
+static int __init linx_mount_debug_setup(char *str)
+{
+	linx_mount_debug_enabled = !str ||
+		str[0] == '\0' || str[0] == '1' ||
+		str[0] == 'y' || str[0] == 'Y';
+	return 0;
+}
+early_param("linx_mount_debug", linx_mount_debug_setup);
+
+static void __init linx_mount_debug_string(const char *s)
+{
+	unsigned int i;
+
+	linx_debug_uart_putc('"');
+	if (!s) {
+		linx_debug_uart_puts("<null>");
+	} else {
+		for (i = 0; s[i] && i < 80; i++)
+			linx_debug_uart_putc(s[i]);
+		if (s[i])
+			linx_debug_uart_puts("...");
+	}
+	linx_debug_uart_putc('"');
+}
+
+static void __init linx_mount_debug_try(const char *stage,
+					const char *name,
+					const char *fs,
+					long ret)
+{
+	if (!linx_mount_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_MOUNT_ROOT stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" name=");
+	linx_mount_debug_string(name);
+	linx_debug_uart_puts(" fs=");
+	linx_mount_debug_string(fs);
+	linx_debug_uart_puts(" ret=");
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong((unsigned long)ret);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_mount_debug_try(const char *stage,
+					const char *name,
+					const char *fs,
+					long ret)
+{
+}
+#endif
 
 static int __init load_ramdisk(char *str)
 {
@@ -185,7 +245,9 @@ static int __init do_mount_root(const char *name, const char *fs,
 		strscpy_pad(data_page, data, PAGE_SIZE);
 	}
 
+	linx_mount_debug_try("try", name, fs, 0);
 	ret = init_mount(name, "/root", fs, flags, data_page);
+	linx_mount_debug_try("init-mount", name, fs, ret);
 	if (ret)
 		goto out;
 

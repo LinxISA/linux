@@ -18,6 +18,10 @@
 #include <linux/vmalloc.h>
 #include <uapi/linux/virtio_ring.h>
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+#endif
+
 #define PART_BITS 4
 #define VQ_NAME_LEN 16
 #define MAX_DISCARD_SEGMENTS 256u
@@ -46,6 +50,41 @@ static int major;
 static DEFINE_IDA(vd_index_ida);
 
 static struct workqueue_struct *virtblk_wq;
+
+#ifdef CONFIG_ARCH_LINX
+static bool linx_virtblk_debug_enabled;
+
+static int __init linx_virtblk_debug_setup(char *str)
+{
+	linx_virtblk_debug_enabled = !str ||
+		!(str[0] == '0' && str[1] == '\0');
+	return 0;
+}
+early_param("linx_virtblk_debug", linx_virtblk_debug_setup);
+
+static void linx_virtblk_debug_hex(unsigned long v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong(v);
+}
+
+static void linx_virtblk_debug_stage(const char *stage, long value)
+{
+	if (!linx_virtblk_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTBLK stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" value=");
+	linx_virtblk_debug_hex((unsigned long)value);
+	linx_debug_uart_puts("\n");
+}
+
+#else
+static inline void linx_virtblk_debug_stage(const char *stage, long value)
+{
+}
+#endif
 
 struct virtio_blk_vq {
 	struct virtqueue *vq;
@@ -85,6 +124,77 @@ struct virtio_blk {
 	/* For zoned device */
 	unsigned int zone_sectors;
 };
+
+#ifdef CONFIG_ARCH_LINX
+static void linx_virtblk_debug_probe(const char *stage, struct virtio_blk *vblk,
+				     unsigned int queue_depth, int err)
+{
+	if (!linx_virtblk_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTBLK stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" err=");
+	linx_virtblk_debug_hex((unsigned long)err);
+	linx_debug_uart_puts(" num_vqs=");
+	linx_virtblk_debug_hex(vblk ? vblk->num_vqs : 0);
+	linx_debug_uart_puts(" queue_depth=");
+	linx_virtblk_debug_hex(queue_depth);
+	linx_debug_uart_puts(" nr_hw_queues=");
+	linx_virtblk_debug_hex(vblk ? vblk->tag_set.nr_hw_queues : 0);
+	linx_debug_uart_puts(" nr_maps=");
+	linx_virtblk_debug_hex(vblk ? vblk->tag_set.nr_maps : 0);
+	linx_debug_uart_puts("\n");
+}
+
+static void linx_virtblk_debug_limits(const char *stage,
+				      struct queue_limits *lim)
+{
+	if (!linx_virtblk_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_VIRTBLK_LIMITS stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" features=");
+	linx_virtblk_debug_hex((unsigned long)lim->features);
+	linx_debug_uart_puts(" max_hw_sec=");
+	linx_virtblk_debug_hex(lim->max_hw_sectors);
+	linx_debug_uart_puts(" max_seg_size=");
+	linx_virtblk_debug_hex(lim->max_segment_size);
+	linx_debug_uart_puts(" max_segments=");
+	linx_virtblk_debug_hex(lim->max_segments);
+	linx_debug_uart_puts(" logical=");
+	linx_virtblk_debug_hex(lim->logical_block_size);
+	linx_debug_uart_puts(" physical=");
+	linx_virtblk_debug_hex(lim->physical_block_size);
+	linx_debug_uart_puts(" io_min=");
+	linx_virtblk_debug_hex(lim->io_min);
+	linx_debug_uart_puts(" io_opt=");
+	linx_virtblk_debug_hex(lim->io_opt);
+	linx_debug_uart_puts(" discard_hw=");
+	linx_virtblk_debug_hex(lim->max_hw_discard_sectors);
+	linx_debug_uart_puts(" discard_segments=");
+	linx_virtblk_debug_hex(lim->max_discard_segments);
+	linx_debug_uart_puts(" discard_gran=");
+	linx_virtblk_debug_hex(lim->discard_granularity);
+	linx_debug_uart_puts(" wzeroes=");
+	linx_virtblk_debug_hex(lim->max_write_zeroes_sectors);
+	linx_debug_uart_puts(" dma_align=");
+	linx_virtblk_debug_hex(lim->dma_alignment);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_virtblk_debug_probe(const char *stage,
+					    struct virtio_blk *vblk,
+					    unsigned int queue_depth, int err)
+{
+}
+
+static inline void linx_virtblk_debug_limits(const char *stage,
+					     struct queue_limits *lim)
+{
+}
+#endif
 
 struct virtblk_req {
 	/* Out header */
@@ -1438,21 +1548,28 @@ static int virtblk_probe(struct virtio_device *vdev)
 	int err, index;
 	unsigned int queue_depth;
 
+	linx_virtblk_debug_stage("probe-entry", 0);
+
 	if (!vdev->config->get) {
 		dev_err(&vdev->dev, "%s failure: config access disabled\n",
 			__func__);
+		linx_virtblk_debug_stage("no-config-get", -EINVAL);
 		return -EINVAL;
 	}
 
 	err = ida_alloc_range(&vd_index_ida, 0,
 			      minor_to_index(1 << MINORBITS) - 1, GFP_KERNEL);
-	if (err < 0)
+	if (err < 0) {
+		linx_virtblk_debug_stage("ida-alloc-fail", err);
 		goto out;
+	}
 	index = err;
+	linx_virtblk_debug_stage("ida-alloc-ok", index);
 
 	vdev->priv = vblk = kmalloc(sizeof(*vblk), GFP_KERNEL);
 	if (!vblk) {
 		err = -ENOMEM;
+		linx_virtblk_debug_stage("alloc-vblk-fail", err);
 		goto out_free_index;
 	}
 
@@ -1463,8 +1580,13 @@ static int virtblk_probe(struct virtio_device *vdev)
 	INIT_WORK(&vblk->config_work, virtblk_config_changed_work);
 
 	err = init_vq(vblk);
-	if (err)
+	if (err) {
+		linx_virtblk_debug_probe("init-vq-fail", vblk, 0, err);
 		goto out_free_vblk;
+	}
+	linx_virtblk_debug_probe("init-vq-ok", vblk,
+				 vblk->vqs[0].vq ? vblk->vqs[0].vq->num_free :
+				 0, 0);
 
 	/* Default queue sizing is to fill the ring. */
 	if (!virtblk_queue_depth) {
@@ -1475,6 +1597,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 	} else {
 		queue_depth = virtblk_queue_depth;
 	}
+	linx_virtblk_debug_probe("queue-depth", vblk, queue_depth, 0);
 
 	memset(&vblk->tag_set, 0, sizeof(vblk->tag_set));
 	vblk->tag_set.ops = &virtio_mq_ops;
@@ -1488,23 +1611,38 @@ static int virtblk_probe(struct virtio_device *vdev)
 	vblk->tag_set.nr_maps = 1;
 	if (vblk->io_queues[HCTX_TYPE_POLL])
 		vblk->tag_set.nr_maps = 3;
+	linx_virtblk_debug_probe("tag-set-ready", vblk, queue_depth, 0);
 
 	err = blk_mq_alloc_tag_set(&vblk->tag_set);
-	if (err)
+	if (err) {
+		linx_virtblk_debug_probe("tag-set-fail", vblk, queue_depth,
+					 err);
 		goto out_free_vq;
+	}
+	linx_virtblk_debug_probe("tag-set-ok", vblk, queue_depth, 0);
 
 	err = virtblk_read_limits(vblk, &lim);
-	if (err)
+	if (err) {
+		linx_virtblk_debug_probe("read-limits-fail", vblk,
+					 queue_depth, err);
 		goto out_free_tags;
+	}
+	linx_virtblk_debug_probe("read-limits-ok", vblk, queue_depth, 0);
 
 	if (virtblk_get_cache_mode(vdev))
 		lim.features |= BLK_FEAT_WRITE_CACHE;
 
+	linx_virtblk_debug_limits("before-alloc-disk", &lim);
 	vblk->disk = blk_mq_alloc_disk(&vblk->tag_set, &lim, vblk);
 	if (IS_ERR(vblk->disk)) {
 		err = PTR_ERR(vblk->disk);
+		linx_virtblk_debug_limits("after-alloc-disk-fail", &lim);
+		linx_virtblk_debug_probe("alloc-disk-fail", vblk,
+					 queue_depth, err);
 		goto out_free_tags;
 	}
+	linx_virtblk_debug_limits("after-alloc-disk-ok", &lim);
+	linx_virtblk_debug_probe("alloc-disk-ok", vblk, queue_depth, 0);
 
 	virtblk_name_format("vd", index, vblk->disk->disk_name, DISK_NAME_LEN);
 
@@ -1524,6 +1662,7 @@ static int virtblk_probe(struct virtio_device *vdev)
 
 	virtblk_update_capacity(vblk, false);
 	virtio_device_ready(vdev);
+	linx_virtblk_debug_probe("device-ready", vblk, queue_depth, 0);
 
 	/*
 	 * All steps that follow use the VQs therefore they need to be
@@ -1537,8 +1676,12 @@ static int virtblk_probe(struct virtio_device *vdev)
 	}
 
 	err = device_add_disk(&vdev->dev, vblk->disk, virtblk_attr_groups);
-	if (err)
+	if (err) {
+		linx_virtblk_debug_probe("device-add-disk-fail", vblk,
+					 queue_depth, err);
 		goto out_cleanup_disk;
+	}
+	linx_virtblk_debug_probe("probe-ok", vblk, queue_depth, 0);
 
 	return 0;
 

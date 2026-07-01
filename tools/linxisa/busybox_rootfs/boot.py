@@ -140,7 +140,9 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     boot_ready_seen = False
     prompt = b"# "
     deadline = time.monotonic() + timeout_s
+    started_at = time.monotonic()
     last_output_at = time.monotonic()
+    blind_send_after_s = float(os.environ.get("LINX_BUSYBOX_BOOT_BLIND_SEND_AFTER", "2.0"))
 
     def try_send_script() -> None:
         nonlocal script_sent
@@ -185,6 +187,13 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
             boot_ready_seen
             and not script_sent
             and (time.monotonic() - last_output_at) >= 0.5
+        ):
+            try_send_script()
+
+        if (
+            not script_sent
+            and blind_send_after_s > 0.0
+            and (time.monotonic() - started_at) >= blind_send_after_s
         ):
             try_send_script()
 

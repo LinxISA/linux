@@ -41,6 +41,49 @@
 #include "xattr.h"
 #include "acl.h"
 
+#ifdef CONFIG_ARCH_LINX
+#include <asm/debug_uart.h>
+
+static bool linx_ext2_debug_enabled;
+
+static int __init linx_ext2_debug_setup(char *str)
+{
+	linx_ext2_debug_enabled = !str ||
+		str[0] == '\0' || str[0] == '1' ||
+		str[0] == 'y' || str[0] == 'Y';
+	return 0;
+}
+early_param("linx_ext2_debug", linx_ext2_debug_setup);
+
+static void linx_ext2_debug_hex(unsigned long v)
+{
+	linx_debug_uart_puts("0x");
+	linx_debug_uart_puthex_ulong(v);
+}
+
+static void linx_ext2_debug3(const char *stage, unsigned long a,
+			     unsigned long b, unsigned long c)
+{
+	if (!linx_ext2_debug_enabled)
+		return;
+
+	linx_debug_uart_puts("LINX_EXT2 stage=");
+	linx_debug_uart_puts(stage);
+	linx_debug_uart_puts(" a=");
+	linx_ext2_debug_hex(a);
+	linx_debug_uart_puts(" b=");
+	linx_ext2_debug_hex(b);
+	linx_debug_uart_puts(" c=");
+	linx_ext2_debug_hex(c);
+	linx_debug_uart_puts("\n");
+}
+#else
+static inline void linx_ext2_debug3(const char *stage, unsigned long a,
+				    unsigned long b, unsigned long c)
+{
+}
+#endif
+
 static void ext2_write_super(struct super_block *sb);
 static int ext2_statfs (struct dentry * dentry, struct kstatfs * buf);
 static int ext2_sync_fs(struct super_block *sb, int wait);
@@ -894,6 +937,9 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 	__le32 features;
 	int err;
 
+	linx_ext2_debug3("fill-enter", sb_block, sb->s_blocksize,
+			 sb_bdev_nr_blocks(sb));
+
 	sbi = kzalloc(sizeof(*sbi), GFP_KERNEL);
 	if (!sbi)
 		return -ENOMEM;
@@ -922,8 +968,11 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 	blocksize = sb_min_blocksize(sb, BLOCK_SIZE);
 	if (!blocksize) {
 		ext2_msg(sb, KERN_ERR, "error: unable to set blocksize");
+		linx_ext2_debug3("min-blocksize-fail", 0, 0, 0);
 		goto failed_sbi;
 	}
+	linx_ext2_debug3("min-blocksize", blocksize, sb->s_blocksize,
+			 sb_bdev_nr_blocks(sb));
 
 	/*
 	 * If the superblock doesn't start on a hardware sector boundary,
@@ -938,8 +987,11 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 
 	if (!(bh = sb_bread(sb, logic_sb_block))) {
 		ext2_msg(sb, KERN_ERR, "error: unable to read superblock");
+		linx_ext2_debug3("sb-bread-fail", logic_sb_block, blocksize,
+				 offset);
 		goto failed_sbi;
 	}
+	linx_ext2_debug3("sb-bread-ok", logic_sb_block, bh->b_size, offset);
 	/*
 	 * Note: s_es must be initialized as soon as possible because
 	 *       some ext2 macro-instructions depend on its value
@@ -947,6 +999,12 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 	es = (struct ext2_super_block *) (((char *)bh->b_data) + offset);
 	sbi->s_es = es;
 	sb->s_magic = le16_to_cpu(es->s_magic);
+	linx_ext2_debug3("sb-fields", sb->s_magic,
+			 le32_to_cpu(es->s_inodes_count),
+			 le32_to_cpu(es->s_blocks_count));
+	linx_ext2_debug3("sb-fields2", le32_to_cpu(es->s_log_block_size),
+			 le32_to_cpu(es->s_first_data_block),
+			 le16_to_cpu(es->s_inode_size));
 
 	if (sb->s_magic != EXT2_SUPER_MAGIC)
 		goto cantfind_ext2;
@@ -1019,10 +1077,17 @@ static int ext2_fill_super(struct super_block *sb, struct fs_context *fc)
 		if(!bh) {
 			ext2_msg(sb, KERN_ERR, "error: couldn't read"
 				"superblock on 2nd try");
+			linx_ext2_debug3("sb-bread2-fail", logic_sb_block,
+					 blocksize, offset);
 			goto failed_sbi;
 		}
 		es = (struct ext2_super_block *) (((char *)bh->b_data) + offset);
 		sbi->s_es = es;
+		linx_ext2_debug3("sb-bread2-ok", logic_sb_block, bh->b_size,
+				 offset);
+		linx_ext2_debug3("sb-fields2b", le16_to_cpu(es->s_magic),
+				 le32_to_cpu(es->s_inodes_count),
+				 le32_to_cpu(es->s_blocks_count));
 		if (es->s_magic != cpu_to_le16(EXT2_SUPER_MAGIC)) {
 			ext2_msg(sb, KERN_ERR, "error: magic mismatch");
 			goto failed_mount;
@@ -1239,6 +1304,7 @@ cantfind_ext2:
 		ext2_msg(sb, KERN_ERR,
 			"error: can't find an ext2 filesystem on dev %s.",
 			sb->s_id);
+	linx_ext2_debug3("cantfind", sb->s_magic, logic_sb_block, offset);
 	goto failed_mount;
 failed_mount3:
 	ext2_xattr_destroy_cache(sbi->s_ea_block_cache);
@@ -1254,6 +1320,8 @@ failed_mount_group_desc:
 failed_mount:
 	brelse(bh);
 failed_sbi:
+	linx_ext2_debug3("fail", (unsigned long)ret, sb->s_blocksize,
+			 sb_bdev_nr_blocks(sb));
 	fs_put_dax(sbi->s_daxdev, NULL);
 	sb->s_fs_info = NULL;
 	kfree(sbi->s_blockgroup_lock);
