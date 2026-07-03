@@ -68,11 +68,22 @@ static void linx_vm_trace_puthex(const char *name, unsigned long value)
 	linx_debug_uart_puthex_ulong(value);
 }
 
+static unsigned long linx_vm_trace_fault_pgoff(struct vm_area_struct *vma,
+					       unsigned long addr)
+{
+	if (!vma || addr < vma->vm_start)
+		return 0;
+
+	return vma->vm_pgoff + ((addr - vma->vm_start) >> PAGE_SHIFT);
+}
+
 static void linx_vm_trace_uart(const char *stage, struct pt_regs *regs,
 			       unsigned long addr, unsigned long cause,
 			       unsigned int flags, struct vm_area_struct *vma,
 			       vm_fault_t fault, bool have_fault)
 {
+	unsigned long fault_pgoff = linx_vm_trace_fault_pgoff(vma, addr);
+
 	linx_debug_uart_puts("LINX_VM_FAULT stage=");
 	linx_debug_uart_puts(stage);
 	linx_debug_uart_puts(" ");
@@ -100,6 +111,10 @@ static void linx_vm_trace_uart(const char *stage, struct pt_regs *regs,
 		linx_vm_trace_puthex("vm_flags", vma->vm_flags);
 		linx_debug_uart_puts(" ");
 		linx_vm_trace_puthex("page_prot", pgprot_val(vma->vm_page_prot));
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("vm_pgoff", vma->vm_pgoff);
+		linx_debug_uart_puts(" ");
+		linx_vm_trace_puthex("fault_pgoff", fault_pgoff);
 	} else {
 		linx_debug_uart_puts(" vma=none");
 	}
@@ -120,11 +135,16 @@ static void linx_vm_trace_vma(const char *stage, struct pt_regs *regs,
 	linx_vm_trace_uart(stage, regs, addr, cause, flags, vma, 0, false);
 
 	if (vma) {
-		pr_info("linx: vm-fault stage=%s pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx\n",
+		unsigned long fault_pgoff =
+			linx_vm_trace_fault_pgoff(vma, addr);
+
+		pr_info("linx: vm-fault stage=%s pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx vm_pgoff=%#lx fault_pgoff=%#lx file=%px\n",
 			stage, current->pid, current->comm, addr, cause, flags,
 			regs->tpc, regs->bpc, regs->sp, vma->vm_start,
 			vma->vm_end, (unsigned long)vma->vm_flags,
-			pgprot_val(vma->vm_page_prot));
+			pgprot_val(vma->vm_page_prot),
+			(unsigned long)vma->vm_pgoff, fault_pgoff,
+			(void *)vma->vm_file);
 	} else {
 		pr_info("linx: vm-fault stage=%s pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=none\n",
 			stage, current->pid, current->comm, addr, cause, flags,
@@ -145,11 +165,13 @@ static void linx_vm_trace_fault_result(struct pt_regs *regs,
 	linx_vm_trace_uart("handled", regs, addr, cause, flags, vma, fault,
 			   true);
 
-	pr_info("linx: vm-fault stage=handled pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x fault=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx\n",
+	pr_info("linx: vm-fault stage=handled pid=%d comm=%s addr=%#lx cause=%#lx flags=%#x fault=%#x tpc=%#lx bpc=%#lx sp=%#lx vma=%#lx-%#lx vm_flags=%#lx page_prot=%#lx vm_pgoff=%#lx fault_pgoff=%#lx file=%px\n",
 		current->pid, current->comm, addr, cause, flags,
 		(unsigned int)fault, regs->tpc, regs->bpc, regs->sp,
 		vma->vm_start, vma->vm_end, (unsigned long)vma->vm_flags,
-		pgprot_val(vma->vm_page_prot));
+		pgprot_val(vma->vm_page_prot),
+		(unsigned long)vma->vm_pgoff,
+		linx_vm_trace_fault_pgoff(vma, addr), (void *)vma->vm_file);
 }
 
 static void die_kernel_fault(const char *msg, unsigned long addr,
