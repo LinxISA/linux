@@ -388,8 +388,7 @@ static inline void update_mmu_cache_range(struct vm_fault *vmf,
 	 * Relying on flush_tlb_fix_spurious_fault would suffice, but
 	 * the extra traps reduce performance.  So, eagerly SFENCE.VMA.
 	 */
-	while (nr--)
-		local_flush_tlb_page(address + nr * PAGE_SIZE);
+	local_flush_tlb_range_pages(address, nr);
 }
 #define update_mmu_cache(vma, addr, ptep) \
 	update_mmu_cache_range(NULL, vma, addr, ptep, 1)
@@ -497,6 +496,9 @@ static inline int ptep_test_and_clear_young(struct vm_area_struct *vma,
 static inline void ptep_set_wrprotect(struct mm_struct *mm,
 				      unsigned long address, pte_t *ptep)
 {
+	if (!pte_write(*ptep))
+		return;
+
 	atomic_long_and(~(unsigned long)_PAGE_WRITE, (atomic_long_t *)ptep);
 	local_flush_tlb_page(address);
 }

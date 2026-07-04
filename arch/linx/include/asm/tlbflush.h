@@ -8,6 +8,7 @@
 #define _ASM_RISCV_TLBFLUSH_H
 
 #include <linux/mm_types.h>
+#include <linux/sizes.h>
 #include <asm/smp.h>
 
 #ifdef CONFIG_MMU
@@ -43,9 +44,34 @@ static inline void local_flush_tlb_page(unsigned long addr) //临时按照local_
 }
 #endif
 
+/*
+ * Linx/QEMU can cache invalid translations, so update_mmu_cache_range() must
+ * still invalidate after installing new present PTEs.  For multi-page fault
+ * batches, one local all-TLB flush avoids issuing a long tlb.iv helper loop.
+ */
+#define LINX_TLB_RANGE_FLUSH_ALL_THRESHOLD 4
+
+static inline void local_flush_tlb_range_pages(unsigned long start,
+					       unsigned int nr_pages)
+{
+	if (!nr_pages)
+		return;
+
+	if (nr_pages > LINX_TLB_RANGE_FLUSH_ALL_THRESHOLD) {
+		local_flush_tlb_all();
+		return;
+	}
+
+	while (nr_pages--) {
+		local_flush_tlb_page(start);
+		start += SZ_4K;
+	}
+}
+
 #else /* CONFIG_MMU */
 #define local_flush_tlb_all()			do { } while (0)
 #define local_flush_tlb_page(addr)		do { } while (0)
+#define local_flush_tlb_range_pages(start, nr_pages)	do { } while (0)
 #endif /* CONFIG_MMU */
 
 #if defined(CONFIG_SMP) && defined(CONFIG_MMU)
