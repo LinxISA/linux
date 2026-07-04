@@ -2395,6 +2395,7 @@ static noinline void __init kernel_init_freeable(void)
 	linx_bringup_init_proc_sysfs();
 	linx_bringup_init_storage();
 	linx_populate_rootfs_now();
+	linx_bringup_log_init_result("pipe_fs_init", linx_pipe_fs_init());
 	linx_bringup_log_init_result("filelock_init", linx_filelock_init());
 	linx_init_elf_binfmt();
 	linx_init_script_binfmt();

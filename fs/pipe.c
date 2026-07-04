@@ -1551,3 +1551,10 @@ static int __init init_pipe_fs(void)
 }
 
 fs_initcall(init_pipe_fs);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_pipe_fs_init(void)
+{
+	return init_pipe_fs();
+}
+#endif

@@ -18,6 +18,7 @@ int __init linx_genhd_device_init(void);
 int __init linx_ksysfs_init(void);
 int __init linx_p9_init(void);
 int __init linx_p9_virtio_init(void);
+int __init linx_pipe_fs_init(void);
 int __init linx_proc_cpuinfo_init(void);
 int __init linx_proc_interrupts_init(void);
 int __init linx_proc_meminfo_init(void);
