@@ -224,10 +224,8 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     return b"".join(out_chunks).decode("utf-8", errors="replace"), timed_out
 
 
-def _artifact_path(env_name: str, fallback_env_name: str = "") -> Optional[pathlib.Path]:
+def _artifact_path(env_name: str) -> Optional[pathlib.Path]:
     value = os.environ.get(env_name, "")
-    if not value and fallback_env_name:
-        value = os.environ.get(fallback_env_name, "")
     if not value:
         return None
     return pathlib.Path(value)
@@ -235,22 +233,8 @@ def _artifact_path(env_name: str, fallback_env_name: str = "") -> Optional[pathl
 
 def _rootfs_path(default: pathlib.Path) -> pathlib.Path:
     rootfs_img = os.environ.get("ROOTFS_IMG", "")
-    legacy_rootfs = os.environ.get("ROOTFS", "")
-
     if rootfs_img:
-        if legacy_rootfs and legacy_rootfs != rootfs_img:
-            sys.stderr.write(
-                "note: ROOTFS is ignored because ROOTFS_IMG is set; "
-                "ROOTFS_IMG is the canonical rootfs selector\n"
-            )
         return pathlib.Path(rootfs_img)
-
-    if legacy_rootfs:
-        sys.stderr.write(
-            "note: ROOTFS is accepted as a compatibility alias; prefer ROOTFS_IMG\n"
-        )
-        return pathlib.Path(legacy_rootfs)
-
     return default
 
 
@@ -293,15 +277,13 @@ def _format_transcript(attempts: list[dict[str, Any]]) -> str:
 
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
-    super_root = linux_root.parents[1]
     o_dir = pathlib.Path(os.environ.get("O", str(linux_root / "build-linx-fixed")))
 
-    qemu_default_candidates = [
-        super_root / "emulator" / "qemu" / "build-linx" / "qemu-system-linx64",
-        super_root / "emulator" / "qemu" / "build" / "qemu-system-linx64",
-    ]
-    qemu_default = next((p for p in qemu_default_candidates if p.exists()), qemu_default_candidates[0])
-    qemu = pathlib.Path(os.environ.get("QEMU", str(qemu_default)))
+    qemu_arg = os.environ.get("QEMU", "")
+    if not qemu_arg:
+        sys.stderr.write("error: QEMU must name an explicit clean qemu-system-linx64 binary\n")
+        return 2
+    qemu = pathlib.Path(qemu_arg)
 
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
     rootfs = _rootfs_path(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")
@@ -329,10 +311,8 @@ def main() -> int:
         "cat /proc/interrupts\n"
         "poweroff\n",
     )
-    report_path = _artifact_path("LINX_BUSYBOX_BOOT_REPORT", "LINX_FLOW_COMMAND_REPORT")
-    transcript_path = _artifact_path(
-        "LINX_BUSYBOX_BOOT_TRANSCRIPT", "LINX_FLOW_COMMAND_TRANSCRIPT"
-    )
+    report_path = _artifact_path("LINX_BUSYBOX_BOOT_REPORT")
+    transcript_path = _artifact_path("LINX_BUSYBOX_BOOT_TRANSCRIPT")
     if transcript_path is None:
         transcript_path = _default_transcript_path(report_path)
 
