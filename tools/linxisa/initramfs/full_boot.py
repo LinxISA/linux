@@ -7,6 +7,8 @@ import subprocess
 import sys
 import time
 
+from gate_contract import qemu_exit_error
+
 
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
@@ -131,6 +133,22 @@ def main() -> int:
 
     text = out.decode("utf-8", errors="replace")
 
+    process_error = qemu_exit_error(
+        timed_out=timed_out,
+        returncode=int(proc.returncode if proc.returncode is not None else -1),
+        timeout_s=timeout_s,
+    )
+    if process_error:
+        sys.stderr.write(f"error: full userspace boot check failed; {process_error}\n")
+        sys.stderr.write("kernel: %s\n" % kernel)
+        sys.stderr.write("initrd: %s\n" % initrd)
+        sys.stderr.write("qemu: %s\n" % qemu)
+        sys.stderr.write("cmd: %s\n\n" % " ".join(cmd))
+        sys.stderr.write("\n".join(text.splitlines()[-240:]))
+        sys.stderr.write("\n")
+        sys.stderr.flush()
+        return 2
+
     want = [
         "cmds:",
         "# ls /proc",
@@ -170,10 +188,6 @@ def main() -> int:
         sys.stderr.write("\n")
         sys.stderr.flush()
         return 2
-
-    if timed_out:
-        sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
-        sys.stderr.flush()
 
     keep = []
     for ln in text.splitlines():
