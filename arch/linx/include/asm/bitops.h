@@ -43,7 +43,7 @@
 	__mask = BIT_MASK(nr);						\
 	__asm__ __volatile__ (						\
 		"BSTART.std fall\n"					\
-		"b.attr " #ord "\n"					\
+		"B.CATR " #ord "\n"					\
 			""__LOAD" [%1, 0], -> t\n"			\
 			"" #op " %2, t#1, -> t\n"			\
 			""__STORE" t#1, [%1, 0]\n"			\
@@ -58,7 +58,7 @@
 	unsigned long *__addr = (unsigned long *)&(addr[BIT_WORD(nr)]);	\
 	__asm__ __volatile__ (						\
 		"BSTART.std fall\n"					\
-		"b.attr " #ord "\n"					\
+		"B.CATR " #ord "\n"					\
 			""__LOAD" [%0, 0], -> t\n"			\
 			"" #op " t#1, %1, -> t\n"			\
 			""__STORE" t#1, [%0, 0]\n"			\
@@ -212,7 +212,7 @@ static __always_inline bool arch_xor_unlock_is_negative_byte(unsigned long mask,
 
 	__asm__ __volatile__ (
 		"BSTART.std fall\n"
-		"b.attr rl\n"
+		"B.CATR rl\n"
 			""__LOAD" [%1, 0], -> t\n"
 			"xor t#1, %2, -> t\n"
 			""__STORE" t#1, [%1, 0]\n"

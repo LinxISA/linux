@@ -66,7 +66,7 @@ void arch_atomic##prefix##_##op(c_type i, atomic##prefix##_t *v)	\
 	c_type *p_counter = &(v->counter);				\
 	__asm__ __volatile__ (						\
 		"BSTART.sys fall\n"					\
-		"b.attr atomic\n"					\
+		"B.CATR atomic\n"					\
 			"l" #asm_type "i [%0, 0], -> t\n"			\
 			"" #asm_op " t#1, %1, -> t\n"			\
 			"s" #asm_type "i t#1, [%0, 0]\n"		\
@@ -107,7 +107,7 @@ c_type arch_atomic##prefix##_fetch_##op##_relaxed(c_type i,			\
 	c_type *p_counter = &(v->counter);					\
 	__asm__ __volatile__ (							\
 		"BSTART.sys fall\n"					\
-		"b.attr atomic\n"					\
+		"B.CATR atomic\n"					\
 			"l" #asm_type "i [%0, 0], -> t\n"			\
 			"" #asm_op " t#1, %2, -> t\n"			\
 			"s" #asm_type "i t#1, [%0, 0]\n"		\
@@ -124,7 +124,7 @@ c_type arch_atomic##prefix##_fetch_##op(c_type i, atomic##prefix##_t *v)	\
 	c_type *p_counter = &(v->counter);					\
 	__asm__ __volatile__ (							\
 		"BSTART.sys fall\n"							\
-		"b.attr aqrl\n"						\
+		"B.CATR aqrl\n"						\
 			"l" #asm_type "i [%0, 0], -> t\n"			\
 			"" #asm_op " t#1, %2, -> t\n"			\
 			"s" #asm_type "i t#1, [%0, 0]\n"		\

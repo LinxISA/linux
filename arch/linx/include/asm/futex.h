@@ -69,7 +69,7 @@
 	__asm__ __volatile__ (					\
 		"1:					\n"	\
 		"BSTART.std fall, 3f			\n"	\
-		"b.attr aqrl				\n"	\
+		"B.CATR aqrl				\n"	\
 			"" insn "			\n"	\
 		"2:					\n"	\
 		".section .fixup,\"ax\"			\n"	\
