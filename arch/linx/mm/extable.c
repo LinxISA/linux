@@ -15,7 +15,7 @@
 #include <asm/trap.h>
 
 /*
- * Current v0.56 BSTART FALL encodings carry the fixup target directly in the
+ * Current LinxISA BSTART FALL encodings carry the fixup target directly in the
  * branch immediate.  The older Linux port only understood legacy 128-bit block
  * headers with LINX_HEAD_ATTRS_FIXUP, so relaxed HL.BSTART fixup blocks from
  * compiler-generated uaccess code were treated as ordinary faults.
@@ -55,7 +55,7 @@ static bool linx_is_hl_bstart48_fall_fixup(u64 insn)
 	       form == LINX_HL_BSTART48_FP_FALL;
 }
 
-static bool linx_v056_fixup_handler(unsigned long bpc, unsigned long *handler)
+static bool linx_bstart_fall_fixup_handler(unsigned long bpc, unsigned long *handler)
 {
 	u32 insn32 = get_unaligned_le32((void *)bpc);
 	u64 insn48 = get_unaligned_le32((void *)bpc) |
@@ -91,7 +91,7 @@ int fixup_exception(struct pt_regs *regs)
 {
 	unsigned long handler;
 
-	if (linx_v056_fixup_handler(regs->bpc, &handler)) {
+	if (linx_bstart_fall_fixup_handler(regs->bpc, &handler)) {
 		regs->bpc = handler;
 		return 1;
 	}
