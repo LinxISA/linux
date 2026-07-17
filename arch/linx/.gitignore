@@ -1,0 +1,16 @@
+# Keep the Linx port's preprocessed assembly visible on case-insensitive hosts.
+!/boot/loader.S
+!/boot/loader.lds.S
+!/kernel/efi-header.S
+!/kernel/entry.S
+!/kernel/head.S
+!/kernel/qemu_debug.S
+!/kernel/vdso/flush_icache.S
+!/kernel/vdso/getcpu.S
+!/kernel/vdso/note.S
+!/kernel/vdso/rt_sigreturn.S
+!/kernel/vdso/vdso.S
+!/kernel/vdso/vdso.lds.S
+!/kernel/vmlinux.lds.S
+!/lib/memset.S
+!/lib/uaccess.S

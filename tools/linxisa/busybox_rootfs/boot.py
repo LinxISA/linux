@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from dataclasses import dataclass
+import hashlib
 import json
 import os
 import pathlib
@@ -23,6 +25,32 @@ ROOTFS_CONFIG_REQUIREMENTS: tuple[str, ...] = (
     "CONFIG_VIRTIO_MMIO",
     "CONFIG_VIRTIO_BLK",
 )
+
+SUCCESS_MARKERS: tuple[str, ...] = (
+    "cmds:",
+    "# ls /",
+    "# ls /sbin",
+    "init",
+    "# cat /proc/interrupts",
+    "# poweroff",
+    "LINX_REBOOT lisc_shutdown",
+)
+
+QEMU_ENV_ALLOWLIST: tuple[str, ...] = (
+    "LINX_DEBUG_PC_WATCH",
+    "LINX_DEBUG_PC_WATCH_PRINT",
+    "LINX_DISABLE_TIMER_IRQ",
+    "LINX_BSTART_INLINE_CACHE",
+)
+
+
+@dataclass(frozen=True)
+class AttemptResult:
+    output: str
+    timed_out: bool
+    returncode: int
+    duration_seconds: float
+    send_reason: Optional[str]
 
 
 def _parse_kernel_config(path: pathlib.Path) -> dict[str, str]:
@@ -100,7 +128,7 @@ def _timer_irq_count(text: str) -> Optional[int]:
 def _attempt_appends(base_append: str) -> list[tuple[str, Optional[str]]]:
     attempts: list[tuple[str, Optional[str]]] = [(base_append, None)]
 
-    retry_flag = os.environ.get("LINX_BUSYBOX_BOOT_RETRY", "1").lower()
+    retry_flag = os.environ.get("LINX_BUSYBOX_BOOT_RETRY", "0").lower()
     if retry_flag not in {"0", "false", "no"}:
         attempts.append((base_append, "same-config retry"))
 
@@ -124,7 +152,7 @@ def _drain_stdout(proc: subprocess.Popen, out_chunks: list[bytes]) -> None:
         out_chunks.append(chunk)
 
 
-def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
+def _run_once(cmd: list[str], script: str, timeout_s: int) -> AttemptResult:
     master_fd, slave_fd = pty.openpty()
     proc = subprocess.Popen(
         cmd,
@@ -138,18 +166,20 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     prompt_seen = False
     script_sent = False
     boot_ready_seen = False
+    send_reason: Optional[str] = None
     prompt = b"# "
     deadline = time.monotonic() + timeout_s
     started_at = time.monotonic()
     last_output_at = time.monotonic()
-    blind_send_after_s = float(os.environ.get("LINX_BUSYBOX_BOOT_BLIND_SEND_AFTER", "2.0"))
+    blind_send_after_s = float(os.environ.get("LINX_BUSYBOX_BOOT_BLIND_SEND_AFTER", "0"))
 
-    def try_send_script() -> None:
-        nonlocal script_sent
+    def try_send_script(reason: str) -> None:
+        nonlocal script_sent, send_reason
         if script_sent:
             return
         os.write(master_fd, script.encode("utf-8"))
         script_sent = True
+        send_reason = reason
 
     while True:
         now = time.monotonic()
@@ -181,21 +211,21 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
                 or joined.endswith(prompt)
             ):
                 prompt_seen = True
-                try_send_script()
+                try_send_script("prompt")
 
         if (
             boot_ready_seen
             and not script_sent
             and (time.monotonic() - last_output_at) >= 0.5
         ):
-            try_send_script()
+            try_send_script("boot-ready-idle")
 
         if (
             not script_sent
             and blind_send_after_s > 0.0
             and (time.monotonic() - started_at) >= blind_send_after_s
         ):
-            try_send_script()
+            try_send_script("blind-timeout")
 
         if proc.poll() is not None:
             break
@@ -221,7 +251,61 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> tuple[str, bool]:
     except OSError:
         pass
 
-    return b"".join(out_chunks).decode("utf-8", errors="replace"), timed_out
+    return AttemptResult(
+        output=b"".join(out_chunks).decode("utf-8", errors="replace"),
+        timed_out=timed_out,
+        returncode=int(proc.returncode if proc.returncode is not None else -1),
+        duration_seconds=time.monotonic() - started_at,
+        send_reason=send_reason,
+    )
+
+
+def _sha256_file(path: pathlib.Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _input_record(path: pathlib.Path) -> dict[str, Any]:
+    resolved = path.resolve()
+    stat = resolved.stat()
+    return {
+        "path": str(resolved),
+        "size_bytes": stat.st_size,
+        "sha256": _sha256_file(resolved),
+    }
+
+
+def _classify_attempt(
+    result: AttemptResult, *, disable_timer_irq: bool
+) -> tuple[str, list[str], list[int], Optional[str]]:
+    missing = [marker for marker in SUCCESS_MARKERS if marker not in result.output]
+    irq_counts = [
+        _timer_irq_count(block)
+        for block in result.output.split("# cat /proc/interrupts")
+    ]
+    irq_counts = [count for count in irq_counts if count is not None]
+    irq_error: Optional[str] = None
+    if not disable_timer_irq:
+        if len(irq_counts) < 2:
+            irq_error = "timer IRQ evidence requires two samples"
+        elif irq_counts[-1] <= irq_counts[-2]:
+            irq_error = "timer IRQ count did not advance: %d -> %d" % (
+                irq_counts[-2],
+                irq_counts[-1],
+            )
+
+    if result.timed_out:
+        status = "timeout"
+    elif result.returncode != 0:
+        status = "qemu-error"
+    elif missing or irq_error:
+        status = "fail"
+    else:
+        status = "pass"
+    return status, missing, irq_counts, irq_error
 
 
 def _artifact_path(env_name: str) -> Optional[pathlib.Path]:
@@ -265,7 +349,11 @@ def _format_transcript(attempts: list[dict[str, Any]]) -> str:
         parts.append(f"===== attempt {attempt['index']}: {note} =====")
         parts.append("cmd: %s" % " ".join(attempt["command"]))
         parts.append("append: %s" % attempt["append"])
+        parts.append("status: %s" % attempt["status"])
         parts.append("timed_out: %s" % attempt["timed_out"])
+        parts.append("returncode: %s" % attempt["returncode"])
+        parts.append("duration_seconds: %.3f" % attempt["duration_seconds"])
+        parts.append("send_reason: %s" % (attempt.get("send_reason") or "none"))
         parts.append("missing: %s" % ", ".join(attempt["missing"]))
         if attempt.get("irq_error"):
             parts.append("irq_error: %s" % attempt["irq_error"])
@@ -275,18 +363,83 @@ def _format_transcript(attempts: list[dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
+def _report_payload(
+    *,
+    status: str,
+    kernel: pathlib.Path,
+    config: pathlib.Path,
+    rootfs: pathlib.Path,
+    qemu: pathlib.Path,
+    timeout_s: int,
+    mem: str,
+    smp: str,
+    append: str,
+    script: str,
+    qemu_extra_args: list[str],
+    virtio_device: str,
+    disable_timer_irq: bool,
+    snapshot_enabled: bool,
+    attempts_report: list[dict[str, Any]],
+    transcript_path: Optional[pathlib.Path],
+    rootfs_pre_sha256: Optional[str],
+    error: Optional[str] = None,
+) -> dict[str, Any]:
+    inputs: dict[str, Any] = {}
+    for name, path in (
+        ("kernel", kernel),
+        ("kernel_config", config),
+        ("rootfs", rootfs),
+        ("qemu", qemu),
+        ("boot_py", pathlib.Path(__file__)),
+    ):
+        if path.is_file():
+            inputs[name] = _input_record(path)
+
+    rootfs_post_sha256 = _sha256_file(rootfs) if rootfs.is_file() else None
+    return {
+        "schema_version": 2,
+        "ok": status == "pass",
+        "status": status,
+        "error": error,
+        "inputs": inputs,
+        "rootfs_pre_sha256": rootfs_pre_sha256,
+        "rootfs_post_sha256": rootfs_post_sha256,
+        "effective_config": {
+            "timeout_seconds": timeout_s,
+            "memory": mem,
+            "smp": smp,
+            "append_sha256": hashlib.sha256(append.encode("utf-8")).hexdigest(),
+            "script_sha256": hashlib.sha256(script.encode("utf-8")).hexdigest(),
+            "qemu_extra_args": qemu_extra_args,
+            "virtio_device": virtio_device,
+            "retry_enabled": len(_attempt_appends(append)) > 1,
+            "blind_send_after_seconds": float(
+                os.environ.get("LINX_BUSYBOX_BOOT_BLIND_SEND_AFTER", "0")
+            ),
+            "snapshot_enabled": snapshot_enabled,
+            "disable_timer_irq": disable_timer_irq,
+            "qemu_debug_env": {
+                name: os.environ[name]
+                for name in QEMU_ENV_ALLOWLIST
+                if name in os.environ
+            },
+        },
+        "attempts": [
+            {key: value for key, value in attempt.items() if key != "output"}
+            for attempt in attempts_report
+        ],
+        "transcript": str(transcript_path) if transcript_path is not None else None,
+    }
+
+
 def main() -> int:
     linux_root = pathlib.Path(__file__).resolve().parents[3]
     o_dir = pathlib.Path(os.environ.get("O", str(linux_root / "build-linx-fixed")))
-
-    qemu_arg = os.environ.get("QEMU", "")
-    if not qemu_arg:
-        sys.stderr.write("error: QEMU must name an explicit clean qemu-system-linx64 binary\n")
-        return 2
-    qemu = pathlib.Path(qemu_arg)
-
     kernel = pathlib.Path(os.environ.get("KERNEL", str(o_dir / "vmlinux")))
     rootfs = _rootfs_path(o_dir / "linx-busybox-rootfs" / "rootfs.ext2")
+    config = _kernel_config_path(kernel, o_dir)
+    qemu_arg = os.environ.get("QEMU", "")
+    qemu = pathlib.Path(qemu_arg) if qemu_arg else pathlib.Path("__missing_qemu__")
     mem = os.environ.get("MEM", "512M")
     smp = os.environ.get("SMP", "1")
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
@@ -301,6 +454,11 @@ def main() -> int:
     if "-bios" not in qemu_extra_args and not any(arg.startswith("-bios=") for arg in qemu_extra_args):
         qemu_extra_args.extend(["-bios", "none"])
     virtio_device = os.environ.get("VIRTIO_BLK_DEVICE", "virtio-blk-device,drive=vd0")
+    snapshot_enabled = os.environ.get("LINX_BUSYBOX_BOOT_SNAPSHOT", "1").lower() not in {
+        "0",
+        "false",
+        "no",
+    }
 
     script = os.environ.get(
         "SCRIPT",
@@ -316,30 +474,82 @@ def main() -> int:
     if transcript_path is None:
         transcript_path = _default_transcript_path(report_path)
 
+    attempts_report: list[dict[str, Any]] = []
+
+    def write_terminal_report(
+        status: str,
+        *,
+        rootfs_pre_sha256: Optional[str],
+        error: Optional[str] = None,
+    ) -> None:
+        _write_text(transcript_path, _format_transcript(attempts_report))
+        _write_json(
+            report_path,
+            _report_payload(
+                status=status,
+                kernel=kernel,
+                config=config,
+                rootfs=rootfs,
+                qemu=qemu,
+                timeout_s=timeout_s,
+                mem=mem,
+                smp=smp,
+                append=append,
+                script=script,
+                qemu_extra_args=qemu_extra_args,
+                virtio_device=virtio_device,
+                disable_timer_irq=disable_timer_irq,
+                snapshot_enabled=snapshot_enabled,
+                attempts_report=attempts_report,
+                transcript_path=transcript_path,
+                rootfs_pre_sha256=rootfs_pre_sha256,
+                error=error,
+            ),
+        )
+
+    if not qemu_arg:
+        error = "QEMU must name an explicit clean qemu-system-linx64 binary"
+        sys.stderr.write(f"error: {error}\n")
+        write_terminal_report("preflight-error", rootfs_pre_sha256=None, error=error)
+        return 2
+
     if os.environ.get("SKIP_BUILD", "") not in {"1", "true", "yes"}:
         build_sh = pathlib.Path(__file__).with_name("build_rootfs.sh")
         subprocess.run([str(build_sh)], check=True)
 
+    rootfs_pre_sha256 = _sha256_file(rootfs) if rootfs.is_file() else None
+
     if not _check_kernel_config(kernel, o_dir):
+        write_terminal_report(
+            "preflight-error",
+            rootfs_pre_sha256=rootfs_pre_sha256,
+            error="kernel config preflight failed",
+        )
         return 2
 
-    want = [
-        "cmds:",
-        "# ls /",
-        "# ls /sbin",
-        "init",
-        "# cat /proc/interrupts",
-    ]
+    attempt_specs = _attempt_appends(append)
+    if len(attempt_specs) > 1 and not snapshot_enabled:
+        error = "retry requires snapshot isolation for the writable rootfs"
+        sys.stderr.write(f"error: {error}\n")
+        write_terminal_report(
+            "preflight-error",
+            rootfs_pre_sha256=rootfs_pre_sha256,
+            error=error,
+        )
+        return 2
+
     last_text = ""
     last_cmd: list[str] = []
     last_missing: list[str] = []
-    last_timed_out = False
     last_irq_error: Optional[str] = None
-    attempts_report: list[dict[str, Any]] = []
+    last_status = "fail"
 
     for attempt_index, (attempt_append, recovery_note) in enumerate(
-        _attempt_appends(append), start=1
+        attempt_specs, start=1
     ):
+        drive = f"if=none,id=vd0,file={rootfs},format=raw"
+        if snapshot_enabled:
+            drive += ",snapshot=on"
         cmd = [
             str(qemu),
             "-nographic",
@@ -354,7 +564,7 @@ def main() -> int:
             "-kernel",
             str(kernel),
             "-drive",
-            f"if=none,id=vd0,file={rootfs},format=raw",
+            drive,
             "-device",
             virtio_device,
             "-append",
@@ -362,65 +572,54 @@ def main() -> int:
         ]
         cmd.extend(qemu_extra_args)
 
-        text, timed_out = _run_once(cmd, script, timeout_s)
-        missing = [w for w in want if w not in text]
-        irq_counts = [_timer_irq_count(block) for block in text.split("# cat /proc/interrupts")]
-        irq_counts = [v for v in irq_counts if v is not None]
-        irq_error = None
-        if not disable_timer_irq and len(irq_counts) >= 2 and irq_counts[-1] < irq_counts[-2]:
-            irq_error = "error: timer IRQ count regressed: %d -> %d\n" % (irq_counts[-2], irq_counts[-1])
+        try:
+            result = _run_once(cmd, script, timeout_s)
+        except OSError as exc:
+            result = AttemptResult(
+                output=f"spawn error: {exc}\n",
+                timed_out=False,
+                returncode=-1,
+                duration_seconds=0.0,
+                send_reason=None,
+            )
+        status, missing, irq_counts, irq_error = _classify_attempt(
+            result, disable_timer_irq=disable_timer_irq
+        )
 
-        last_text = text
+        last_text = result.output
         last_cmd = cmd
         last_missing = missing
-        last_timed_out = timed_out
         last_irq_error = irq_error
+        last_status = status
         attempts_report.append(
             {
                 "index": attempt_index,
                 "recovery_note": recovery_note,
                 "append": attempt_append,
                 "command": cmd,
-                "timed_out": timed_out,
+                "status": status,
+                "timed_out": result.timed_out,
+                "returncode": result.returncode,
+                "duration_seconds": result.duration_seconds,
+                "send_reason": result.send_reason,
                 "missing": missing,
                 "irq_counts": irq_counts,
                 "irq_error": irq_error,
-                "output_lines": len(text.splitlines()),
-                "output_tail": text.splitlines()[-80:],
-                "output": text,
+                "output_lines": len(result.output.splitlines()),
+                "output_tail": result.output.splitlines()[-80:],
+                "output": result.output,
             }
         )
 
-        if missing or irq_error:
+        if status != "pass":
             continue
 
-        _write_text(transcript_path, _format_transcript(attempts_report))
-        _write_json(
-            report_path,
-            {
-                "schema_version": 1,
-                "ok": True,
-                "status": "pass",
-                "kernel": str(kernel),
-                "rootfs": str(rootfs),
-                "qemu": str(qemu),
-                "timeout_seconds": timeout_s,
-                "disable_timer_irq": disable_timer_irq,
-                "attempts": [
-                    {k: v for k, v in attempt.items() if k != "output"}
-                    for attempt in attempts_report
-                ],
-                "transcript": str(transcript_path) if transcript_path is not None else None,
-            },
-        )
+        write_terminal_report("pass", rootfs_pre_sha256=rootfs_pre_sha256)
         if recovery_note:
             sys.stderr.write(f"note: boot.py used {recovery_note}\n")
-        if timed_out:
-            sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
-            sys.stderr.flush()
 
         keep = []
-        for ln in text.splitlines():
+        for ln in result.output.splitlines():
             s = ln.strip()
             if (
                 s.startswith("#")
@@ -434,37 +633,24 @@ def main() -> int:
         sys.stdout.flush()
         return 0
 
-    if last_irq_error:
-        sys.stderr.write(last_irq_error)
+    if last_status == "timeout":
+        sys.stderr.write("error: busybox rootfs boot timed out\n")
+    elif last_irq_error:
+        sys.stderr.write(f"error: {last_irq_error}\n")
     else:
         sys.stderr.write("error: busybox rootfs boot failed; missing: %s\n" % ", ".join(last_missing))
     sys.stderr.write("kernel: %s\n" % kernel)
     sys.stderr.write("rootfs: %s\n" % rootfs)
     sys.stderr.write("qemu: %s\n" % qemu)
     sys.stderr.write("cmd: %s\n" % " ".join(last_cmd))
-    if last_timed_out:
-        sys.stderr.write("note: qemu did not exit; killed after TIMEOUT=%ds\n" % timeout_s)
-    _write_text(transcript_path, _format_transcript(attempts_report))
-    _write_json(
-        report_path,
-        {
-            "schema_version": 1,
-            "ok": False,
-            "status": "fail",
-            "kernel": str(kernel),
-            "rootfs": str(rootfs),
-            "qemu": str(qemu),
-            "timeout_seconds": timeout_s,
-            "disable_timer_irq": disable_timer_irq,
-            "missing": last_missing,
-            "timed_out": last_timed_out,
-            "irq_error": last_irq_error,
-            "attempts": [
-                {k: v for k, v in attempt.items() if k != "output"}
-                for attempt in attempts_report
-            ],
-            "transcript": str(transcript_path) if transcript_path is not None else None,
-        },
+    write_terminal_report(
+        last_status,
+        rootfs_pre_sha256=rootfs_pre_sha256,
+        error=(
+            "QEMU timed out"
+            if last_status == "timeout"
+            else last_irq_error or (", ".join(last_missing) if last_missing else None)
+        ),
     )
     sys.stderr.write("\n")
     sys.stderr.write("\n".join(last_text.splitlines()[-240:]))
