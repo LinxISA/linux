@@ -13,63 +13,6 @@
 
 #ifndef __ASSEMBLY__
 
-
-struct pt_regs {
-	/* temporal pc */
-	unsigned long tpc;
-	/* block pc and next-bpc, I split the `ebpc` into two parts for convenience */
-	unsigned long bpc;
-	unsigned long bpcn;
-	/* ebarg, include bpcn/lra and flags */
-	unsigned long ebarg;
-	/* LL_GPR */
-	unsigned long elpr0;
-	unsigned long elpr1;
-	unsigned long elpr2;
-	unsigned long elpr3;
-	unsigned long elpr4;
-	unsigned long elpr5;
-	unsigned long elpr6;
-	unsigned long elpr7;
-	/* UL_GPR */
-	unsigned long sp;
-	unsigned long a0;
-	unsigned long a1;
-	unsigned long a2;
-	unsigned long a3;
-	unsigned long a4;
-	unsigned long a5;
-	unsigned long a6;
-	unsigned long a7;
-	unsigned long ra;
-	unsigned long s0;
-	unsigned long s1;
-	unsigned long s2;
-	unsigned long s3;
-	unsigned long s4;
-	unsigned long s5;
-	unsigned long s6;
-	unsigned long s7;
-	unsigned long s8;
-	unsigned long x0;
-	unsigned long x1;
-	unsigned long x2;
-	unsigned long x3;
-
-	/* non-BSTATE registers, won't be filled by LxLc */
-	/* general ssr */
-	unsigned long gp;
-	unsigned long tp;
-	/* Supervisor/Machine SSRs */
-	unsigned long cstate;
-	unsigned long traparg0;
-	unsigned long trapno;
-	/* a0 value before the syscall */
-	unsigned long orig_a0;
-	unsigned long orig_bpc;
-	unsigned long orig_tpc;	/* tpc that launched a syscall */
-};
-
 #ifdef CONFIG_64BIT
 #define REG_FMT "%016lx"
 #else
