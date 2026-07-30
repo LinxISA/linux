@@ -16,11 +16,7 @@
 /*
  * These are used to set parameters in the core dumps.
  */
-#define ELF_ARCH	EM_LINX_V5
-
-#ifndef EM_LINXISA
-#define EM_LINXISA	233
-#endif
+#define ELF_ARCH	EM_LINXISA
 
 #ifdef CONFIG_64BIT
 #define ELF_CLASS	ELFCLASS64
@@ -33,8 +29,7 @@
 /*
  * This is used to ensure we don't load something for the wrong architecture.
  */
-#define elf_check_arch(x) \
-	((x)->e_machine == ELF_ARCH || (x)->e_machine == EM_LINXISA)
+#define elf_check_arch(x) ((x)->e_machine == ELF_ARCH)
 
 #define CORE_DUMP_USE_REGSET
 #define ELF_EXEC_PAGESIZE	(PAGE_SIZE)

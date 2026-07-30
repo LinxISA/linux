@@ -69,6 +69,190 @@
 #define elf_check_fdpic(ex) false
 #endif
 
+#ifdef CONFIG_ARCH_LINX
+/*
+ * PTO ISA 0.57.1 deliberately has no untagged compatibility decoder.  The
+ * descriptor is canonical JSON: sorted keys, no insignificant whitespace,
+ * and no trailing NUL byte.
+ */
+static const char linx_pto_isa_identity[] =
+	"{\"encoding_abi\":\"pto-isa-0.57.1-mode-function-v1\","
+	"\"encoding_projection_sha256\":"
+	"\"34f6602cf29ea6363d41d896111dad4de0f70ec36517138aa89e292857909da4\","
+	"\"release\":\"0.57.1\"}";
+
+#define LINX_PTO_ISA_NOTE_SCAN_MAX SZ_4K
+
+struct linx_pto_note_reader {
+	int (*read)(void *context, size_t offset, void *buffer, size_t size);
+	void *context;
+};
+
+static int linx_pto_isa_note_parse_reader(struct linx_pto_note_reader *reader,
+					  size_t size, bool *found)
+{
+	size_t off = 0;
+
+	if (size > LINX_PTO_ISA_NOTE_SCAN_MAX)
+		return -ENOEXEC;
+
+	while (off < size) {
+		struct elf_note note;
+		size_t namesz, descsz, record_size;
+		char name[PTO_ISA_IDENTITY_NOTE_NAMESZ];
+		char desc[sizeof(linx_pto_isa_identity) - 1];
+		int ret;
+
+		if (size - off < sizeof(note))
+			return -ENOEXEC;
+		ret = reader->read(reader->context, off, &note, sizeof(note));
+		if (ret)
+			return ret;
+
+		if (check_add_overflow((size_t)note.n_namesz, (size_t)3,
+				       &namesz) ||
+		    check_add_overflow((size_t)note.n_descsz, (size_t)3,
+				       &descsz))
+			return -ENOEXEC;
+		namesz &= ~((size_t)3);
+		descsz &= ~((size_t)3);
+
+		if (check_add_overflow(sizeof(note), namesz, &record_size) ||
+		    check_add_overflow(record_size, descsz, &record_size) ||
+		    record_size > size - off)
+			return -ENOEXEC;
+
+		if (note.n_type == PTO_NT_ISA_IDENTITY &&
+		    note.n_namesz == PTO_ISA_IDENTITY_NOTE_NAMESZ) {
+			ret = reader->read(reader->context, off + sizeof(note),
+					   name, sizeof(name));
+			if (ret)
+				return ret;
+			if (!memcmp(name, PTO_ISA_IDENTITY_NOTE_NAME "\0",
+				    PTO_ISA_IDENTITY_NOTE_NAMESZ)) {
+				/* Conflicting identity duplicates are invalid. */
+				if (note.n_descsz != sizeof(desc))
+					return -ENOEXEC;
+				ret = reader->read(reader->context,
+						   off + sizeof(note) + namesz,
+						   desc, sizeof(desc));
+				if (ret)
+					return ret;
+				if (memcmp(desc, linx_pto_isa_identity,
+					   sizeof(desc)))
+					return -ENOEXEC;
+				*found = true;
+			}
+		}
+
+		off += record_size;
+	}
+
+	return 0;
+}
+
+#ifdef CONFIG_BINFMT_ELF_KUNIT_TEST
+struct linx_pto_memory_reader {
+	const u8 *data;
+	size_t size;
+};
+
+static int linx_pto_memory_read(void *context, size_t offset, void *buffer,
+				size_t size)
+{
+	struct linx_pto_memory_reader *memory = context;
+
+	if (offset > memory->size || size > memory->size - offset)
+		return -ENOEXEC;
+	memcpy(buffer, memory->data + offset, size);
+	return 0;
+}
+
+static int linx_pto_isa_note_parse(const void *data, size_t size, bool *found)
+{
+	struct linx_pto_memory_reader memory = {
+		.data = data,
+		.size = size,
+	};
+	struct linx_pto_note_reader reader = {
+		.read = linx_pto_memory_read,
+		.context = &memory,
+	};
+
+	return linx_pto_isa_note_parse_reader(&reader, size, found);
+}
+#endif
+
+struct linx_pto_file_reader {
+	struct file *file;
+	loff_t base;
+};
+
+static int linx_pto_file_read(void *context, size_t offset, void *buffer,
+			      size_t size)
+{
+	struct linx_pto_file_reader *file = context;
+	loff_t pos;
+	ssize_t n;
+
+	if (offset > LLONG_MAX - file->base ||
+	    size > LLONG_MAX - file->base - offset)
+		return -ENOEXEC;
+	pos = file->base + offset;
+	n = kernel_read(file->file, buffer, size, &pos);
+	return n == size ? 0 : -ENOEXEC;
+}
+
+static int linx_pto_isa_note_parse_file(struct file *file, loff_t offset,
+					size_t size, bool *found)
+{
+	struct linx_pto_file_reader file_reader = {
+		.file = file,
+		.base = offset,
+	};
+	struct linx_pto_note_reader reader = {
+		.read = linx_pto_file_read,
+		.context = &file_reader,
+	};
+
+	return linx_pto_isa_note_parse_reader(&reader, size, found);
+}
+
+static int linx_pto_isa_identity_status(bool found)
+{
+	return found ? 0 : -ENOEXEC;
+}
+
+static int linx_elf_pto_identity_check(struct file *file,
+				       const struct elfhdr *ehdr,
+				       const struct elf_phdr *phdrs)
+{
+	bool found = false;
+	int i;
+
+	/* Keep the generic ELF behavior unchanged for every other machine. */
+	if (ehdr->e_machine != EM_LINXISA)
+		return 0;
+
+	for (i = 0; i < ehdr->e_phnum; i++) {
+		const struct elf_phdr *phdr = &phdrs[i];
+		int ret;
+
+		if (phdr->p_type != PT_NOTE || !phdr->p_filesz)
+			continue;
+		if (phdr->p_filesz > SIZE_MAX || phdr->p_offset > LLONG_MAX)
+			return -ENOEXEC;
+
+		ret = linx_pto_isa_note_parse_file(file, phdr->p_offset,
+						   phdr->p_filesz, &found);
+		if (ret)
+			return ret;
+	}
+
+	return linx_pto_isa_identity_status(found);
+}
+#endif
+
 static int load_elf_binary(struct linux_binprm *bprm);
 
 /*
@@ -991,6 +1175,13 @@ static int load_elf_binary(struct linux_binprm *bprm)
 	if (!elf_phdata)
 		goto out;
 
+#ifdef CONFIG_ARCH_LINX
+	retval = linx_elf_pto_identity_check(bprm->file, elf_ex,
+					     elf_phdata);
+	if (retval)
+		goto out_free_ph;
+#endif
+
 	elf_ppnt = elf_phdata;
 	for (i = 0; i < elf_ex->e_phnum; i++, elf_ppnt++) {
 		char *elf_interpreter;
@@ -1091,6 +1282,21 @@ out_free_interp:
 						   interpreter);
 		if (!interp_elf_phdata)
 			goto out_free_dentry;
+
+#ifdef CONFIG_ARCH_LINX
+		if (elf_ex->e_machine == EM_LINXISA &&
+		    interp_elf_ex->e_machine != EM_LINXISA) {
+			retval = -ELIBBAD;
+			goto out_free_dentry;
+		}
+		retval = linx_elf_pto_identity_check(interpreter,
+						     interp_elf_ex,
+						     interp_elf_phdata);
+		if (retval) {
+			retval = -ELIBBAD;
+			goto out_free_dentry;
+		}
+#endif
 
 		/* Pass PT_LOPROC..PT_HIPROC headers to arch code */
 		elf_property_phdata = NULL;

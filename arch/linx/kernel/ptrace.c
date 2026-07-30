@@ -59,7 +59,7 @@ static const struct user_regset linx_user_regset[] = {
 
 static const struct user_regset_view linx_user_native_view = {
 	.name = "linx",
-	.e_machine = EM_LINX_V5,
+	.e_machine = EM_LINXISA,
 	.regsets = linx_user_regset,
 	.n = ARRAY_SIZE(linx_user_regset),
 };
