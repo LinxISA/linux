@@ -13,6 +13,12 @@
 #define _UAPI_ASM_RISCV_ELF_H
 
 #include <asm/ptrace.h>
+#include <linux/elf-em.h>
+
+/* PTO ISA image identity note, carried in a .note.pto.isa section. */
+#define PTO_NT_ISA_IDENTITY		1
+#define PTO_ISA_IDENTITY_NOTE_NAME	"PTO"
+#define PTO_ISA_IDENTITY_NOTE_NAMESZ	4
 
 /* ELF register definitions */
 typedef unsigned long elf_greg_t;

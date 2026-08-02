@@ -51,8 +51,200 @@ static void total_mapping_size_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, total_mapping_size(unordered, ARRAY_SIZE(unordered)), mount_size);
 }
 
+#ifdef CONFIG_ARCH_LINX
+static size_t append_pto_note(u8 *buffer, size_t off, const char *desc,
+			      size_t descsz, const char name[4], u32 type)
+{
+	struct elf_note note = {
+		.n_namesz = PTO_ISA_IDENTITY_NOTE_NAMESZ,
+		.n_descsz = descsz,
+		.n_type = type,
+	};
+	size_t namesz = ALIGN(note.n_namesz, 4);
+	size_t padded_descsz = ALIGN(descsz, 4);
+
+	memcpy(buffer + off, &note, sizeof(note));
+	off += sizeof(note);
+	memcpy(buffer + off, name, note.n_namesz);
+	memset(buffer + off + note.n_namesz, 0, namesz - note.n_namesz);
+	off += namesz;
+	memcpy(buffer + off, desc, descsz);
+	memset(buffer + off + descsz, 0, padded_descsz - descsz);
+
+	return off + padded_descsz;
+}
+
+static void linx_pto_identity_note_valid_test(struct kunit *test)
+{
+	u8 note[512] = {};
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(note, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_note_parse(note, size, &found), 0);
+	KUNIT_EXPECT_TRUE(test, found);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_identity_status(found), 0);
+}
+
+static void linx_pto_identity_note_missing_test(struct kunit *test)
+{
+	u8 note[512] = {};
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(note, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "GNU\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_note_parse(note, size, &found), 0);
+	KUNIT_EXPECT_FALSE(test, found);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_identity_status(found), -ENOEXEC);
+}
+
+static void linx_pto_identity_note_malformed_test(struct kunit *test)
+{
+	u8 note[512] = {};
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(note, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test,
+			linx_pto_isa_note_parse(note, size - 1, &found),
+			-ENOEXEC);
+}
+
+static void linx_pto_identity_note_oversized_test(struct kunit *test)
+{
+	u8 note[1] = {};
+	bool found = false;
+	int ret;
+
+	ret = linx_pto_isa_note_parse(note, LINX_PTO_ISA_NOTE_SCAN_MAX + 1,
+				      &found);
+	KUNIT_EXPECT_EQ(test, ret, -ENOEXEC);
+}
+
+static void linx_pto_identity_legacy_machine_rejected_test(struct kunit *test)
+{
+	struct elfhdr active = { .e_machine = EM_LINXISA };
+	struct elfhdr legacy = { .e_machine = EM_LINX_V5 };
+
+	KUNIT_EXPECT_TRUE(test, elf_check_arch(&active));
+	KUNIT_EXPECT_FALSE(test, elf_check_arch(&legacy));
+}
+
+static void expect_pto_identity_mismatch(struct kunit *test, char *desc)
+{
+	u8 note[512] = {};
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(note, 0, desc,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test,
+			linx_pto_isa_note_parse(note, size, &found),
+			-ENOEXEC);
+	KUNIT_EXPECT_FALSE(test, found);
+}
+
+static void linx_pto_identity_note_release_mismatch_test(struct kunit *test)
+{
+	char desc[sizeof(linx_pto_isa_identity)];
+	char *release;
+
+	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
+	release = strstr(desc, "0.57.1");
+	KUNIT_ASSERT_NOT_NULL(test, release);
+	release[5] = '2';
+	expect_pto_identity_mismatch(test, desc);
+}
+
+static void linx_pto_identity_note_abi_mismatch_test(struct kunit *test)
+{
+	char desc[sizeof(linx_pto_isa_identity)];
+	char *abi;
+
+	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
+	abi = strstr(desc, "mode-function-v1");
+	KUNIT_ASSERT_NOT_NULL(test, abi);
+	abi[15] = '2';
+	expect_pto_identity_mismatch(test, desc);
+}
+
+static void linx_pto_identity_note_hash_mismatch_test(struct kunit *test)
+{
+	char desc[sizeof(linx_pto_isa_identity)];
+	char *hash;
+
+	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
+	hash = strstr(desc, "34f6602cf29ea636");
+	KUNIT_ASSERT_NOT_NULL(test, hash);
+	hash[0] = '0';
+	expect_pto_identity_mismatch(test, desc);
+}
+
+static void linx_pto_identity_note_trailing_nul_test(struct kunit *test)
+{
+	u8 note[512] = {};
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(note, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity), "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test,
+			linx_pto_isa_note_parse(note, size, &found),
+			-ENOEXEC);
+}
+
+static void linx_pto_identity_note_duplicate_test(struct kunit *test)
+{
+	u8 notes[1024] = {};
+	char mismatch[sizeof(linx_pto_isa_identity)];
+	bool found = false;
+	size_t size;
+
+	size = append_pto_note(notes, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	size = append_pto_note(notes, size, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_note_parse(notes, size, &found), 0);
+	KUNIT_EXPECT_TRUE(test, found);
+
+	memcpy(mismatch, linx_pto_isa_identity, sizeof(mismatch));
+	strstr(mismatch, "0.57.1")[5] = '2';
+	size = append_pto_note(notes, 0, linx_pto_isa_identity,
+			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
+			       PTO_NT_ISA_IDENTITY);
+	size = append_pto_note(notes, size, mismatch, sizeof(mismatch) - 1,
+			       "PTO\0", PTO_NT_ISA_IDENTITY);
+	found = false;
+	KUNIT_EXPECT_EQ(test,
+			linx_pto_isa_note_parse(notes, size, &found),
+			-ENOEXEC);
+}
+#endif
+
 static struct kunit_case binfmt_elf_test_cases[] = {
 	KUNIT_CASE(total_mapping_size_test),
+#ifdef CONFIG_ARCH_LINX
+	KUNIT_CASE(linx_pto_identity_note_valid_test),
+	KUNIT_CASE(linx_pto_identity_note_missing_test),
+	KUNIT_CASE(linx_pto_identity_note_malformed_test),
+	KUNIT_CASE(linx_pto_identity_note_oversized_test),
+	KUNIT_CASE(linx_pto_identity_legacy_machine_rejected_test),
+	KUNIT_CASE(linx_pto_identity_note_release_mismatch_test),
+	KUNIT_CASE(linx_pto_identity_note_abi_mismatch_test),
+	KUNIT_CASE(linx_pto_identity_note_hash_mismatch_test),
+	KUNIT_CASE(linx_pto_identity_note_trailing_nul_test),
+	KUNIT_CASE(linx_pto_identity_note_duplicate_test),
+#endif
 	{},
 };
 
