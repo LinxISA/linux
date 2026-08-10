@@ -19,7 +19,7 @@ Historical bring-up notes may still mention `linx32`, but the current Bisheng
 compiler implementation used by the superproject does not register a `linx32`
 arch and the active compiler gate surface is `linx64`.
 
-## `/proc/cpuinfo` ISA reporting (Linx v0.56)
+## `/proc/cpuinfo` ISA reporting (LinxISA v0.58)
 
 The Linx Linux bring-up port reports ISA identity in two fields:
 
@@ -35,6 +35,20 @@ Current static bring-up output:
 `lnx-s32`, `lnx-s64`, `lnx-c`, `lnx-f`, `lnx-a`, `lnx-sys`, `lnx-v`, `lnx-m`.
 This is declarative for now (no runtime HWCAP/hwprobe feature probing in this
 phase).
+
+## Executable PTO identity (PTO ISA v0.58)
+
+Every LinxISA executable and interpreter MUST carry the canonical
+`.note.pto.isa` identity emitted by the LinxISA v0.58 assembler. The Linux ELF
+loader accepts only the exact PTO ISA v0.58 descriptor:
+
+- `release`: `0.58.0`
+- `encoding_abi`: `pto-isa-0.58.0-mode-function-v1`
+- `encoding_projection_sha256`:
+  `0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa`
+
+Untagged, older, malformed, or conflicting identities fail closed at `exec`.
+The main executable and its interpreter are checked independently.
 
 ## Scalar register ABI (R0..R23)
 

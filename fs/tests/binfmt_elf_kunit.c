@@ -88,6 +88,19 @@ static void linx_pto_identity_note_valid_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, linx_pto_isa_identity_status(found), 0);
 }
 
+static void linx_pto_identity_exact_v058_test(struct kunit *test)
+{
+	static const char expected_hash[] =
+		"0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa";
+	const char *abi;
+
+	abi = strstr(linx_pto_isa_identity, "pto-isa-0.58.0-mode-function-v1");
+	KUNIT_EXPECT_EQ(test, sizeof(linx_pto_isa_identity) - 1, (size_t)165);
+	KUNIT_EXPECT_NOT_NULL(test, abi);
+	KUNIT_EXPECT_NOT_NULL(test, strstr(linx_pto_isa_identity, expected_hash));
+	KUNIT_EXPECT_NOT_NULL(test, strstr(linx_pto_isa_identity, "0.58.0"));
+}
+
 static void linx_pto_identity_note_missing_test(struct kunit *test)
 {
 	u8 note[512] = {};
@@ -157,7 +170,7 @@ static void linx_pto_identity_note_release_mismatch_test(struct kunit *test)
 	char *release;
 
 	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
-	release = strstr(desc, "0.57.1");
+	release = strstr(desc, "0.58.0");
 	KUNIT_ASSERT_NOT_NULL(test, release);
 	release[5] = '2';
 	expect_pto_identity_mismatch(test, desc);
@@ -181,9 +194,9 @@ static void linx_pto_identity_note_hash_mismatch_test(struct kunit *test)
 	char *hash;
 
 	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
-	hash = strstr(desc, "34f6602cf29ea636");
+	hash = strstr(desc, "0cad2272ada8f53f");
 	KUNIT_ASSERT_NOT_NULL(test, hash);
-	hash[0] = '0';
+	hash[0] = 'f';
 	expect_pto_identity_mismatch(test, desc);
 }
 
@@ -218,7 +231,7 @@ static void linx_pto_identity_note_duplicate_test(struct kunit *test)
 	KUNIT_EXPECT_TRUE(test, found);
 
 	memcpy(mismatch, linx_pto_isa_identity, sizeof(mismatch));
-	strstr(mismatch, "0.57.1")[5] = '2';
+	strstr(mismatch, "0.58.0")[5] = '1';
 	size = append_pto_note(notes, 0, linx_pto_isa_identity,
 			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
 			       PTO_NT_ISA_IDENTITY);
@@ -235,6 +248,7 @@ static struct kunit_case binfmt_elf_test_cases[] = {
 	KUNIT_CASE(total_mapping_size_test),
 #ifdef CONFIG_ARCH_LINX
 	KUNIT_CASE(linx_pto_identity_note_valid_test),
+	KUNIT_CASE(linx_pto_identity_exact_v058_test),
 	KUNIT_CASE(linx_pto_identity_note_missing_test),
 	KUNIT_CASE(linx_pto_identity_note_malformed_test),
 	KUNIT_CASE(linx_pto_identity_note_oversized_test),
