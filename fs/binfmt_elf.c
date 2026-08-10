@@ -71,15 +71,15 @@
 
 #ifdef CONFIG_ARCH_LINX
 /*
- * PTO ISA 0.57.1 deliberately has no untagged compatibility decoder.  The
+ * PTO ISA 0.58.0 deliberately has no untagged compatibility decoder.  The
  * descriptor is canonical JSON: sorted keys, no insignificant whitespace,
  * and no trailing NUL byte.
  */
 static const char linx_pto_isa_identity[] =
-	"{\"encoding_abi\":\"pto-isa-0.57.1-mode-function-v1\","
+	"{\"encoding_abi\":\"pto-isa-0.58.0-mode-function-v1\","
 	"\"encoding_projection_sha256\":"
-	"\"9705a984e2e48e0d4e856d3fbcfa07041c8578dd326d81f1c90279e826354c32\","
-	"\"release\":\"0.57.1\"}";
+	"\"0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa\","
+	"\"release\":\"0.58.0\"}";
 
 #define LINX_PTO_ISA_NOTE_SCAN_MAX SZ_4K
 
