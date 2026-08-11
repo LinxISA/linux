@@ -227,8 +227,9 @@ static void linx_pto_identity_note_duplicate_test(struct kunit *test)
 	size = append_pto_note(notes, size, linx_pto_isa_identity,
 			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
 			       PTO_NT_ISA_IDENTITY);
-	KUNIT_EXPECT_EQ(test, linx_pto_isa_note_parse(notes, size, &found), 0);
-	KUNIT_EXPECT_TRUE(test, found);
+	KUNIT_EXPECT_EQ(test, linx_pto_isa_note_parse(notes, size, &found),
+			-ENOEXEC);
+	KUNIT_EXPECT_FALSE(test, found);
 
 	memcpy(mismatch, linx_pto_isa_identity, sizeof(mismatch));
 	strstr(mismatch, "0.58.0")[5] = '1';
