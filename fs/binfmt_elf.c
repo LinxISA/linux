@@ -130,17 +130,21 @@ static int linx_pto_isa_note_parse_reader(struct linx_pto_note_reader *reader,
 				return ret;
 			if (!memcmp(name, PTO_ISA_IDENTITY_NOTE_NAME "\0",
 				    PTO_ISA_IDENTITY_NOTE_NAMESZ)) {
-				/* Conflicting identity duplicates are invalid. */
-				if (note.n_descsz != sizeof(desc))
+				/* Exactly one PTO identity record is permitted. */
+				if (*found || note.n_descsz != sizeof(desc)) {
+					*found = false;
 					return -ENOEXEC;
+				}
 				ret = reader->read(reader->context,
 						   off + sizeof(note) + namesz,
 						   desc, sizeof(desc));
 				if (ret)
 					return ret;
 				if (memcmp(desc, linx_pto_isa_identity,
-					   sizeof(desc)))
+					   sizeof(desc))) {
+					*found = false;
 					return -ENOEXEC;
+				}
 				*found = true;
 			}
 		}
@@ -239,6 +243,8 @@ static int linx_elf_pto_identity_check(struct file *file,
 		int ret;
 
 		if (phdr->p_type != PT_NOTE || !phdr->p_filesz)
+			continue;
+		if (phdr->p_align != 4)
 			continue;
 		if (phdr->p_filesz > SIZE_MAX || phdr->p_offset > LLONG_MAX)
 			return -ENOEXEC;
