@@ -68,7 +68,7 @@
 	__enable_user_access();					\
 	__asm__ __volatile__ (					\
 		"1:					\n"	\
-		"BSTART.std fall, 3f			\n"	\
+		"L.BSTART.STD FALL, 3f\n"			\
 		"B.CATR aqrl				\n"	\
 			"" insn "			\n"	\
 		"2:					\n"	\

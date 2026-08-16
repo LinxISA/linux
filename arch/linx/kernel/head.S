@@ -309,8 +309,7 @@ clear_bss_done:
     sdi a0, [t#1, 0]
 
     /* Initialize page tables and relocate to virtual addresses */
-    BSTART.std call, setup_vm
-    setret 2f, -> ra
+    BSTART.CALL setup_vm, 2f, ->ra
     1: addtpc %tpcrel_hi(init_thread_union + THREAD_SIZE), -> t
     addi t#1, %tpcrel_lo(init_thread_union + THREAD_SIZE), -> sp
     // subi t#1, EB_SIZE_ON_STACK, -> sp

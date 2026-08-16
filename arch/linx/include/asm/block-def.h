@@ -273,8 +273,7 @@
  * BPC += branch, link register = next BPC
  */
 .macro block_next_call branch
-	bstart.std call, \branch
-	setret 1f, -> ra
+	BSTART.CALL \branch, 1f, ->ra
 	bstop
 	1:
 .endm
@@ -302,8 +301,7 @@
  * BPC = symbol, link register = next BPC
  */
 .macro block_next_indcall symbol
-	bstart.std icall
-	setret 2f, -> ra
+	BSTART.ICALL 2f, ->ra
 	1: addtpc %tpcrel_hi(\symbol), -> t
 	addi t#1, %tpcrel_lo(1b), -> t
 	setc.tgt t#1
@@ -315,8 +313,7 @@
  * BPC = gpr[rs], link register = next BPC
  */
 .macro block_next_indcall_reg rs
-	bstart.std icall
-	setret 2f, -> ra
+	BSTART.ICALL 2f, ->ra
 	setc.tgt \rs
 	bstop
 	2:
