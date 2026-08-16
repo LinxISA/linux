@@ -42,13 +42,17 @@ Every LinxISA executable and interpreter MUST carry the canonical
 `.note.pto.isa` identity emitted by the LinxISA v0.58 assembler. The Linux ELF
 loader accepts only the exact PTO ISA v0.58 descriptor:
 
-- `release`: `0.58.0`
-- `encoding_abi`: `pto-isa-0.58.0-mode-function-v1`
+- `release`: `0.58.1`
+- `encoding_abi`: `pto-isa-0.58.1-mode-function-v1`
 - `encoding_projection_sha256`:
-  `0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa`
+  `89b872d6eaf0252200bc9349d49b9346e2a69d894cdcc2dcd0fd71911c1e0b8c`
 
-Untagged, older, malformed, or conflicting identities fail closed at `exec`.
-The main executable and its interpreter are checked independently.
+The note uses owner `PTO\0`, type `1`, and four-byte alignment. Its descriptor
+is compact, key-sorted JSON without a trailing NUL byte.
+
+Untagged, older, malformed, oversized, trailing-NUL, or conflicting identities
+fail closed at `exec`. Duplicate identical notes are accepted. The main
+executable and its interpreter are checked independently.
 
 ## Scalar register ABI (R0..R23)
 

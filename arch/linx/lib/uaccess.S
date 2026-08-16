@@ -18,13 +18,13 @@
 .endm
 
 .macro fixupload op reg addr offset lbl
-	BSTART.std fall, \lbl
+	L.BSTART.STD FALL, \lbl
 	/*	todo: wait for fixup */
 	\op [\addr, \offset], -> \reg
 .endm
 
 .macro fixupstore op reg addr offset lbl
-	BSTART.std fall, \lbl
+	L.BSTART.STD FALL, \lbl
 	\op \reg, [\addr, \offset]
 .endm
 
