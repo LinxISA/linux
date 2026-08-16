@@ -299,22 +299,25 @@
 
 /*
  * BPC = symbol, link register = next BPC
+ * BSTART.ICALL snapshots the retiring block's BARG.BPCN, so the target must
+ * be materialized and recorded before the ICALL header.
  */
 .macro block_next_indcall symbol
-	BSTART.ICALL 2f, ->ra
 	1: addtpc %tpcrel_hi(\symbol), -> t
 	addi t#1, %tpcrel_lo(1b), -> t
 	setc.tgt t#1
+	BSTART.ICALL 2f, ->ra
 	bstop
 	2:
 .endm
 
 /*
  * BPC = gpr[rs], link register = next BPC
+ * Record the target in the retiring block before BSTART.ICALL snapshots it.
  */
 .macro block_next_indcall_reg rs
-	BSTART.ICALL 2f, ->ra
 	setc.tgt \rs
+	BSTART.ICALL 2f, ->ra
 	bstop
 	2:
 .endm

@@ -166,13 +166,20 @@ static void expect_pto_identity_mismatch(struct kunit *test, char *desc)
 
 static void linx_pto_identity_note_release_mismatch_test(struct kunit *test)
 {
+	static const char canonical_abi[] =
+		"\"encoding_abi\":\"pto-isa-0.58.1-mode-function-v1\"";
+	static const char release_field[] = "\"release\":\"0.58.1\"";
 	char desc[sizeof(linx_pto_isa_identity)];
 	char *release;
 
 	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
-	release = strstr(desc, "0.58.1");
+	release = strstr(desc, release_field);
 	KUNIT_ASSERT_NOT_NULL(test, release);
+	release += sizeof("\"release\":\"") - 1;
 	release[5] = '0';
+	KUNIT_EXPECT_NOT_NULL(test, strstr(desc, canonical_abi));
+	KUNIT_EXPECT_NOT_NULL(test, strstr(desc, "\"release\":\"0.58.0\""));
+	KUNIT_EXPECT_NULL(test, strstr(desc, release_field));
 	expect_pto_identity_mismatch(test, desc);
 }
 
