@@ -273,7 +273,7 @@
  * BPC += branch, link register = next BPC
  */
 .macro block_next_call branch
-	BSTART.CALL \branch, 1f, ->ra
+	HL.BSTART.CALL \branch, 1f, ->ra
 	bstop
 	1:
 .endm

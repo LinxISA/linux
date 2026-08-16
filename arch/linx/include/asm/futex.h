@@ -144,7 +144,7 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	__enable_user_access();
 	__asm__ __volatile__ (
 		"10:					\n"
-		"BSTART.sys fall, 3f			\n"
+		"L.BSTART.SYS FALL, 3f\n"
 			"lr.w.aqrl [%[u]], -> t		\n"
 			"addi t#1, 0, -> %[v]		\n"
 			"sub %[ov], t#1, -> %[equ]	\n"
