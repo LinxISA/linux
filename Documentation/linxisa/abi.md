@@ -42,17 +42,23 @@ Every LinxISA executable and interpreter MUST carry the canonical
 `.note.pto.isa` identity emitted by the LinxISA v0.58 assembler. The Linux ELF
 loader accepts only the exact PTO ISA v0.58 descriptor:
 
-- `release`: `0.58.1`
-- `encoding_abi`: `pto-isa-0.58.1-mode-function-v1`
+- `release`: `0.58.3`
+- `encoding_abi`: `pto-isa-0.58.3-mode-function-v1`
 - `encoding_projection_sha256`:
-  `89b872d6eaf0252200bc9349d49b9346e2a69d894cdcc2dcd0fd71911c1e0b8c`
+  `8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172`
+
+This identity is sourced from the published PTO ISA v0.58.3 manifest, whose
+`content_sha256` is
+`f299fe3d256c5d071e57bb4aaa2be2de2e4a386ae090048df1f73ae92d392678`.
+The content hash records release provenance; it is not an additional field in
+the `.note.pto.isa` wire descriptor.
 
 The note uses owner `PTO\0`, type `1`, and four-byte alignment. Its descriptor
 is compact, key-sorted JSON without a trailing NUL byte.
 
-Untagged, older, malformed, oversized, trailing-NUL, or conflicting identities
-fail closed at `exec`. Duplicate identical notes are accepted. The main
-executable and its interpreter are checked independently.
+Untagged, older (including v0.58.1), malformed, oversized, trailing-NUL, or
+conflicting identities fail closed at `exec`. Duplicate identical notes are
+accepted. The main executable and its interpreter are checked independently.
 
 ## Scalar register ABI (R0..R23)
 
