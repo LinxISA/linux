@@ -94,7 +94,7 @@ from_user:
  *	x1 holds the interrupted user x1
  *	sp hold (user sp)
  */
-	BSTART.std fall
+	BSTART.sys fall
 		ssrget SSR_TP, -> t
 		sdi sp, [t#1, TASK_TI_USER_SP]
 
@@ -208,7 +208,7 @@ after_save_bstate:
 	 * space.
 	 */
 
-	BSTART.std fall
+	BSTART.sys fall
 	addi zero, CSTATE_P, -> t
 	ssrget SSR_CSTATE, -> t
 	and t#1, t#2.not -> t
@@ -240,7 +240,7 @@ PT_TP_FROM_USER:
 	block_next_direct PT_TP_READY
 
 PT_TP_FROM_KERNEL:
-	BSTART.std fall
+	BSTART.sys fall
 	ssrget SSR_TP, -> s5
 
 PT_TP_READY:
@@ -295,7 +295,7 @@ handle_exceptions:
 	block_next_beqi_trapnum s4, ECAUSE_TRAPNUM_BREAKPOINT_EXP, handle_syscalls
 
 	/* Enable interrupts */
-	BSTART.std fall
+	BSTART.sys fall
 	ssrget SSR_CSTATE, -> t
 	ori t#1, CSTATE_I, -> t
 	ssrset t#1, SSR_CSTATE
@@ -547,7 +547,7 @@ work_notifysig:
 	/* Handle pending signals and notify-resume requests */
 
 	/* Enable interrupts for do_notify_resume(): SSR_CSTATE |= CSTATE_I */
-	BSTART.std fall
+	BSTART.sys fall
 	ssrget SSR_CSTATE, -> t
 	ori t#1, CSTATE_I, -> t
 	ssrset t#1, SSR_CSTATE
@@ -630,7 +630,7 @@ ENDPROC(ret_from_kernel_thread)
  * arguments are passed to schedule_tail.
  */
 ENTRY(__switch_to)
-	BSTART.std fall
+	BSTART.sys fall
 	addi a0, TASK_THREAD_RA, -> t
 	addi a1, TASK_THREAD_RA, -> t
 
