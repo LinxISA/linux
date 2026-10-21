@@ -24,7 +24,10 @@ struct pto_runtime_group_context {
 	volatile u32 *error;
 };
 
-/* state and result reference four PE-indexed elements owned by the launcher. */
+static_assert(sizeof(struct pto_runtime_group_context) == 32);
+
+/* state and result reference four PE-indexed elements owned by the launcher.
+ * State publication is ordered around the runtime rendezvous. */
 
 /* This is deliberately separate from the Linux syscall trap path. Linux
  * syscalls keep their hosted ABI; a PTO manager installs these callbacks to

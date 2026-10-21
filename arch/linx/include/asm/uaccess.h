@@ -26,7 +26,7 @@
 do {									\
 	unsigned long __tmp;						\
 	__asm__ __volatile__ (						\
-	"BSTART.sys fall\n"						\
+	"BSTART.std fall\n"						\
 		"ssrget %[cstate], -> %[tmp]\n"			\
 		"or %[tmp], %[permit], -> %[tmp]\n"		\
 		"ssrset %[tmp], %[cstate]\n"			\
@@ -38,7 +38,7 @@ do {									\
 do {									\
 	unsigned long __tmp;						\
 	__asm__ __volatile__ (						\
-	"BSTART.sys fall\n"						\
+	"BSTART.std fall\n"						\
 		"ssrget %[cstate], -> %[tmp]\n"			\
 		"and %[tmp], %[permit].not, -> %[tmp]\n"		\
 		"ssrset %[tmp], %[cstate]\n"			\

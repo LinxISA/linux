@@ -29,8 +29,7 @@
 #define ECAUSE_TRAPNUM_BLOCK_EXP		4 /* Block exception */
 #define ECAUSE_TRAPNUM_FLOAT_EXP		5 /* Float exception */
 #define ECAUSE_TRAPNUM_ASSERT			15 /* Assertion exception */
-#define ECAUSE_TRAPNUM_SCALL_EXP		16 /* Linux hosted syscall trap. */
-#define ECAUSE_TRAPNUM_PTO_SERVICE_EXP	6 /* PTO manager service request. */
+#define ECAUSE_TRAPNUM_SCALL_EXP		16 /* SysCall. */
 #define ECAUSE_TRAPNUM_BREAKPOINT_EXP		17 /* ebreak */
 #define ECAUSE_TRAPNUM_ILLEGAL_SSR_EXP		62 /* ILLEGAL ssr exception */
 #define ECAUSE_TRAPNUM_INVALID_EXP 		63 /* unsupported exception */

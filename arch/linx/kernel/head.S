@@ -158,7 +158,7 @@ secondary_start_sbi:
     hl.ssrset zero, SSR_ECONFIG
     hl.ssrset zero, SSR_IPENDING
 
-    BSTART.sys fall
+    BSTART.std fall
     /* Load the global pointer */
     1: addtpc %tpcrel_hi(__global_pointer$), -> t
     addi t#1, %tpcrel_lo(__global_pointer$), -> t
@@ -170,7 +170,7 @@ secondary_start_sbi:
     addi t#1, %tpcrel_lo(.Lsecondary_park), -> t
     hl.ssrset t#1, SSR_EVBASE
 
-    BSTART.sys fall
+    BSTART.std fall
     1: addtpc %tpcrel_hi(__cpu_up_stack_pointer), -> t
     addi t#1, %tpcrel_lo(__cpu_up_stack_pointer), -> t
     slli a0, LGREG, -> t
@@ -244,7 +244,7 @@ ENTRY(_start_kernel)
     hl.ssrset zero, SSR_ECONFIG
     hl.ssrset zero, SSR_IPENDING
 
-    BSTART.sys fall
+    BSTART.std fall
     /* Load the global pointer */
     1: addtpc %tpcrel_hi(__global_pointer$), -> t
     addi t#1, %tpcrel_lo(__global_pointer$), -> t
@@ -576,7 +576,7 @@ clear_bss_done:
     hl.ssrset zero, SSR_ETEMP
 
     /* Restore C environment */
-	BSTART.sys fall
+	BSTART.std fall
     1: addtpc %tpcrel_hi(init_task), -> t
     addi t#1, %tpcrel_lo(init_task), -> t
     ssrset t#1, SSR_TP
