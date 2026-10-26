@@ -25,7 +25,6 @@ obj-y	+= entry.o
 obj-y	+= irq.o
 obj-y	+= process.o
 obj-y	+= ptrace.o
-obj-y	+= pto_runtime.o
 obj-y	+= reset.o
 obj-y	+= setup.o
 obj-y	+= signal.o

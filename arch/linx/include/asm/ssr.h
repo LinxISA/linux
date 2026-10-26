@@ -149,7 +149,6 @@
 #define SSR_VERSION	0x0023	/* Linx Core Version Register*/
 #define SSR_LCFR	0x0024	/* Linx Core Features Register*/
 #define SSR_LCFR_EN	0x0025	/* Linx Core Feature Enable Register	*/
-#define SSR_THREAD_ID	0x0026	/* PTO PE thread ID (0..3) */
 
 #define SSR_SYSCNT	0x0810 /* System Counter */
 #define SSR_CW	0x0820 /* Canary Word */
