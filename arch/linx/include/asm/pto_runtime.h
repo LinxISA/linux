@@ -32,15 +32,50 @@ static_assert(sizeof(struct pto_runtime_group_context) == 32);
 /* This is deliberately separate from the Linux syscall trap path. Linux
  * syscalls keep their hosted ABI; a PTO manager installs these callbacks to
  * map a completed group to the architecture's End/Abort lifecycle. */
+struct pto_runtime_launch;
+
 struct pto_runtime_manager_ops {
 	int (*validate)(const struct pto_runtime_group_context *context);
 	void (*end)(const struct pto_runtime_group_context *context, int status);
 	void (*abort)(const struct pto_runtime_group_context *context, int status);
+	/* Optional launch backend. Called in process context under the manager
+	 * mutex. Success admits all four contexts atomically. Failure must leave
+	 * no running context or outstanding request. No synchronous re-entry into
+	 * this API. A backend must program one common PC, private SP/TLS/arguments,
+	 * and associate completions with the supplied invocation identity. */
+	int (*launch)(const struct pto_runtime_launch *launch, u64 invocation);
+	/* Must stop all contexts and drain/cancel GM, including unissued TLSU,
+	 * before returning. Required when launch is provided. */
+	void (*quiesce)(const struct pto_runtime_group_context *context,
+			u64 invocation, bool aborting);
+};
+
+struct pto_runtime_private_context {
+	u64 stack_base;
+	u64 stack_size;
+	u64 stack_pointer;
+	u64 tls_base;
+	u64 tls_size;
+	u64 thread_pointer;
+	u64 argument;
+};
+
+/* A kernel-internal launch description, never a userspace pointer ABI.
+ * The backend pins/maps these ranges and validates its target ABI. */
+struct pto_runtime_launch {
+	const struct pto_runtime_group_context *context;
+	u64 entry;
+	struct pto_runtime_private_context pe[PTO_RUNTIME_GROUP_PARTICIPANTS];
 };
 
 int pto_runtime_register_manager(const struct pto_runtime_manager_ops *ops);
-void pto_runtime_unregister_manager(const struct pto_runtime_manager_ops *ops);
+/* Returns -EBUSY while an admitted invocation still owns the backend. */
+int pto_runtime_unregister_manager(const struct pto_runtime_manager_ops *ops);
 void pto_runtime_group_complete(
 	const struct pto_runtime_group_context *context, int status);
+int pto_runtime_group_launch(const struct pto_runtime_launch *launch,
+			     u64 *invocation);
+int pto_runtime_group_finish(const struct pto_runtime_group_context *context,
+			     u64 invocation, int status);
 
 #endif
