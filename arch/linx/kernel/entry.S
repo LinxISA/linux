@@ -609,6 +609,7 @@ ENTRY(ret_from_fork)
 ENDPROC(ret_from_fork)
 
 ENTRY(ret_from_kernel_thread)
+	BSTART.std fall
 	block_next_indcall schedule_tail
 	BSTART.std ind
 	addtpc %tpcrel_hi(ret_from_exception), -> t

@@ -71,15 +71,15 @@
 
 #ifdef CONFIG_ARCH_LINX
 /*
- * PTO ISA 0.58.0 deliberately has no untagged compatibility decoder.  The
+ * PTO ISA 0.58.3 deliberately has no untagged compatibility decoder.  The
  * descriptor is canonical JSON: sorted keys, no insignificant whitespace,
  * and no trailing NUL byte.
  */
 static const char linx_pto_isa_identity[] =
-	"{\"encoding_abi\":\"pto-isa-0.58.0-mode-function-v1\","
+	"{\"encoding_abi\":\"pto-isa-0.58.3-mode-function-v1\","
 	"\"encoding_projection_sha256\":"
-	"\"0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa\","
-	"\"release\":\"0.58.0\"}";
+	"\"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172\","
+	"\"release\":\"0.58.3\"}";
 
 #define LINX_PTO_ISA_NOTE_SCAN_MAX SZ_4K
 
@@ -130,8 +130,7 @@ static int linx_pto_isa_note_parse_reader(struct linx_pto_note_reader *reader,
 				return ret;
 			if (!memcmp(name, PTO_ISA_IDENTITY_NOTE_NAME "\0",
 				    PTO_ISA_IDENTITY_NOTE_NAMESZ)) {
-				/* Exactly one PTO identity record is permitted. */
-				if (*found || note.n_descsz != sizeof(desc)) {
+				if (note.n_descsz != sizeof(desc)) {
 					*found = false;
 					return -ENOEXEC;
 				}

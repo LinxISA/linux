@@ -105,7 +105,7 @@ do {								\
 	__typeof__(x) __x;					\
 	__asm__ __volatile__ (					\
 	"1:\n"							\
-	"BSTART.std fall, 3f\n"						\
+	"L.BSTART.STD FALL, 3f\n"					\
 		insn " [%[src], 0], -> %[dst]\n"			\
 	"2:\n"							\
 	".section .fixup,\"ax\"\n"				\
@@ -213,7 +213,7 @@ do {									\
 	__typeof__(*(ptr)) __x = x;					\
 	__asm__ __volatile__ (						\
 	"1:\n"								\
-	"BSTART.std fall, 3f\n"						\
+	"L.BSTART.STD FALL, 3f\n"					\
 		insn " %[src], [%[dst], 0]\n"					\
 	"2:\n"								\
 	".section .fixup,\"ax\"\n"					\
