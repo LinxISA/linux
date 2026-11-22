@@ -2094,6 +2094,7 @@ static void __init linx_bringup_init_storage(void)
 	linx_bringup_log_init_result("bdi_class_init", linx_bdi_class_init());
 	linx_bringup_log_init_result("default_bdi_init", linx_default_bdi_init());
 	linx_bringup_log_init_result("cgwb_init", linx_cgwb_init());
+	linx_bringup_log_init_result("sg_pool_init", linx_sg_pool_init());
 	linx_bringup_log_init_result("bio_init", linx_bio_init());
 	linx_bringup_log_init_result("blk_ioc_init", linx_blk_ioc_init());
 	linx_bringup_log_init_result("blk_mq_init", linx_blk_mq_init());
