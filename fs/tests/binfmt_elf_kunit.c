@@ -52,11 +52,11 @@ static void total_mapping_size_test(struct kunit *test)
 }
 
 #ifdef CONFIG_ARCH_LINX
-static const char linx_pto_isa_identity_v0581[] =
-	"{\"encoding_abi\":\"pto-isa-0.58.1-mode-function-v1\","
+static const char linx_pto_isa_identity_v0583[] =
+	"{\"encoding_abi\":\"pto-isa-0.58.3-mode-function-v1\","
 	"\"encoding_projection_sha256\":"
-	"\"89b872d6eaf0252200bc9349d49b9346e2a69d894cdcc2dcd0fd71911c1e0b8c\","
-	"\"release\":\"0.58.1\"}";
+	"\"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172\","
+	"\"release\":\"0.58.3\"}";
 
 static size_t append_pto_note(u8 *buffer, size_t off, const char *desc,
 			      size_t descsz, const char name[4], u32 type)
@@ -94,17 +94,17 @@ static void linx_pto_identity_note_valid_test(struct kunit *test)
 	KUNIT_EXPECT_EQ(test, linx_pto_isa_identity_status(found), 0);
 }
 
-static void linx_pto_identity_exact_v0583_test(struct kunit *test)
+static void linx_pto_identity_exact_v0591_test(struct kunit *test)
 {
 	static const char expected_hash[] =
-		"8a48b80e04484c70870f155bf9efc79d2a805cf99e809f4e4e8a7e6a7eb34172";
+		"d90c881754d66f2cd26f6014d0b582cba88307e70123583d87fc59a918229c28";
 	const char *abi;
 
-	abi = strstr(linx_pto_isa_identity, "pto-isa-0.58.3-mode-function-v1");
+	abi = strstr(linx_pto_isa_identity, "pto-isa-0.59.1-mode-function-v1");
 	KUNIT_EXPECT_EQ(test, sizeof(linx_pto_isa_identity) - 1, (size_t)165);
 	KUNIT_EXPECT_NOT_NULL(test, abi);
 	KUNIT_EXPECT_NOT_NULL(test, strstr(linx_pto_isa_identity, expected_hash));
-	KUNIT_EXPECT_NOT_NULL(test, strstr(linx_pto_isa_identity, "\"release\":\"0.58.3\""));
+	KUNIT_EXPECT_NOT_NULL(test, strstr(linx_pto_isa_identity, "\"release\":\"0.59.1\""));
 }
 
 static void linx_pto_identity_note_missing_test(struct kunit *test)
@@ -170,11 +170,11 @@ static void expect_pto_identity_mismatch(struct kunit *test, char *desc)
 	KUNIT_EXPECT_FALSE(test, found);
 }
 
-static void linx_pto_identity_note_release_mismatch_test(struct kunit *test)
+static void linx_pto_identity_note_mixed_release_test(struct kunit *test)
 {
 	static const char canonical_abi[] =
-		"\"encoding_abi\":\"pto-isa-0.58.3-mode-function-v1\"";
-	static const char release_field[] = "\"release\":\"0.58.3\"";
+		"\"encoding_abi\":\"pto-isa-0.59.1-mode-function-v1\"";
+	static const char release_field[] = "\"release\":\"0.59.1\"";
 	char desc[sizeof(linx_pto_isa_identity)];
 	char *release;
 
@@ -182,9 +182,10 @@ static void linx_pto_identity_note_release_mismatch_test(struct kunit *test)
 	release = strstr(desc, release_field);
 	KUNIT_ASSERT_NOT_NULL(test, release);
 	release += sizeof("\"release\":\"") - 1;
-	release[5] = '1';
+	release[3] = '8';
+	release[5] = '3';
 	KUNIT_EXPECT_NOT_NULL(test, strstr(desc, canonical_abi));
-	KUNIT_EXPECT_NOT_NULL(test, strstr(desc, "\"release\":\"0.58.1\""));
+	KUNIT_EXPECT_NOT_NULL(test, strstr(desc, "\"release\":\"0.58.3\""));
 	KUNIT_EXPECT_NULL(test, strstr(desc, release_field));
 	expect_pto_identity_mismatch(test, desc);
 }
@@ -207,20 +208,20 @@ static void linx_pto_identity_note_hash_mismatch_test(struct kunit *test)
 	char *hash;
 
 	memcpy(desc, linx_pto_isa_identity, sizeof(desc));
-	hash = strstr(desc, "8a48b80e04484c70");
+	hash = strstr(desc, "d90c881754d66f2c");
 	KUNIT_ASSERT_NOT_NULL(test, hash);
 	hash[0] = 'f';
 	expect_pto_identity_mismatch(test, desc);
 }
 
-static void linx_pto_identity_note_v0581_rejected_test(struct kunit *test)
+static void linx_pto_identity_note_v0583_rejected_test(struct kunit *test)
 {
 	u8 note[512] = {};
 	bool found = false;
 	size_t size;
 
-	size = append_pto_note(note, 0, linx_pto_isa_identity_v0581,
-			       sizeof(linx_pto_isa_identity_v0581) - 1,
+	size = append_pto_note(note, 0, linx_pto_isa_identity_v0583,
+			       sizeof(linx_pto_isa_identity_v0583) - 1,
 			       "PTO\0", PTO_NT_ISA_IDENTITY);
 	KUNIT_EXPECT_EQ(test,
 			linx_pto_isa_note_parse(note, size, &found),
@@ -267,8 +268,8 @@ static void linx_pto_identity_note_duplicate_conflicting_test(struct kunit *test
 	size = append_pto_note(notes, 0, linx_pto_isa_identity,
 			       sizeof(linx_pto_isa_identity) - 1, "PTO\0",
 			       PTO_NT_ISA_IDENTITY);
-	size = append_pto_note(notes, size, linx_pto_isa_identity_v0581,
-			       sizeof(linx_pto_isa_identity_v0581) - 1,
+	size = append_pto_note(notes, size, linx_pto_isa_identity_v0583,
+			       sizeof(linx_pto_isa_identity_v0583) - 1,
 			       "PTO\0", PTO_NT_ISA_IDENTITY);
 	found = false;
 	KUNIT_EXPECT_EQ(test,
@@ -281,15 +282,15 @@ static struct kunit_case binfmt_elf_test_cases[] = {
 	KUNIT_CASE(total_mapping_size_test),
 #ifdef CONFIG_ARCH_LINX
 	KUNIT_CASE(linx_pto_identity_note_valid_test),
-	KUNIT_CASE(linx_pto_identity_exact_v0583_test),
+	KUNIT_CASE(linx_pto_identity_exact_v0591_test),
 	KUNIT_CASE(linx_pto_identity_note_missing_test),
 	KUNIT_CASE(linx_pto_identity_note_malformed_test),
 	KUNIT_CASE(linx_pto_identity_note_oversized_test),
 	KUNIT_CASE(linx_pto_identity_legacy_machine_rejected_test),
-	KUNIT_CASE(linx_pto_identity_note_release_mismatch_test),
+	KUNIT_CASE(linx_pto_identity_note_mixed_release_test),
 	KUNIT_CASE(linx_pto_identity_note_abi_mismatch_test),
 	KUNIT_CASE(linx_pto_identity_note_hash_mismatch_test),
-	KUNIT_CASE(linx_pto_identity_note_v0581_rejected_test),
+	KUNIT_CASE(linx_pto_identity_note_v0583_rejected_test),
 	KUNIT_CASE(linx_pto_identity_note_trailing_nul_test),
 	KUNIT_CASE(linx_pto_identity_note_duplicate_identical_test),
 	KUNIT_CASE(linx_pto_identity_note_duplicate_conflicting_test),
