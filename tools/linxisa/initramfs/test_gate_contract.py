@@ -39,6 +39,17 @@ class PromptScriptDriverTest(unittest.TestCase):
         driver.tick(2.0, stdin)
         self.assertEqual(stdin.getvalue(), b"hh")
 
+    def test_coalesced_newline_echo_and_prompt_starts_next_command(self) -> None:
+        stdin = io.BytesIO()
+        driver = PromptScriptDriver("a\nb\n")
+
+        driver.feed(b"\n# ", 0.0, stdin)
+        driver.feed(b"a", 0.1, stdin)
+        driver.feed(b"\r\n# ", 0.2, stdin)
+
+        self.assertEqual(stdin.getvalue(), b"a\nb")
+        self.assertFalse(driver.complete)
+
 
 class QemuExitContractTest(unittest.TestCase):
     def test_timeout_overrides_successful_process_status(self) -> None:

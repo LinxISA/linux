@@ -57,8 +57,12 @@ class PromptScriptDriver:
 
         self._echo_buffer += chunk
         expected = self._pending_echo
+        remainder = b""
         if expected == ord("\n"):
-            echoed = b"\n" in self._echo_buffer
+            echo_at = self._echo_buffer.find(b"\n")
+            echoed = echo_at >= 0
+            if echoed:
+                remainder = self._echo_buffer[echo_at + 1:]
         else:
             tail = self._echo_buffer.rsplit(b"\n", 1)[-1].lstrip(b"\r")
             echoed = tail.startswith(bytes((expected,)))
@@ -80,6 +84,7 @@ class PromptScriptDriver:
             return
 
         self._waiting_for_prompt = True
+        self.feed(remainder, now, stdin)
 
     def tick(self, now: float, stdin: BinaryIO) -> None:
         """Retry a dropped byte while leaving timeout enforcement to the caller."""
