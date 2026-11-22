@@ -620,6 +620,12 @@ static int __init linx_vuart_register_builtin_port(void)
 		return rc;
 	}
 
+#ifdef CONFIG_SERIAL_LINX_VIRT_UART_CONSOLE
+	/* The reduced bring-up path creates the port after console initcalls. */
+	if (!console_is_registered(&linx_vuart_console))
+		register_console(&linx_vuart_console);
+#endif
+
 	return 0;
 }
 #endif

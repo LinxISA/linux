@@ -7,7 +7,7 @@ import subprocess
 import sys
 import time
 
-from gate_contract import qemu_exit_error
+from gate_contract import PromptScriptDriver, qemu_exit_error
 
 
 def main() -> int:
@@ -35,6 +35,7 @@ def main() -> int:
         append = f"{append} linx_disable_timer_irq=1".strip()
     qemu_extra_args = shlex.split(os.environ.get("QEMU_EXTRA_ARGS", ""))
     timeout_s = int(os.environ.get("TIMEOUT", "120"))
+    input_retry_s = float(os.environ.get("INPUT_RETRY", "2.0"))
 
     script = os.environ.get(
         "SCRIPT",
@@ -86,9 +87,8 @@ def main() -> int:
     )
     timed_out = False
     out_chunks: list[bytes] = []
-    prompt_seen = False
+    script_driver = PromptScriptDriver(script, retry_s=input_retry_s)
     script_sent = False
-    prompt = b"# "
     deadline = time.monotonic() + timeout_s
 
     while True:
@@ -98,7 +98,7 @@ def main() -> int:
             proc.kill()
             break
 
-        wait_s = min(0.25, max(0.0, deadline - now))
+        wait_s = min(0.05, max(0.0, deadline - now))
         r, _, _ = select.select([proc.stdout], [], [], wait_s)
         if r:
             chunk = os.read(proc.stdout.fileno(), 4096)
@@ -106,13 +106,12 @@ def main() -> int:
                 break
             out_chunks.append(chunk)
 
-            joined = b"".join(out_chunks[-8:])
-            if not prompt_seen and (b"\n# " in joined or joined.endswith(prompt)):
-                prompt_seen = True
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.write(script.encode("utf-8"))
-                    proc.stdin.flush()
-                    script_sent = True
+            if proc.stdin and not proc.stdin.closed:
+                script_driver.feed(chunk, time.monotonic(), proc.stdin)
+
+        if proc.stdin and not proc.stdin.closed:
+            script_driver.tick(time.monotonic(), proc.stdin)
+            script_sent = script_driver.complete
 
         if proc.poll() is not None:
             break

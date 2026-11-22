@@ -36,19 +36,37 @@ Current static bring-up output:
 This is declarative for now (no runtime HWCAP/hwprobe feature probing in this
 phase).
 
-## Executable PTO identity (PTO ISA v0.58)
+## Executable PTO identity (PTO ISA v0.59)
 
 Every LinxISA executable and interpreter MUST carry the canonical
-`.note.pto.isa` identity emitted by the LinxISA v0.58 assembler. The Linux ELF
-loader accepts only the exact PTO ISA v0.58 descriptor:
+`.note.pto.isa` identity emitted by the LinxISA v0.59.1 assembler. The Linux
+ELF loader accepts only the exact PTO ISA v0.59.1 descriptor:
 
-- `release`: `0.58.0`
-- `encoding_abi`: `pto-isa-0.58.0-mode-function-v1`
+- `release`: `0.59.1`
+- `encoding_abi`: `pto-isa-0.59.1-mode-function-v1`
 - `encoding_projection_sha256`:
-  `0cad2272ada8f53fc8354e22568099fe8d6bd4b7832c837260cd370b0fc76ffa`
+  `d90c881754d66f2cd26f6014d0b582cba88307e70123583d87fc59a918229c28`
 
-Untagged, older, malformed, or conflicting identities fail closed at `exec`.
-The main executable and its interpreter are checked independently.
+This identity is sourced from the frozen LinxISA `isa/v0.59/pto-spec.lock.json`,
+whose file SHA-256 is
+`a526f6dbbddfe67d349640f19e904c1148a24178b0ec697f4dc360ddac624f34`.
+The lock's PTO ISA release is `0.59.1` and its
+`content_sha256` is
+`11d63af3718a14b5ace927efda3dd0d3b7a8af7251a6dc3d4cfbfa673e9ecd60`.
+The lock binds PTO-SPEC commit
+`a89a53d48f5708328be609fe2e6296ac8bdb4bc2` and tree
+`13807a8af41c4481ebcc88bbf33357cda8041f5d` from
+`https://github.com/PTO-ISA/pto-spec.git`.
+The content hash records release provenance; it is not an additional field in
+the `.note.pto.isa` wire descriptor.
+
+The note uses owner `PTO\0`, type `1`, and four-byte alignment. Its descriptor
+is compact, key-sorted JSON without a trailing NUL byte.
+
+Untagged, older (including v0.58.3), mixed-version, malformed, oversized,
+trailing-NUL, or
+conflicting identities fail closed at `exec`. Duplicate identical notes are
+accepted. The main executable and its interpreter are checked independently.
 
 ## Scalar register ABI (R0..R23)
 
