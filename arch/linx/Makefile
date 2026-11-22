@@ -41,6 +41,12 @@ linx-march-$(CONFIG_RISCV_ISA_C)	:= $(linx-march-y)c
 KBUILD_CFLAGS += -march=$(subst fd,,$(linx-march-y))
 KBUILD_AFLAGS += -march=$(linx-march-y)
 
+ifeq ($(CONFIG_ARCH_RV64I),y)
+KBUILD_CFLAGS += -march=linx64+pto-v0591-scoped
+KBUILD_AFLAGS += -march=linx64+pto-v0591-scoped
+KBUILD_LDFLAGS += --linx-pto-v0591-scoped
+endif
+
 KBUILD_CFLAGS += -DCONFIG_PAGE_OFFSET=$(CONFIG_PAGE_OFFSET)
 ifeq ($(CONFIG_PERF_EVENTS),y)
         KBUILD_CFLAGS += -fno-omit-frame-pointer

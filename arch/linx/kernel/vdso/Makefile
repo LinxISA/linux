@@ -49,6 +49,7 @@ $(obj)/vdso.o: $(obj)/vdso.so
 # link rule for the .so file, .lds has to be first
 SYSCFLAGS_vdso.so.dbg = -shared -Wl,-S -Wl,-soname=linux-vdso.so.1 \
 	-Wl,--build-id=sha1 -Wl,--hash-style=both -Wl,--eh-frame-hdr
+SYSCFLAGS_vdso.so.dbg += -Wl,--linx-pto-v0591-scoped
 $(obj)/vdso.so.dbg: $(obj)/vdso.lds $(obj-vdso) FORCE
 	$(call if_changed,vdsold_and_check)
 

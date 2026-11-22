@@ -17,6 +17,8 @@ CPIO_LIST="$OUT_DIR/initramfs.list"
 CPIO_OUT="$OUT_DIR/initramfs.cpio"
 LINX_PERF_BUILD="${LINX_PERF_BUILD:-0}"
 INIT_VARIANT="${INIT_VARIANT:-busybox}"
+PTO_MARCH="-march=linx64+pto-v0591-scoped"
+PTO_LINK_FLAG="-Wl,--linx-pto-v0591-scoped"
 
 need() {
   command -v "$1" >/dev/null 2>&1 || {
@@ -67,17 +69,17 @@ fi
 echo "[2/3] Building minimal busybox (/init + /bin/sh, no-libc, static PIE ET_DYN) ..."
 if [[ "$INIT_VARIANT" == "busybox" ]]; then
   "$CLANG" -target linx64-unknown-linux-gnu \
-    "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fpie -fpic \
+    "$PTO_MARCH" "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fpie -fpic \
     -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
     -nostdlib -static -fuse-ld=lld -Wl,-pie -Wl,-e,_start \
-    -Wl,--build-id=none \
+    -Wl,--build-id=none "$PTO_LINK_FLAG" \
     -o "$BUSYBOX_BIN" "$INIT_MAIN_SRC" "${INIT_EXTRA_SRCS[@]-}"
 else
   "$CLANG" -target linx64-unknown-linux-gnu \
-    "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fno-pic -fno-pie \
+    "$PTO_MARCH" "${OPT_FLAGS[@]}" -ffreestanding -fno-builtin -fno-pic -fno-pie \
     -fno-stack-protector -fno-asynchronous-unwind-tables -fno-unwind-tables \
     -nostdlib -static -fuse-ld=lld -Wl,-e,_start -Wl,-Ttext=0x10000 \
-    -Wl,--build-id=none \
+    -Wl,--build-id=none "$PTO_LINK_FLAG" \
     -o "$BUSYBOX_BIN" "$INIT_MAIN_SRC" "${INIT_EXTRA_SRCS[@]-}"
 fi
 
