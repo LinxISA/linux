@@ -22,6 +22,7 @@ int __init linx_pipe_fs_init(void);
 int __init linx_proc_cpuinfo_init(void);
 int __init linx_proc_interrupts_init(void);
 int __init linx_proc_meminfo_init(void);
+int __init linx_sg_pool_init(void);
 int __init linx_v9fs_init(void);
 bool __init linx_root_device_requested(void);
 bool __init linx_storage_init_requested(void);

@@ -78,6 +78,30 @@ class BusyboxBootContractTest(unittest.TestCase):
         with mock.patch.dict(os.environ, {}, clear=True):
             self.assertEqual(boot._attempt_appends("console=ttyS0"), [("console=ttyS0", None)])
 
+    def test_prompt_writer_sends_one_paced_command_at_a_time(self) -> None:
+        writes: list[bytes] = []
+        writer = boot._GuestScriptWriter(
+            17,
+            "help\nls /\n",
+            char_delay_s=0.05,
+            line_delay_s=0.10,
+        )
+        with mock.patch.object(boot.os, "write", side_effect=lambda _fd, data: writes.append(data)), \
+             mock.patch.object(boot.time, "sleep") as sleep:
+            writer.send_next("prompt")
+            self.assertEqual(b"".join(writes), b"help\n")
+            self.assertFalse(writer.sent)
+            self.assertEqual(writer.send_reason, "prompt")
+            self.assertEqual(sleep.call_args_list[0], mock.call(0.10))
+            self.assertTrue(all(call == mock.call(0.05) for call in sleep.call_args_list[1:]))
+
+            writes.clear()
+            sleep.reset_mock()
+            writer.send_next("prompt")
+            self.assertEqual(b"".join(writes), b"ls /\n")
+            self.assertTrue(writer.sent)
+            self.assertEqual(sleep.call_args_list[0], mock.call(0.10))
+
     def _fixture(self, base: Path) -> dict[str, str]:
         kernel = base / "vmlinux"
         config = base / ".config"

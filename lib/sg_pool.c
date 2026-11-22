@@ -178,3 +178,10 @@ cleanup_sdb:
 }
 
 subsys_initcall(sg_pool_init);
+
+#ifdef CONFIG_LINX_INTC
+int __init linx_sg_pool_init(void)
+{
+	return sg_pool_init();
+}
+#endif

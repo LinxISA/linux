@@ -152,6 +152,56 @@ def _drain_stdout(proc: subprocess.Popen, out_chunks: list[bytes]) -> None:
         out_chunks.append(chunk)
 
 
+class _GuestScriptWriter:
+    def __init__(
+        self,
+        master_fd: int,
+        script: str,
+        *,
+        char_delay_s: float,
+        line_delay_s: float,
+    ) -> None:
+        self.master_fd = master_fd
+        self.pending_lines = script.splitlines(keepends=True)
+        if self.pending_lines and not self.pending_lines[-1].endswith(("\n", "\r")):
+            self.pending_lines[-1] += "\n"
+        self.char_delay_s = char_delay_s
+        self.line_delay_s = line_delay_s
+        self.next_line = 0
+        self.send_reason: Optional[str] = None
+
+    @property
+    def sent(self) -> bool:
+        return self.next_line >= len(self.pending_lines)
+
+    def _write(self, text: str) -> None:
+        payload = text.encode("utf-8")
+        if self.char_delay_s <= 0.0:
+            os.write(self.master_fd, payload)
+            return
+        if self.line_delay_s > 0.0:
+            time.sleep(self.line_delay_s)
+        for byte in payload:
+            os.write(self.master_fd, bytes((byte,)))
+            time.sleep(self.char_delay_s)
+
+    def send_next(self, reason: str) -> None:
+        if self.sent:
+            return
+        if self.send_reason is None:
+            self.send_reason = reason
+        self._write(self.pending_lines[self.next_line])
+        self.next_line += 1
+
+    def send_remaining(self, reason: str) -> None:
+        if self.sent:
+            return
+        if self.send_reason is None:
+            self.send_reason = reason
+        self._write("".join(self.pending_lines[self.next_line:]))
+        self.next_line = len(self.pending_lines)
+
+
 def _run_once(cmd: list[str], script: str, timeout_s: int) -> AttemptResult:
     master_fd, slave_fd = pty.openpty()
     proc = subprocess.Popen(
@@ -164,22 +214,20 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> AttemptResult:
     timed_out = False
     out_chunks: list[bytes] = []
     prompt_seen = False
-    script_sent = False
     boot_ready_seen = False
-    send_reason: Optional[str] = None
     prompt = b"# "
     deadline = time.monotonic() + timeout_s
     started_at = time.monotonic()
     last_output_at = time.monotonic()
     blind_send_after_s = float(os.environ.get("LINX_BUSYBOX_BOOT_BLIND_SEND_AFTER", "0"))
-
-    def try_send_script(reason: str) -> None:
-        nonlocal script_sent, send_reason
-        if script_sent:
-            return
-        os.write(master_fd, script.encode("utf-8"))
-        script_sent = True
-        send_reason = reason
+    char_delay_s = float(os.environ.get("LINX_BUSYBOX_BOOT_CHAR_DELAY", "0.05"))
+    line_delay_s = float(os.environ.get("LINX_BUSYBOX_BOOT_LINE_DELAY", "0.10"))
+    script_writer = _GuestScriptWriter(
+        master_fd,
+        script,
+        char_delay_s=char_delay_s,
+        line_delay_s=line_delay_s,
+    )
 
     while True:
         now = time.monotonic()
@@ -205,27 +253,31 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> AttemptResult:
                 or b"Run /init as init process" in joined
             ):
                 boot_ready_seen = True
-            if not prompt_seen and (
+            if (
                 b"\n# " in joined
                 or b"\r# " in joined
                 or joined.endswith(prompt)
             ):
                 prompt_seen = True
-                try_send_script("prompt")
+                # The Linx virtual UART can lose a burst of queued RX bytes.
+                # Feed one command per observed shell prompt so every command
+                # is consumed before the next one enters the guest.
+                if joined.endswith(prompt):
+                    script_writer.send_next("prompt")
 
         if (
             boot_ready_seen
-            and not script_sent
+            and not script_writer.sent
             and (time.monotonic() - last_output_at) >= 0.5
         ):
-            try_send_script("boot-ready-idle")
+            script_writer.send_remaining("boot-ready-idle")
 
         if (
-            not script_sent
+            not script_writer.sent
             and blind_send_after_s > 0.0
             and (time.monotonic() - started_at) >= blind_send_after_s
         ):
-            try_send_script("blind-timeout")
+            script_writer.send_remaining("blind-timeout")
 
         if proc.poll() is not None:
             break
@@ -256,7 +308,7 @@ def _run_once(cmd: list[str], script: str, timeout_s: int) -> AttemptResult:
         timed_out=timed_out,
         returncode=int(proc.returncode if proc.returncode is not None else -1),
         duration_seconds=time.monotonic() - started_at,
-        send_reason=send_reason,
+        send_reason=script_writer.send_reason,
     )
 
 
