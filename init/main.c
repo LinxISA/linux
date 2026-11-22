@@ -2404,9 +2404,7 @@ static noinline void __init kernel_init_freeable(void)
 #endif
 	linx_boot_mark('B');
 
-#ifndef CONFIG_LINX_INTC
 	kunit_run_all_tests();
-#endif
 
 	wait_for_initramfs();
 	linx_boot_mark('R');
